@@ -73,6 +73,18 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
         return _active_client_send_text
 
+    def init_asr(self, asr_config: Any) -> None:
+        """upstream init_asr 오버라이드 — 모델 미배치 시 WARNING 후 계속."""
+        try:
+            super().init_asr(asr_config)
+        except Exception as exc:
+            logger.warning(
+                "ASR 초기화 실패 (모델 미배치 등): %s. "
+                "음성 입력 없이 텍스트 채팅만 동작합니다.",
+                exc,
+            )
+            self.asr_engine = None  # type: ignore[assignment]
+
     def init_vad(self, vad_config: Any) -> None:  # spec: §N-4, §E-1
         """upstream init_vad 오버라이드.
 
@@ -102,14 +114,15 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         super().init_vad(vad_config)
 
     def init_tts(self, tts_config: Any) -> None:  # spec: M_04 §배선 정책
-        """upstream init_tts 오버라이드.
+        """upstream init_tts 오버라이드 — 모델 미배치/패키지 미설치 시 WARNING 후 계속.
 
-        upstream init_tts 가드(동일 config 재호출 시 스킵) 패턴:
-        - should_init이 True일 때만 build_tts_engine으로 교체.
-        - self.app_config가 없으면 (load_app_services 이전) upstream 기본 동작에 위임.
+        app_config가 있으면 build_tts_engine으로 초기화. 없으면(startup 순서상
+        load_from_config→load_app_services 순) upstream 경로를 시도하되 실패 시 graceful.
         """
         should_init = not self.tts_engine or self.character_config.tts_config != tts_config  # type: ignore[has-type]
-        if should_init and self.app_config is not None:
+        if not should_init:
+            return
+        if self.app_config is not None:
             from tts.builder import build_tts_engine
             from tts.errors import TTSInitError
 
@@ -123,10 +136,23 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     exc,
                 )
                 self.tts_engine = None  # type: ignore[assignment]
-            # upstream short-circuit용 config 동기화
             self.character_config.tts_config = tts_config
         else:
-            super().init_tts(tts_config)
+            try:
+                super().init_tts(tts_config)
+            except Exception as exc:
+                logger.warning(
+                    "TTS 초기화 실패 (패키지/모델 미설치): %s. "
+                    "Text chat will continue without TTS.",
+                    exc,
+                )
+                self.tts_engine = None  # type: ignore[assignment]
+
+    async def construct_system_prompt(self, persona_prompt: str) -> str:
+        """live2d_model이 None일 때 emo_str 참조를 건너뜀."""
+        if self.live2d_model is None:
+            return persona_prompt
+        return await super().construct_system_prompt(persona_prompt)
 
     async def load_from_config(self, config: Any) -> None:
         """upstream Config를 받아 부모 load_from_config 호출.

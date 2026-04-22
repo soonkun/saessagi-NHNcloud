@@ -60,6 +60,36 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
         )
         return handlers  # type: ignore[no-any-return]
 
+    async def _send_initial_messages(  # type: ignore[override]
+        self,
+        websocket: WebSocket,
+        client_uid: str,
+        session_service_context: object,
+    ) -> None:
+        """live2d_model이 None인 경우(모델 미배치)를 안전하게 처리."""
+        import json
+
+        await websocket.send_text(
+            json.dumps({"type": "full-text", "text": "Connection established"})
+        )
+
+        live2d = getattr(session_service_context, "live2d_model", None)
+        char_cfg = getattr(session_service_context, "character_config", None)
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "set-model-and-conf",
+                    "model_info": live2d.model_info if live2d is not None else None,
+                    "conf_name": getattr(char_cfg, "conf_name", ""),
+                    "conf_uid": getattr(char_cfg, "conf_uid", ""),
+                    "client_uid": client_uid,
+                }
+            )
+        )
+
+        await self.send_group_update(websocket, client_uid)
+        await websocket.send_text(json.dumps({"type": "control", "text": "start-mic"}))
+
     async def handle_new_connection(self, websocket: WebSocket, client_uid: str) -> None:  # type: ignore[override]
         """신규 연결 시 D-13: 가장 최근 연결된 WS를 _active_ws에 기록.
 

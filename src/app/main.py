@@ -38,8 +38,15 @@ def create_app(config_path: str = "conf.yaml") -> FastAPI:
     from .service_context import AppServiceContext
     from .server import AppWebSocketServer
 
+    from .hardware import detect as detect_hw, apply_to_config as hw_apply, log_summary as hw_log
+
     # 1. 설정 로딩
     full_config = load_full_config(config_path)
+
+    # 1b. 하드웨어 자동 감지 → upstream ASR/TTS 설정 오버라이드
+    hw = detect_hw()
+    hw_log(hw)
+    hw_apply(full_config.upstream, hw)
 
     # 2. URL 화이트리스트 검증 (ASR/TTS/LLM 로딩보다 먼저)
     enforce_private_url(full_config.app.ollama.base_url, field_name="OLLAMA_BASE_URL")
@@ -58,6 +65,9 @@ def create_app(config_path: str = "conf.yaml") -> FastAPI:
     async def _lifespan(fastapi_app: FastAPI) -> AsyncIterator[None]:
         # startup
         logger.info("애플리케이션 startup 시작")
+
+        # app_config를 먼저 주입 — init_agent 등 upstream 콜백에서 필요
+        ctx.app_config = full_config.app
 
         # upstream ServiceContext 초기화
         # ValidationError / FileNotFoundError / PrivacyViolationError는 re-raise (기동 실패)

@@ -329,10 +329,21 @@ class TestMeloTTSEngineEdge:
 class TestMeloTTSEngineAdversarial:
     """A-1, A-2, A-8."""
 
-    def test_model_dir_not_found(self) -> None:
-        """A-1: model_dir 부재 → TTSInitError, melo.api.TTS 호출 없음."""
-        with pytest.raises(TTSInitError, match="model_dir not found"):
-            MeloTTSEngine(model_dir="/no/such/dir")
+    def test_model_dir_not_found(self, mock_melo_tts: MagicMock) -> None:
+        """A-1: model_dir 부재 → 경고 후 자동 다운로드 경로로 폴백, 초기화 성공.
+
+        이전 버전은 TTSInitError를 발생시켰으나, HF Hub 캐시 자동 로딩을 지원하도록
+        변경되어 model_dir 부재 시 경고만 발행하고 계속 진행한다.
+        """
+        mock_melo_module = MagicMock()
+        mock_melo_module.TTS = MagicMock(return_value=mock_melo_tts)
+        with (
+            patch("tts._device._check_cuda_available", return_value=False),
+            patch.dict(sys.modules, {"melo": mock_melo_module, "melo.api": mock_melo_module}),
+            patch("builtins.__import__", side_effect=_import_with_mock(mock_melo_tts)),
+        ):
+            engine = MeloTTSEngine(model_dir="/no/such/dir")
+        assert engine.model_dir == ""  # 자동 다운로드 경로 (비어있음)
 
     def test_cuda_forced_but_unavailable(self, tmp_model_dir: Path) -> None:
         """A-2: device="cuda" + CUDA 미가용 → TTSInitError, auto 폴백 없음."""

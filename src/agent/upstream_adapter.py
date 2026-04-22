@@ -33,18 +33,22 @@ def _make_adapter_class() -> type:
             self._agent = agent
             self._pending_tasks: set[asyncio.Task[None]] = set()
 
-        async def chat(self, input_data: BatchInput) -> AsyncIterator[Union[str, dict[str, Any]]]:
-            """GemmaChatAgent.chat를 소비해:
-            - TextChunk → yield text(str)
-            - ToolCallStart → yield {"type":"tool_call_start","tool_id","name","arguments"}
-            - ToolCallResult → yield {"type":"tool_call_status","status":"completed"/"error",...}
-            - EndOfTurn → 스트림 종료 (yield 안 함)
-            - AgentError → yield "[오류: <message>]" (사용자 텍스트로 표출)
+        async def chat(self, input_data: BatchInput) -> AsyncIterator[Union["SentenceOutput", dict[str, Any]]]:
+            """GemmaChatAgent.chat를 소비해 upstream SentenceOutput 스트림으로 변환.
+
+            - TextChunk 누적 → 전체 텍스트를 하나의 SentenceOutput으로 yield
+            - ToolCallStart/Result → dict yield (upstream이 JSON으로 전송)
+            - EndOfTurn → 스트림 종료
+            - AgentError → 에러 텍스트를 SentenceOutput으로 yield
             """
+            from open_llm_vtuber.agent.output_types import SentenceOutput, DisplayText, Actions
+
+            text_parts: list[str] = []
+
             async for event in self._agent.chat(input_data):
                 if isinstance(event, TextChunk):
                     if event.text:
-                        yield event.text
+                        text_parts.append(event.text)
                 elif isinstance(event, ToolCallStart):
                     yield {
                         "type": "tool_call_start",
@@ -61,10 +65,18 @@ def _make_adapter_class() -> type:
                         "content": event.content,
                     }
                 elif isinstance(event, EndOfTurn):
-                    return  # 스트림 종료
+                    break
                 elif isinstance(event, AgentError):
                     logger.warning(f"AgentError를 텍스트로 변환: code={event.code}")
-                    yield f"[오류: {event.message}]"
+                    text_parts.append(f"[오류: {event.message}]")
+
+            full_text = "".join(text_parts)
+            if full_text:
+                yield SentenceOutput(
+                    display_text=DisplayText(text=full_text, name="AI"),
+                    tts_text=full_text,
+                    actions=Actions(),
+                )
 
         def handle_interrupt(self, heard_response: str) -> None:
             """동기 인터페이스 요구. asyncio 태스크로 스케줄."""

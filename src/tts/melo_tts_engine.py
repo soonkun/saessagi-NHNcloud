@@ -27,7 +27,7 @@ MELOTTS_MIN_SPEED: float = 0.5
 MELOTTS_MAX_SPEED: float = 2.0
 
 # MeloTTS 필수 파일 목록
-MELO_REQUIRED_FILES: list[str] = ["config.json", "checkpoint.pth", "tokenizer.json"]
+MELO_REQUIRED_FILES: list[str] = ["config.json", "checkpoint.pth"]
 
 MAX_TEXT_CHARS: int = 1000
 
@@ -95,17 +95,17 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
         Raises:
             TTSInitError: 설정 오류 또는 모델 로드 실패.
         """
-        # 1. model_dir 존재 검증
-        model_path = Path(model_dir)
-        if not model_path.exists() or not model_path.is_dir():
-            logger.error("model_dir not found: %s", model_dir)
-            raise TTSInitError(f"model_dir not found: {model_dir}")
-
-        # 필수 파일 검증
-        missing_files = [f for f in MELO_REQUIRED_FILES if not (model_path / f).exists()]
-        if missing_files:
-            logger.error("model weights missing: %s", missing_files)
-            raise TTSInitError(f"model weights missing: {missing_files}")
+        # 1. model_dir 검증 (설정된 경우에만; melo는 HF Hub 캐시에서 자동 로딩)
+        model_path = Path(model_dir) if model_dir else None
+        if model_path is not None:
+            if not model_path.exists() or not model_path.is_dir():
+                logger.warning("model_dir not found: %s — melo 자동 다운로드 경로 사용", model_dir)
+                model_path = None
+            else:
+                missing_files = [f for f in MELO_REQUIRED_FILES if not (model_path / f).exists()]
+                if missing_files:
+                    logger.warning("model weights missing %s — melo 자동 다운로드 경로 사용", missing_files)
+                    model_path = None
 
         # 2. language 검증
         if language not in MELOTTS_SUPPORTED_LANGUAGES:
@@ -183,7 +183,7 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
         _ensure_cache_dir(cache_dir)
 
         # 인스턴스 속성 저장
-        self.model_dir = str(model_path.resolve())
+        self.model_dir = str(model_path.resolve()) if model_path is not None else ""
         self.language = language
         self.speaker = speaker
         self.speaker_id = resolved_speaker_id

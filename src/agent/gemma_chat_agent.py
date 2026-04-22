@@ -428,12 +428,23 @@ class GemmaChatAgent:
         self,
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str | dict[str, Any]]:
-        """tool 없는 경로. upstream AsyncLLM.chat_completion을 직접 소비해 str만 yield."""
+        """tool 없는 경로. think=False로 Ollama thinking 모드를 비활성화."""
         try:
-            async for chunk in self._llm.chat_completion(messages, self._inner._system):
-                if isinstance(chunk, str):
-                    yield chunk
-                # list[ChoiceDeltaToolCall] — tool 없는 경로이므로 무시
+            system = self._inner._system
+            messages_with_system = (
+                [{"role": "system", "content": system}, *messages] if system else messages
+            )
+            stream = await self._llm.client.chat.completions.create(
+                messages=messages_with_system,
+                model=self._llm.model,
+                stream=True,
+                temperature=self._llm.temperature,
+                extra_body={"think": False},
+            )
+            async for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta and delta.content:
+                    yield delta.content
         except Exception as e:
             logger.error(f"_simple_stream 예외: {e}")
             yield f"Error calling the chat endpoint: {e}"
