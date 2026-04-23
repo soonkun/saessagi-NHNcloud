@@ -1,81 +1,101 @@
-# bootstrap.ps1 — 초기 환경 설정
-# 사용: PowerShell에서 .\scripts\bootstrap.ps1
+# bootstrap.ps1 — Initial environment setup
+# Usage: run via scripts\bootstrap.cmd (recommended) or:
+#        powershell -ExecutionPolicy Bypass -File scripts\bootstrap.ps1
 
 $ErrorActionPreference = "Stop"
 
-# UTF-8 출력 설정 (CMD에서 호출 시 한글 깨짐 방지)
+# UTF-8 output (prevents garbled text in CMD)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
-Write-Host "`n=== AI 비서 프로젝트 부트스트랩 ===" -ForegroundColor Cyan
+# Corporate SSL proxy: trust Windows certificate store
+$env:UV_NATIVE_TLS = "1"
+
+# Ensure we are in project root (in case script is run directly from scripts\)
+if (Test-Path "$PSScriptRoot\..\pyproject.toml") {
+    Set-Location "$PSScriptRoot\.."
+}
+
+Write-Host ""
+Write-Host "=== AI Assistant Bootstrap ===" -ForegroundColor Cyan
 Write-Host ""
 
-# 0. uv 설치 확인 (pip 불필요 — 공식 PowerShell 인스톨러 사용)
-Write-Host "[0/7] uv 패키지 매니저 확인..." -ForegroundColor Cyan
+# ── 0. uv ──────────────────────────────────────────────────────────────────
+Write-Host "[0/6] Checking uv package manager..." -ForegroundColor Cyan
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-    Write-Host "  uv 설치 중 (공식 인스톨러)..." -ForegroundColor Yellow
+    Write-Host "  Installing uv (official installer)..." -ForegroundColor Yellow
     powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    # PATH 갱신 (현재 세션에 반영)
     $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-        Write-Host "  uv 설치 후 터미널을 재시작하고 이 스크립트를 다시 실행하세요." -ForegroundColor Red
+        Write-Host "  uv installed. Please restart your terminal and run this script again." -ForegroundColor Red
         exit 1
     }
-    Write-Host "  → uv 설치 완료" -ForegroundColor Green
+    Write-Host "  -> uv installed" -ForegroundColor Green
 } else {
-    Write-Host "  uv 이미 설치됨 — 건너뜀" -ForegroundColor Gray
+    Write-Host "  uv already installed -- skipping" -ForegroundColor Gray
 }
 Write-Host ""
 
-# 1. Open-LLM-VTuber clone
+# ── 1. upstream clone ───────────────────────────────────────────────────────
 if (-not (Test-Path "upstream\Open-LLM-VTuber\.git")) {
-    Write-Host "[1/7] Open-LLM-VTuber clone 중..." -ForegroundColor Cyan
+    Write-Host "[1/6] Cloning Open-LLM-VTuber..." -ForegroundColor Cyan
     if (Test-Path "upstream\Open-LLM-VTuber") {
         Remove-Item "upstream\Open-LLM-VTuber" -Recurse -Force
     }
     git clone https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git upstream\Open-LLM-VTuber
-    Write-Host "  → upstream\Open-LLM-VTuber 에 clone 완료" -ForegroundColor Green
+    Write-Host "  -> cloned to upstream\Open-LLM-VTuber" -ForegroundColor Green
 } else {
-    Write-Host "[1/7] upstream\Open-LLM-VTuber 이미 존재 — 건너뜀" -ForegroundColor Gray
+    Write-Host "[1/6] upstream\Open-LLM-VTuber already exists -- skipping" -ForegroundColor Gray
 }
 Write-Host ""
 
-# 2. Gemma 4 E4B 모델 풀 (LLM — Ollama 경유)
-Write-Host "[2/7] Ollama 모델 확인·다운로드..." -ForegroundColor Cyan
-$models = (ollama list 2>&1 | Out-String)
-if ($models -notmatch "gemma4") {
-    Write-Host "  gemma4:e4b 다운로드 중 (약 9GB, 시간이 걸립니다)..." -ForegroundColor Yellow
-    ollama pull gemma4:e4b
-    Write-Host "  → gemma4:e4b 완료" -ForegroundColor Green
+# ── 2. Ollama / Gemma4 ─────────────────────────────────────────────────────
+Write-Host "[2/6] Checking Ollama models..." -ForegroundColor Cyan
+if (Get-Command ollama -ErrorAction SilentlyContinue) {
+    $models = (ollama list 2>&1 | Out-String)
+    if ($models -notmatch "gemma4") {
+        Write-Host "  Downloading gemma4:e4b (~9 GB, this will take a while)..." -ForegroundColor Yellow
+        ollama pull gemma4:e4b
+        Write-Host "  -> gemma4:e4b done" -ForegroundColor Green
+    } else {
+        Write-Host "  gemma4:e4b already exists -- skipping" -ForegroundColor Gray
+    }
 } else {
-    Write-Host "  gemma4:e4b 이미 존재 — 건너뜀" -ForegroundColor Gray
+    Write-Host "  Ollama not installed. Install it manually:" -ForegroundColor Yellow
+    Write-Host "    https://ollama.com/download/windows" -ForegroundColor Yellow
+    Write-Host "  Then run: ollama pull gemma4:e4b" -ForegroundColor Yellow
 }
 Write-Host ""
 
-# 3. BGE-M3 다운로드는 venv 생성 후 [5/7]에서 진행 (순서 조정)
-
-# 4. Python 가상환경 생성
-Write-Host "[4/7] Python 가상환경 생성..." -ForegroundColor Cyan
-if (-not (Test-Path ".venv")) {
-    uv venv --python 3.11
-    Write-Host "  → .venv 생성 완료" -ForegroundColor Green
+# ── 3. Python venv ─────────────────────────────────────────────────────────
+Write-Host "[3/6] Creating Python virtual environment..." -ForegroundColor Cyan
+if (Test-Path ".venv\Scripts\python.exe") {
+    Write-Host "  .venv already exists -- skipping" -ForegroundColor Gray
 } else {
-    Write-Host "  .venv 이미 존재 — 건너뜀" -ForegroundColor Gray
+    # Remove broken venv if present
+    if (Test-Path ".venv") { Remove-Item ".venv" -Recurse -Force }
+
+    # Prefer system Python to avoid downloading from GitHub (SSL proxy issue)
+    $sysPython = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+    if ($sysPython -and (python --version 2>&1) -match "3\.(1[1-9]|[2-9]\d)") {
+        Write-Host "  Using system Python: $sysPython" -ForegroundColor Gray
+        uv venv --python $sysPython
+    } else {
+        Write-Host "  Downloading Python 3.11 via uv (needs internet)..." -ForegroundColor Yellow
+        uv venv --python 3.11
+    }
+    Write-Host "  -> .venv created" -ForegroundColor Green
 }
 Write-Host ""
 
-# 5. Python 패키지 설치
-Write-Host "[5/7] Python 패키지 설치 (uv sync)..." -ForegroundColor Cyan
+# ── 4. Python packages ─────────────────────────────────────────────────────
+Write-Host "[4/6] Installing Python packages (uv sync)..." -ForegroundColor Cyan
 if (Test-Path "pyproject.toml") {
     uv sync
-    Write-Host "  → 패키지 설치 완료" -ForegroundColor Green
+    Write-Host "  -> packages installed" -ForegroundColor Green
 } else {
-    # 스타터킷 환경: pyproject.toml 없음 → 개발 도구만 설치
-    Write-Host "  pyproject.toml 없음 — 개발 도구만 설치" -ForegroundColor Yellow
-    .\.venv\Scripts\Activate.ps1
+    Write-Host "  pyproject.toml not found -- installing dev tools only" -ForegroundColor Yellow
     uv pip install ruff mypy pytest pytest-cov
-    deactivate
-    # pyproject.toml 초기화 (스타터킷 전용)
     @"
 [project]
 name = "ai-assistant"
@@ -96,59 +116,55 @@ strict = true
 testpaths = ["tests"]
 pythonpath = ["src"]
 "@ | Set-Content -Path "pyproject.toml" -Encoding UTF8
-    Write-Host "  → pyproject.toml 생성 (스타터킷)" -ForegroundColor Green
+    Write-Host "  -> pyproject.toml created (starter kit)" -ForegroundColor Green
 }
-if (-not (Test-Path "src")) { New-Item -ItemType Directory -Path "src" | Out-Null }
+if (-not (Test-Path "src"))   { New-Item -ItemType Directory -Path "src"   | Out-Null }
 if (-not (Test-Path "tests")) { New-Item -ItemType Directory -Path "tests" | Out-Null }
 Write-Host ""
 
-# 5-b. BGE-M3 임베딩 모델 다운로드 (HuggingFace — 문서 검색용, 약 1.5GB)
-# uv tool install은 Windows trampoline 버그로 실패할 수 있으므로
-# venv의 Python으로 snapshot_download를 직접 호출한다.
-Write-Host "[5b/7] BGE-M3 임베딩 모델 다운로드 (약 1.5GB)..." -ForegroundColor Cyan
+# ── 5. BGE-M3 embedding model ──────────────────────────────────────────────
+Write-Host "[5/6] BGE-M3 embedding model (~1.5 GB)..." -ForegroundColor Cyan
 $bgeDir = "assets\models\bge-m3"
 if (-not (Test-Path "$bgeDir\config.json")) {
     New-Item -ItemType Directory -Path $bgeDir -Force | Out-Null
-    Write-Host "  huggingface_hub 설치 중 (venv 내부)..." -ForegroundColor Yellow
+    Write-Host "  Installing huggingface_hub into venv..." -ForegroundColor Yellow
     uv pip install --quiet huggingface_hub
-    Write-Host "  BAAI/bge-m3 → $bgeDir (시간이 걸립니다)..." -ForegroundColor Yellow
+    Write-Host "  Downloading BAAI/bge-m3 -> $bgeDir (this will take a while)..." -ForegroundColor Yellow
     $bgeDirFwd = $bgeDir -replace '\\', '/'
-    $downloadScript = "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-m3', local_dir='$bgeDirFwd', local_dir_use_symlinks=False)"
-    .\.venv\Scripts\python.exe -c $downloadScript
-    Write-Host "  → BGE-M3 다운로드 완료" -ForegroundColor Green
+    $script = "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-m3', local_dir='$bgeDirFwd', local_dir_use_symlinks=False)"
+    .\.venv\Scripts\python.exe -c $script
+    Write-Host "  -> BGE-M3 downloaded" -ForegroundColor Green
 } else {
-    Write-Host "  BGE-M3 이미 존재 ($bgeDir) — 건너뜀" -ForegroundColor Gray
+    Write-Host "  BGE-M3 already exists ($bgeDir) -- skipping" -ForegroundColor Gray
 }
 Write-Host ""
 
-# 6. git 초기화 (스타터킷 전용 — 이미 .git이 있으면 건너뜀)
-Write-Host "[6/7] git 확인..." -ForegroundColor Cyan
+# ── 6. git init (starter kit only) ────────────────────────────────────────
+Write-Host "[6/6] Checking git..." -ForegroundColor Cyan
 if (-not (Test-Path ".git")) {
     git init | Out-Null
     git add README.md REQUIREMENTS.md CLAUDE.md PROJECT_PLAN.md .gitignore .claude/ prompts/ docs/ scripts/ specs/.gitkeep reviews/.gitkeep upstream/.gitkeep assets/ pyproject.toml | Out-Null
     git commit -m "chore: initial starter kit" | Out-Null
-    Write-Host "  → git 저장소 초기화·최초 커밋" -ForegroundColor Green
+    Write-Host "  -> git repository initialized" -ForegroundColor Green
 } else {
-    Write-Host "  .git 이미 존재 — 건너뜀" -ForegroundColor Gray
+    Write-Host "  .git already exists -- skipping" -ForegroundColor Gray
 }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "부트스트랩 완료" -ForegroundColor Green
+Write-Host "Bootstrap complete!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 
 if (Test-Path "src\app\main.py") {
-    # 완성된 repo를 클론한 경우
-    Write-Host "서버 실행 방법:" -ForegroundColor Cyan
+    Write-Host "To start the server:" -ForegroundColor Cyan
     Write-Host '  $env:PYTHONPATH = "src;upstream/Open-LLM-VTuber/src;upstream/Open-LLM-VTuber"'
-    Write-Host "  uv run uvicorn `"app.main:create_app`" --factory --host 127.0.0.1 --port 12393"
+    Write-Host '  uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393'
     Write-Host ""
-    Write-Host "브라우저에서 http://127.0.0.1:12393 접속하면 새싹이가 반겨줍니다." -ForegroundColor Green
+    Write-Host "Open http://127.0.0.1:12393 in your browser." -ForegroundColor Green
 } else {
-    # 스타터킷 — Claude Code로 개발 시작
-    Write-Host "다음 단계:" -ForegroundColor Cyan
-    Write-Host "  1. 이 폴더에서 Claude Code 실행: claude"
-    Write-Host "  2. prompts/00_kickoff.md 의 프롬프트를 복사해 Claude Code에 붙여넣기"
+    Write-Host "Next steps:" -ForegroundColor Cyan
+    Write-Host "  1. Run Claude Code in this folder: claude"
+    Write-Host "  2. Paste the prompt from prompts/00_kickoff.md"
 }
 Write-Host ""
