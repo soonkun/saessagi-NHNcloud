@@ -47,7 +47,7 @@ class ToolRouter:
         self,
         calendar: Any,  # CalendarService | None
         rag: Any,  # RagService | None
-        screenshot: "ScreenshotService",
+        screenshot: "ScreenshotService | None" = None,
         meeting_minutes: "MeetingMinutesService | None" = None,
         avatar_state: "AvatarState | None" = None,
     ) -> None:
@@ -55,16 +55,10 @@ class ToolRouter:
         Args:
             calendar: M_09 CalendarService 인스턴스. None이면 add_event/get_events가 service_unavailable.
             rag: M_07 RagService 인스턴스. None이면 search_docs가 service_unavailable.
-            screenshot: M_05b 내부 ScreenshotService 인스턴스. **None 금지**(항상 제공).
+            screenshot: M_05b 내부 ScreenshotService 인스턴스. None이면 take_screenshot이 service_unavailable (비-Windows).
             meeting_minutes: M_13 MeetingMinutesService 인스턴스. None이면 create_meeting_minutes가 service_unavailable.
             avatar_state: M_08 AvatarState 인스턴스. None이면 아바타 상태 전환 스킵.
-
-        Raises:
-            TypeError: screenshot is None.
         """
-        if screenshot is None:
-            logger.error("ToolRouter: screenshot 인자는 None이 될 수 없습니다.")
-            raise TypeError("screenshot 인자는 None이 될 수 없습니다.")
 
         self._calendar = calendar
         self._rag = rag
@@ -284,6 +278,9 @@ class ToolRouter:
 
     async def _handle_take_screenshot(self, args: dict[str, Any]) -> ToolResult:
         """take_screenshot 핸들러."""
+        if self._screenshot is None:
+            return _service_unavail("take_screenshot")
+
         continuous: bool = args.get("continuous", False)
         interval: float = args.get("interval_seconds", 5.0)
 

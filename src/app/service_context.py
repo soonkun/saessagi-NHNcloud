@@ -347,21 +347,19 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             self.meeting_minutes_service = None
 
         # CR-05: ToolRouter/Adapter 조립.
-        # M_05b 스펙 §4.3 "screenshot=None 금지, TypeError" → screenshot_service가 None이면 조립 안 함.
-        if self.screenshot_service is not None:
-            self.tool_router = ToolRouter(
-                calendar=self.calendar_service,  # None 허용 — M_07 미구현
-                rag=self.rag_service,  # None 허용 — M_09 미구현
-                screenshot=self.screenshot_service,
-                meeting_minutes=self.meeting_minutes_service,
-                avatar_state=self.avatar_state,
-            )
-            self.tool_router_adapter = ToolRouterAdapter(self.tool_router)
-            logger.info("ToolRouter/ToolRouterAdapter 조립 완료")
-        else:
-            self.tool_router = None
-            self.tool_router_adapter = None
-            logger.warning("screenshot_service가 None이므로 ToolRouter 조립 건너뜀")
+        # screenshot=None이면 take_screenshot만 service_unavailable, 나머지 툴은 정상 동작.
+        self.tool_router = ToolRouter(
+            calendar=self.calendar_service,
+            rag=self.rag_service,
+            screenshot=self.screenshot_service,  # None 허용 — 비-Windows 환경
+            meeting_minutes=self.meeting_minutes_service,
+            avatar_state=self.avatar_state,
+        )
+        self.tool_router_adapter = ToolRouterAdapter(self.tool_router)
+        logger.info(
+            "ToolRouter/ToolRouterAdapter 조립 완료 (screenshot=%s)",
+            "available" if self.screenshot_service is not None else "unavailable",
+        )
 
         # M-10: IdleMonitor 초기화 (스펙 §13.1)
         try:

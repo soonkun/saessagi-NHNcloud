@@ -710,8 +710,8 @@ class TestCR05ToolRouterAssembly:
         mock_screenshot.aclose.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_e1_screenshot_init_error_sets_all_none(self) -> None:
-        """E-1: ScreenshotInitError 발생 시 세 필드 모두 None, 앱 기동 계속."""
+    async def test_e1_screenshot_init_error_tool_router_still_assembled(self) -> None:
+        """E-1: ScreenshotInitError 발생 시 screenshot_service=None, ToolRouter는 계속 조립."""
         ctx = _make_ctx_raw()
         app_cfg = AppConfig()  # type: ignore[call-arg]
 
@@ -730,8 +730,9 @@ class TestCR05ToolRouterAssembly:
             await ctx.load_app_services(app_cfg)  # 예외 전파 없음
 
         assert ctx.screenshot_service is None
-        assert ctx.tool_router is None
-        assert ctx.tool_router_adapter is None
+        # screenshot=None이어도 ToolRouter는 조립됨 (take_screenshot만 service_unavailable)
+        assert ctx.tool_router is not None
+        assert ctx.tool_router_adapter is not None
 
     @pytest.mark.asyncio
     async def test_close_screenshot_aclose_failure_continues(self) -> None:
