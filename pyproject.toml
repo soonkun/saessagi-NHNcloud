@@ -19,7 +19,7 @@ dependencies = [
     "ctranslate2>=4.4,<5",
     "silero-vad>=5.0,<6",
     # M_04 TTSEngine
-    "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",  # TTS 엔진 (PyPI 미등록, git 설치)
+    # melotts: pypinyin 버전 충돌로 pyproject.toml 제외 -- bootstrap.py에서 별도 설치
     "TTS>=0.22.0,<1; python_version < '3.12' and sys_platform == 'win32'",  # Coqui XTTS v2 — CPML 라이선스·Python<3.12·Windows 전용 (CR-02 법무 승인 대기)
     "torch>=2.0.0",         # MeloTTS + XTTS v2 딥러닝 런타임
     "soundfile>=0.12,<1",   # WAV I/O 보조 (libsndfile 기반)

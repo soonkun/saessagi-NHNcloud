@@ -157,6 +157,12 @@ def main() -> None:
     if (root / "pyproject.toml").exists():
         run("uv", "sync")
         ok("packages installed")
+        # melotts conflicts with pypinyin version in pyproject.toml -- install separately
+        warn("Installing MeloTTS (TTS engine)...")
+        run("uv", "pip", "install", "--quiet",
+            "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
+            "--override", "pypinyin==0.50.0")
+        ok("MeloTTS installed")
     else:
         warn("pyproject.toml not found -- installing dev tools only")
         run("uv", "pip", "install", "ruff", "mypy", "pytest", "pytest-cov")
