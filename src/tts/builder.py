@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Union
 
 from .errors import TTSInitError
 from .melo_tts_engine import MeloTTSEngine
 
 if TYPE_CHECKING:
     from app.config import AppConfig
-    from .xtts_v2_engine import XttsV2Engine as _XttsV2EngineType
 
 logger = logging.getLogger(__name__)
 

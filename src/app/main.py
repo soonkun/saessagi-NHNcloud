@@ -69,7 +69,14 @@ def create_app(config_path: str = "conf.yaml") -> FastAPI:
         # app_config를 먼저 주입 — init_agent 등 upstream 콜백에서 필요
         ctx.app_config = full_config.app
 
-        # upstream ServiceContext 초기화
+        # 본 프로젝트 서비스 먼저 초기화 (ToolRouter 포함)
+        # init_agent가 tool_router_adapter를 볼 수 있도록 load_from_config 전에 실행
+        try:
+            await ctx.load_app_services(full_config.app)
+        except (ValueError, RuntimeError, OSError) as exc:
+            logger.error(f"load_app_services 실패: {exc}")
+
+        # upstream ServiceContext 초기화 (ASR/TTS/VAD/Agent)
         # ValidationError / FileNotFoundError / PrivacyViolationError는 re-raise (기동 실패)
         # 모델 지연 로딩 실패(RuntimeError, OSError)만 삼켜 기동 계속
         try:
@@ -77,12 +84,6 @@ def create_app(config_path: str = "conf.yaml") -> FastAPI:
         except (ValueError, RuntimeError, OSError) as exc:
             logger.error(f"load_from_config 실패 (모델 로딩 오류): {exc}")
             # 기동 계속 (하위 기능만 OFF)
-
-        # 본 프로젝트 서비스 초기화
-        try:
-            await ctx.load_app_services(full_config.app)
-        except (ValueError, RuntimeError, OSError) as exc:
-            logger.error(f"load_app_services 실패: {exc}")
 
         # idle_monitor 시작
         if ctx.idle_monitor is not None:

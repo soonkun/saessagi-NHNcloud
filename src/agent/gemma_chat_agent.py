@@ -329,10 +329,11 @@ class GemmaChatAgent:
             self._inner.prompt_mode_flag = False
 
             messages = self._inner._to_messages(batch)
-            tools = self._formatted_tools_openai if self._use_mcpp else []
+            # use_mcpp=False여도 extra_tool_specs(ToolRouter)이 있으면 도구 호출 경로 사용
+            tools = self._formatted_tools_openai  # MCP + ToolRouter extras
 
-            # raw stream 선택
-            if self._use_mcpp and tools:
+            # raw stream 선택: 도구가 하나라도 있으면 tool_interaction_loop 사용
+            if tools:
                 raw_stream = self._inner._openai_tool_interaction_loop(messages, tools)
             else:
                 raw_stream = self._simple_stream(messages)

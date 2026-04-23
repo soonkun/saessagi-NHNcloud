@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     # 하위 모듈(M_06~M_11) — 미구현 상태. TYPE_CHECKING 블록에서만 import해 런타임 오류 방지.
     # 각 모듈 구현 완료 후 실제 타입으로 교체할 것.
-    from typing import Any as RagService
+    from vector_search import RagService
     from typing import Any as CalendarService
     from proactive import ProactiveDispatcher
     from tool_router import ScreenshotService, ToolRouter, ToolRouterAdapter
@@ -346,6 +346,22 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             logger.warning(f"MeetingMinutesService 초기화 실패: {exc}")
             self.meeting_minutes_service = None
 
+        # M_07: RagService 조립 (ToolRouter 조립 전에 완료해야 rag= 인수로 전달 가능)
+        try:
+            from vector_search import Embedder, RagService, VectorStore
+
+            bge_model_dir = str(Path(app_config.paths.assets_dir) / "models" / "bge-m3")
+            vector_store_dir = app_config.paths.vector_store_dir
+            self.rag_service = RagService(
+                embedder=Embedder(model_dir=bge_model_dir),
+                store=VectorStore(db_path=vector_store_dir),
+                min_score=app_config.rag_min_score,
+            )
+            logger.info("RagService 초기화 완료: model=%s, store=%s", bge_model_dir, vector_store_dir)
+        except Exception as exc:
+            logger.warning(f"rag_service 초기화 실패 (search_docs 비활성화): {exc}")
+            self.rag_service = None
+
         # CR-05: ToolRouter/Adapter 조립.
         # screenshot=None이면 take_screenshot만 service_unavailable, 나머지 툴은 정상 동작.
         self.tool_router = ToolRouter(
@@ -395,12 +411,6 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 "calendar_service 또는 idle_monitor가 None이므로 proactive_dispatcher 조립 건너뜀"
             )
             self.proactive_dispatcher = None
-
-        # 각 서비스는 해당 모듈 구현 완료 후 아래 형태로 추가:
-        # try:
-        #     self.rag_service = RagService(app_config)
-        # except Exception as exc:
-        #     logger.warning(f"rag_service 초기화 실패: {exc}")
 
     async def close(self) -> None:
         """부모 close + 본 프로젝트 서비스 stop/close.
