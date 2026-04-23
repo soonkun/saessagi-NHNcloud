@@ -21,7 +21,7 @@ if %errorlevel% neq 0 (
 )
 
 :: uv run --python 3.11 downloads Python 3.11 automatically if not installed
-uv run --python 3.11 python scripts\bootstrap.py
+uv run --python 3.12 python scripts\bootstrap.py
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Bootstrap failed. Check the messages above.
