@@ -93,7 +93,7 @@ async def test_concurrent_chat_serialized() -> None:
             order.append("task2_yield")
             yield "응답2"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     batch = make_text_batch("안녕")
     events1: list[Any] = []
@@ -155,7 +155,7 @@ async def test_handle_interrupt_cancels_chat_task() -> None:
         await asyncio.sleep(10.0)
         yield "완료"  # 이 토큰은 도달하지 않아야 함
 
-    agent._llm.chat_completion = slow_stream
+    agent._simple_stream = slow_stream
 
     batch = make_text_batch("길게 응답해줘")
     received_events: list[Any] = []

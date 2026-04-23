@@ -54,7 +54,7 @@ async def test_consecutive_turns_memory_accumulation() -> None:
         captured_messages_per_turn.append(list(messages))
         yield "알겠습니다." if len(captured_messages_per_turn) == 1 else "새싹이입니다."
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     # 턴 1
     async for _ in agent.chat(make_text_batch("내 이름은 새싹이야")):

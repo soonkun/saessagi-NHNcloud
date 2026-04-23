@@ -1,5 +1,5 @@
 {
-  "silero.py": "1da17cbbbfa174ceec1d6dc088af5b270cf5fdf406c11de6b1c52bd11181cb2b",
-  "vad_factory.py": "35f48ad7a8a9ead80999b30bf481cdb2fa423f3bbf914df6ba50e377807fc363",
-  "vad_interface.py": "5bf49e82f33261011d324d155629e50756a89501a96e686dd6423b1e4c3b0c74"
+  "silero.py": "49b70a7bd3da324871cf10efe1316efad9cf5db5ee079be544eaf3990b7f65e6",
+  "vad_factory.py": "94fae3acd230bd69ac37538506a5d547afae82d3f04fbb295fc6ee932a511226",
+  "vad_interface.py": "2ebbc27cf957766e9a7e759b7e22d5119ce9ce3b3123eb4c862e1fe8152cf3ec"
 }

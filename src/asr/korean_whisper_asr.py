@@ -30,7 +30,7 @@ def _check_cuda_available() -> bool:
 
         providers = ctranslate2.get_supported_compute_types("cuda")
         return len(providers) > 0
-    except (ImportError, AttributeError, OSError):
+    except (ImportError, AttributeError, OSError, ValueError):
         return False
 
 

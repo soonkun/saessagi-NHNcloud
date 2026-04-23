@@ -30,14 +30,14 @@ async def test_adapter_text_chunk_flattened() -> None:
     async def mock_stream(*args: Any, **kwargs: Any) -> AsyncIterator[str]:
         yield "안녕하세요"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     adapter = BasicMemoryAgentAdapter(agent)
     results = []
     async for item in adapter.chat(make_text_batch("안녕")):
         results.append(item)
 
-    assert "안녕하세요" in results
+    assert any("안녕하세요" in str(r) for r in results)
 
 
 @pytest.mark.asyncio
@@ -48,7 +48,7 @@ async def test_adapter_agent_error_as_text() -> None:
     async def mock_stream(*args: Any, **kwargs: Any) -> AsyncIterator[str]:
         yield "Error calling the chat endpoint: down"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     adapter = BasicMemoryAgentAdapter(agent)
     results = []

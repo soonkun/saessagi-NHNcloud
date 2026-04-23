@@ -32,7 +32,7 @@ async def test_multimodal_image_in_messages() -> None:
         captured_messages.extend(messages)
         yield "이 화면은 바탕화면입니다."
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     batch = BatchInput(
         texts=[TextData(source=TextSource.INPUT, content="이 화면 설명해줘")],
@@ -74,7 +74,7 @@ async def test_multimodal_texts_and_images() -> None:
     async def mock_stream(messages: Any, *args: Any, **kwargs: Any) -> AsyncIterator[str]:
         yield "설명 완료"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     batch = BatchInput(
         texts=[TextData(source=TextSource.INPUT, content="화면에 뭐가 있어?")],

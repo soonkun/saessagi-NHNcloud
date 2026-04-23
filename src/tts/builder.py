@@ -4,23 +4,24 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from .errors import TTSInitError
 from .melo_tts_engine import MeloTTSEngine
 
 if TYPE_CHECKING:
     from app.config import AppConfig
-    from .xtts_v2_engine import XttsV2Engine
+    from .xtts_v2_engine import XttsV2Engine as _XttsV2EngineType
 
 logger = logging.getLogger(__name__)
 
 try:
-    from .xtts_v2_engine import XttsV2Engine as _XttsV2Engine
+    from .xtts_v2_engine import XttsV2Engine  # type: ignore[assignment]
 
-    TtsEngine = Union[MeloTTSEngine, _XttsV2Engine]
+    TtsEngine = Union[MeloTTSEngine, XttsV2Engine]
 except Exception:
     # TTS 패키지 미설치(macOS/Python 3.12 등) — MeloTTS 단독 운용
+    XttsV2Engine = None  # type: ignore[assignment,misc]
     TtsEngine = MeloTTSEngine  # type: ignore[assignment,misc]
 
 
@@ -79,6 +80,9 @@ def build_tts_engine(
         )
 
     elif engine_kind == "xtts_v2":
+        if XttsV2Engine is None:
+            raise TTSInitError("XTTS v2 engine unavailable: TTS package not installed")
+
         xtts_cfg = tts_config.xtts
         speaker_wav = xtts_cfg.speaker_wav
         if speaker_wav is None:

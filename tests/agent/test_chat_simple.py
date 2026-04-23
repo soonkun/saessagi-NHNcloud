@@ -38,7 +38,7 @@ async def test_simple_text_streaming() -> None:
         for chunk in ["안", "녕", "하세요", ""]:
             yield chunk
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     events = await collect_events(agent, make_text_batch("안녕"))
 
@@ -65,7 +65,7 @@ async def test_empty_input_no_llm_call() -> None:
         call_count += 1
         yield "should not reach"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
     batch = BatchInput(texts=[])
 
     events = await collect_events(agent, batch)
@@ -90,7 +90,7 @@ async def test_empty_input_empty_images_list() -> None:
         call_count += 1
         yield "should not reach"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
     batch = BatchInput(texts=[], images=[])
 
     events = await collect_events(agent, batch)
@@ -110,7 +110,7 @@ async def test_empty_chunks_dropped() -> None:
         for chunk in ["", "반", "", "갑", "", "습니다"]:
             yield chunk
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     events = await collect_events(agent, make_text_batch("안녕"))
     text_chunks = [e for e in events if isinstance(e, TextChunk)]
@@ -130,7 +130,7 @@ async def test_delayed_response_completes_normally() -> None:
         yield "지"
         yield "금"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     events = await collect_events(agent, make_text_batch("지금"))
     text_chunks = [e for e in events if isinstance(e, TextChunk)]
@@ -150,7 +150,7 @@ async def test_backend_error_string_converted_to_event() -> None:
     async def mock_stream(*args: Any, **kwargs: Any) -> AsyncIterator[str]:
         yield "Error calling the chat endpoint: Connection error."
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     events = await collect_events(agent, make_text_batch("안녕"))
 
@@ -176,7 +176,7 @@ async def test_very_long_input_no_truncation() -> None:
             called_messages.extend(args[0])
         yield "응답"
 
-    agent._llm.chat_completion = mock_stream
+    agent._simple_stream = mock_stream
 
     batch = BatchInput(texts=[TextData(source=TextSource.INPUT, content=long_text)])
     events = await collect_events(agent, batch)
