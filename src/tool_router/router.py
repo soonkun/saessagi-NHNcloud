@@ -82,7 +82,7 @@ class ToolRouter:
         logger.info("ToolRouter 초기화 완료. 등록 툴: %s", sorted(self._validators.keys()))
 
     def tool_specs(self) -> list[ToolSpec]:
-        """4개 툴의 OpenAI function-calling JSON schema 리스트를 반환.
+        """5개 툴의 OpenAI function-calling JSON schema 리스트를 반환.
 
         반환 리스트는 **호출마다 새 사본**(list copy)이다. 호출 측의 수정이 내부 상태를
         오염시키지 않도록 보호한다.

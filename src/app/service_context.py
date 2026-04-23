@@ -319,7 +319,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 # NOTE: agent가 필요하므로 실제 서비스는 init_agent 이후 배선.
                 # 현재 단계에서는 template만 검증하고 나머지는 나중에 초기화.
                 self.meeting_minutes_service = MeetingMinutesService(
-                    agent=None,  # type: ignore[arg-type]
+                    agent=None,  # init_agent에서 set_agent로 교체
                     template_path=meeting_template_path,
                     temp_dir=meeting_temp_dir,
                     download_base_url=download_base_url,

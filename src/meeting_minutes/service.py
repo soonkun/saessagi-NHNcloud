@@ -62,8 +62,11 @@ class MeetingMinutesService:
             {"file_id": uuid, "download_url": full_url, "expires_at": iso}
 
         Raises:
-            MeetingMinutesError 계열.
+            MeetingMinutesError: agent가 초기화되지 않은 경우 포함.
         """
+        if self._generator._agent is None:
+            from .errors import MeetingMinutesError
+            raise MeetingMinutesError("agent가 초기화되지 않았습니다. set_agent()를 먼저 호출하세요.")
         draft = await self._generator.generate(transcript, pages)
 
         file_id = str(uuid.uuid4())

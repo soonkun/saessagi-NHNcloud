@@ -102,21 +102,18 @@ def test_download_503_service_none() -> None:
 # ── 엣지 케이스 ──────────────────────────────────────────────
 
 
-def test_e6_download_base_url_non_loopback(
+@pytest.mark.asyncio
+async def test_e6_download_base_url_non_loopback(
     fake_agent: MagicMock,
     template_path: Path,
     tmp_path: Path,
 ) -> None:
     """E-6: meeting_minutes_service=None으로 강등 → dispatch 시 service_unavailable."""
     from meeting_minutes.tool import handle_create_meeting_minutes
-    import asyncio
 
-    # service=None인 경우 service_unavailable 반환
-    result = asyncio.get_event_loop().run_until_complete(
-        handle_create_meeting_minutes(
-            None,
-            {"transcript": "가" * 50, "pages": 1},
-        )
+    result = await handle_create_meeting_minutes(
+        None,
+        {"transcript": "가" * 50, "pages": 1},
     )
 
     assert result.ok is False
