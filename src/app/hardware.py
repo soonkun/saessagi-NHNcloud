@@ -14,13 +14,13 @@ from loguru import logger
 class HardwareProfile:
     """감지된 하드웨어 프로파일 및 권장 설정."""
 
-    platform: str          # "darwin" | "windows" | "linux"
-    arch: str              # "arm64" | "x86_64" | ...
-    ram_gb: float          # 전체 RAM (GB)
+    platform: str  # "darwin" | "windows" | "linux"
+    arch: str  # "arm64" | "x86_64" | ...
+    ram_gb: float  # 전체 RAM (GB)
     has_cuda: bool
-    cuda_vram_gb: float    # CUDA VRAM (없으면 0.0)
+    cuda_vram_gb: float  # CUDA VRAM (없으면 0.0)
     cuda_device_name: str  # 예: "NVIDIA GeForce RTX 4090"
-    has_mps: bool          # Apple Metal (macOS ARM)
+    has_mps: bool  # Apple Metal (macOS ARM)
 
     # 권장 Whisper 설정
     whisper_model: str
@@ -34,7 +34,8 @@ class HardwareProfile:
 def _get_ram_gb() -> float:
     try:
         import psutil
-        return psutil.virtual_memory().total / (1024 ** 3)
+
+        return psutil.virtual_memory().total / (1024**3)
     except Exception:
         return 0.0
 
@@ -43,10 +44,11 @@ def _get_cuda_info() -> tuple[bool, float, str]:
     """(has_cuda, vram_gb, device_name)"""
     try:
         import torch
+
         if not torch.cuda.is_available():
             return False, 0.0, ""
         props = torch.cuda.get_device_properties(0)
-        vram_gb = props.total_memory / (1024 ** 3)
+        vram_gb = props.total_memory / (1024**3)
         return True, vram_gb, props.name
     except Exception:
         return False, 0.0, ""
@@ -55,6 +57,7 @@ def _get_cuda_info() -> tuple[bool, float, str]:
 def _has_mps() -> bool:
     try:
         import torch
+
         return torch.backends.mps.is_available()  # type: ignore[attr-defined]
     except Exception:
         return False
@@ -63,7 +66,7 @@ def _has_mps() -> bool:
 def detect() -> HardwareProfile:
     """현재 하드웨어를 감지하고 최적 설정을 반환한다."""
     sys_platform = platform.system().lower()  # "darwin" / "windows" / "linux"
-    arch = platform.machine().lower()         # "arm64" / "x86_64" / "amd64"
+    arch = platform.machine().lower()  # "arm64" / "x86_64" / "amd64"
     ram_gb = _get_ram_gb()
     has_cuda, cuda_vram_gb, cuda_device_name = _get_cuda_info()
     mps_ok = _has_mps()
@@ -92,7 +95,7 @@ def detect() -> HardwareProfile:
         whisper_model = "large-v3-turbo"
         whisper_device = "cpu"
         whisper_compute_type = "int8"
-        tts_device = "auto"   # PyTorch MPS 사용
+        tts_device = "auto"  # PyTorch MPS 사용
     else:
         # CPU 전용
         if ram_gb >= 16:
@@ -124,6 +127,7 @@ def apply_to_config(upstream_config: Any, hw: HardwareProfile) -> None:
     conf.yaml 값보다 우선 적용. SAESSAGI_NO_HW_ADAPT=1 환경변수로 비활성화.
     """
     import os
+
     if os.environ.get("SAESSAGI_NO_HW_ADAPT", "").strip() == "1":
         logger.info("SAESSAGI_NO_HW_ADAPT=1 — 하드웨어 자동 설정 비활성화")
         return
@@ -156,8 +160,7 @@ def log_summary(hw: HardwareProfile) -> None:
         else ("Apple MPS" if hw.has_mps else "없음")
     )
     logger.info(
-        f"하드웨어 감지: OS={hw.platform} arch={hw.arch}"
-        f" RAM={hw.ram_gb:.1f}GB GPU={gpu_info}"
+        f"하드웨어 감지: OS={hw.platform} arch={hw.arch} RAM={hw.ram_gb:.1f}GB GPU={gpu_info}"
     )
     logger.info(
         f"권장 설정: Whisper={hw.whisper_model}/{hw.whisper_device}"

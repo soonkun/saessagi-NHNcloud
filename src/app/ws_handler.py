@@ -101,6 +101,8 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
         await super().handle_new_connection(websocket, client_uid)
         # super() 성공(예외 없이 반환)한 경우에만 여기 도달
         self._app_ctx._active_ws = websocket
+        if self._app_ctx.avatar_state is not None:
+            self._app_ctx.avatar_state.set_send_text(websocket.send_json)
         logger.debug(f"D-13: _active_ws 갱신 client={client_uid}")
 
     async def handle_disconnect(self, client_uid: str) -> None:
@@ -121,6 +123,8 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
             # B2: 식별자 비교로 안전하게 리셋
             if disconnecting_ws is not None and self._app_ctx._active_ws is disconnecting_ws:
                 self._app_ctx._active_ws = None
+                if self._app_ctx.avatar_state is not None:
+                    self._app_ctx.avatar_state.set_send_text(None)
                 logger.debug(f"D-13: _active_ws None 리셋 client={client_uid}")
 
     # ------------------------------------------------------------------ #

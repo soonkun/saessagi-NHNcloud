@@ -15,6 +15,8 @@ from .types import ToolResult, ToolSpec
 
 if TYPE_CHECKING:
     from .screenshot import ScreenshotService
+    from avatar_state import AvatarState
+    from meeting_minutes.service import MeetingMinutesService
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +40,7 @@ class ToolRouter:
     """
 
     LOCAL_TOOL_NAMES: frozenset[str] = frozenset(
-        {"add_event", "get_events", "search_docs", "take_screenshot"}
+        {"add_event", "get_events", "search_docs", "take_screenshot", "create_meeting_minutes"}
     )
 
     def __init__(
@@ -46,12 +48,16 @@ class ToolRouter:
         calendar: Any,  # CalendarService | None
         rag: Any,  # RagService | None
         screenshot: "ScreenshotService",
+        meeting_minutes: "MeetingMinutesService | None" = None,
+        avatar_state: "AvatarState | None" = None,
     ) -> None:
         """
         Args:
             calendar: M_09 CalendarService 인스턴스. None이면 add_event/get_events가 service_unavailable.
             rag: M_07 RagService 인스턴스. None이면 search_docs가 service_unavailable.
             screenshot: M_05b 내부 ScreenshotService 인스턴스. **None 금지**(항상 제공).
+            meeting_minutes: M_13 MeetingMinutesService 인스턴스. None이면 create_meeting_minutes가 service_unavailable.
+            avatar_state: M_08 AvatarState 인스턴스. None이면 아바타 상태 전환 스킵.
 
         Raises:
             TypeError: screenshot is None.
@@ -63,6 +69,8 @@ class ToolRouter:
         self._calendar = calendar
         self._rag = rag
         self._screenshot = screenshot
+        self._meeting_minutes = meeting_minutes
+        self._avatar_state = avatar_state
 
         # JSON Schema Validator를 __init__ 시 4개 컴파일 후 재사용
         self._validators: dict[str, Draft202012Validator] = {}
@@ -138,8 +146,11 @@ class ToolRouter:
                     return _service_unavail("search_docs")
                 return await self._handle_search_docs(arguments)
 
-            else:  # take_screenshot — screenshot은 None 금지(생성자에서 TypeError)
+            elif name == "take_screenshot":
                 return await self._handle_take_screenshot(arguments)
+
+            else:  # create_meeting_minutes
+                return await self._handle_create_meeting_minutes(arguments)
 
         except asyncio.CancelledError:
             raise
@@ -320,6 +331,14 @@ class ToolRouter:
                 "state": "started",
                 "interval_seconds": interval,
             },
+        )
+
+    async def _handle_create_meeting_minutes(self, args: dict[str, Any]) -> ToolResult:
+        """create_meeting_minutes 핸들러."""
+        from meeting_minutes.tool import handle_create_meeting_minutes
+
+        return await handle_create_meeting_minutes(
+            self._meeting_minutes, args, avatar_state=self._avatar_state
         )
 
     async def _on_continuous_frame(self, data_url: str) -> None:

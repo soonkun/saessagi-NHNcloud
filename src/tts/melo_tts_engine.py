@@ -104,7 +104,9 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
             else:
                 missing_files = [f for f in MELO_REQUIRED_FILES if not (model_path / f).exists()]
                 if missing_files:
-                    logger.warning("model weights missing %s — melo 자동 다운로드 경로 사용", missing_files)
+                    logger.warning(
+                        "model weights missing %s — melo 자동 다운로드 경로 사용", missing_files
+                    )
                     model_path = None
 
         # 2. language 검증

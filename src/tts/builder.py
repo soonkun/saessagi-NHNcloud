@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 try:
     from .xtts_v2_engine import XttsV2Engine as _XttsV2Engine
+
     TtsEngine = Union[MeloTTSEngine, _XttsV2Engine]
 except Exception:
     # TTS 패키지 미설치(macOS/Python 3.12 등) — MeloTTS 단독 운용

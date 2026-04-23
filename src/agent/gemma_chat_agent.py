@@ -416,6 +416,74 @@ class GemmaChatAgent:
         self.system_prompt = prompt
         self._inner.set_system(prompt)
 
+    async def complete_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema: dict[str, Any],
+        *,
+        max_tokens: int = 4096,
+        temperature: float = 0.2,
+        timeout_seconds: float = 60.0,
+    ) -> dict[str, Any]:
+        """비스트리밍 JSON 완성 메서드 (CR-MM-A).
+
+        system_prompt + user_prompt를 Ollama에 보내고 응답을 JSON으로 파싱해 반환한다.
+        response_format={"type": "json_object"}를 사용해 JSON 모드를 활성화한다.
+
+        Args:
+            system_prompt: 시스템 프롬프트.
+            user_prompt: 사용자 프롬프트.
+            json_schema: JSON Schema (현재 미사용, Protocol 호환용).
+            max_tokens: 최대 생성 토큰 수.
+            temperature: 샘플링 온도.
+            timeout_seconds: 요청 타임아웃(초). 초과 시 asyncio.TimeoutError 전파.
+
+        Returns:
+            파싱된 JSON dict.
+
+        Raises:
+            ValueError: 응답이 유효한 JSON이 아닌 경우.
+            asyncio.TimeoutError: timeout_seconds 초과.
+        """
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "response_format": {"type": "json_object"},
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+
+        logger.info(
+            f"complete_json 호출: model={self.model}, max_tokens={max_tokens}, "
+            f"temperature={temperature}, timeout={timeout_seconds}s"
+        )
+
+        async with asyncio.timeout(timeout_seconds):
+            response = await self._llm.client.chat.completions.create(
+                model=payload["model"],
+                messages=payload["messages"],  # type: ignore[arg-type]
+                max_tokens=payload["max_tokens"],
+                temperature=payload["temperature"],
+                response_format={"type": "json_object"},
+                stream=False,
+            )
+
+        content = response.choices[0].message.content or ""
+        logger.debug(f"complete_json 응답 길이: {len(content)}자")
+
+        try:
+            result: dict[str, Any] = json.loads(content)
+        except (json.JSONDecodeError, ValueError) as exc:
+            logger.error(f"complete_json JSON 파싱 실패: {exc}. 응답 앞 200자: {content[:200]}")
+            raise ValueError(f"LLM 응답이 유효한 JSON이 아닙니다: {exc}") from exc
+
+        return result
+
     async def aclose(self) -> None:
         """리소스 정리. openai AsyncClient를 닫는다."""
         try:

@@ -26,9 +26,10 @@ Emotion = Literal[
     "thinking",
     "sleepy",
     "study",
+    "writing",
 ]
 
-# (1) 유효 Emotion 집합 — push_event/AvatarEvent 경로(8종, study 포함)
+# (1) 유효 Emotion 집합 — push_event/AvatarEvent 경로(9종, study/writing 포함)
 _VALID_EMOTIONS: frozenset[str] = frozenset(
     {
         "neutral",
@@ -39,6 +40,7 @@ _VALID_EMOTIONS: frozenset[str] = frozenset(
         "thinking",
         "sleepy",
         "study",
+        "writing",
     }
 )
 
@@ -99,6 +101,7 @@ class AvatarEvent:
                 "thinking",
                 "sleepy",
                 "study",
+                "writing",
             )
             raise ValueError(f"emotion must be one of {_ordered}, got {self.emotion!r}")
         if not (CROSSFADE_MIN_MS <= self.crossfade_ms <= CROSSFADE_MAX_MS):

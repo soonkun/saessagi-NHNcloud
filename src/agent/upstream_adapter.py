@@ -33,7 +33,9 @@ def _make_adapter_class() -> type:
             self._agent = agent
             self._pending_tasks: set[asyncio.Task[None]] = set()
 
-        async def chat(self, input_data: BatchInput) -> AsyncIterator[Union["SentenceOutput", dict[str, Any]]]:
+        async def chat(
+            self, input_data: BatchInput
+        ) -> AsyncIterator[Union["SentenceOutput", dict[str, Any]]]:
             """GemmaChatAgent.chat를 소비해 upstream SentenceOutput 스트림으로 변환.
 
             - TextChunk 누적 → 전체 텍스트를 하나의 SentenceOutput으로 yield

@@ -22,12 +22,12 @@ class TestEmotionSets:
         """_SPOKEN_EMOTIONS ⊂ _VALID_EMOTIONS."""
         assert _SPOKEN_EMOTIONS < _VALID_EMOTIONS
 
-    def test_valid_minus_spoken_is_study(self) -> None:
-        """_VALID_EMOTIONS - _SPOKEN_EMOTIONS == {"study"}."""
-        assert _VALID_EMOTIONS - _SPOKEN_EMOTIONS == {"study"}
+    def test_valid_minus_spoken_is_study_and_writing(self) -> None:
+        """_VALID_EMOTIONS - _SPOKEN_EMOTIONS == {"study", "writing"}."""
+        assert _VALID_EMOTIONS - _SPOKEN_EMOTIONS == {"study", "writing"}
 
-    def test_valid_has_8_emotions(self) -> None:
-        assert len(_VALID_EMOTIONS) == 8
+    def test_valid_has_9_emotions(self) -> None:
+        assert len(_VALID_EMOTIONS) == 9
 
     def test_spoken_has_7_emotions(self) -> None:
         assert len(_SPOKEN_EMOTIONS) == 7

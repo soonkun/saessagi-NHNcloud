@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastapi import WebSocket
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
     from typing import Any as CalendarService
     from proactive import ProactiveDispatcher
     from tool_router import ScreenshotService, ToolRouter, ToolRouterAdapter
+    from meeting_minutes import MeetingMinutesService
 
 
 class AppServiceContext(ServiceContext):  # type: ignore[misc]
@@ -50,6 +52,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # CR-05: ToolRouter/Adapter 필드 신설
         self.tool_router: "ToolRouter | None" = None
         self.tool_router_adapter: "ToolRouterAdapter | None" = None
+        # M_13: MeetingMinutesService 슬롯
+        self.meeting_minutes_service: "MeetingMinutesService | None" = None
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
         # D-13: 마지막으로 연결된 활성 WebSocket (단일 사용자 전제)
@@ -79,8 +83,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             super().init_asr(asr_config)
         except Exception as exc:
             logger.warning(
-                "ASR 초기화 실패 (모델 미배치 등): %s. "
-                "음성 입력 없이 텍스트 채팅만 동작합니다.",
+                "ASR 초기화 실패 (모델 미배치 등): %s. 음성 입력 없이 텍스트 채팅만 동작합니다.",
                 exc,
             )
             self.asr_engine = None  # type: ignore[assignment]
@@ -243,6 +246,11 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self.character_config.agent_config = agent_config
         self.system_prompt = system_prompt
 
+        # (9) MeetingMinutesService에 agent 주입 (load_app_services에서 None으로 초기화됨)
+        if self.meeting_minutes_service is not None:
+            self.meeting_minutes_service._generator._agent = gemma_agent  # type: ignore[attr-defined]
+            logger.info("AppServiceContext.init_agent: MeetingMinutesService에 agent 주입 완료")
+
     async def load_app_services(self, app_config: "AppConfig") -> None:
         """본 프로젝트 고유 서비스(RAG/Calendar/Idle/Avatar/Proactive/Screenshot) 초기화.
 
@@ -282,6 +290,47 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             logger.warning(f"screenshot_service 초기화 실패(비-Windows 등): {exc}")
             self.screenshot_service = None
 
+        # M_13: MeetingMinutesService 조립 (ToolRouter보다 먼저)
+        try:
+            from meeting_minutes import MeetingMinutesService
+            from meeting_minutes.errors import HwpxTemplateError
+
+            meeting_template_path = Path(app_config.meeting_template_path)
+            meeting_temp_dir = Path(app_config.meeting_temp_dir)
+            download_base_url = app_config.meeting_download_base_url
+
+            # loopback 검증
+            if not (
+                download_base_url.startswith("http://127.0.0.1")
+                or download_base_url.startswith("http://localhost")
+                or download_base_url.startswith("https://127.0.0.1")
+                or download_base_url.startswith("https://localhost")
+            ):
+                logger.warning(
+                    f"meeting_download_base_url이 loopback이 아님: {download_base_url} "
+                    "— meeting_minutes_service=None 강등"
+                )
+                self.meeting_minutes_service = None
+            else:
+                # agent는 init_agent 이후에 주입됨; service는 agent를 나중에 받음.
+                # 여기서는 임시로 None을 설정하고 init_agent에서 교체.
+                # 실제로는 agent_engine을 통해 접근하지 않고, tool 호출 시 service를 직접 사용.
+                # NOTE: agent가 필요하므로 실제 서비스는 init_agent 이후 배선.
+                # 현재 단계에서는 template만 검증하고 나머지는 나중에 초기화.
+                self.meeting_minutes_service = MeetingMinutesService(
+                    agent=None,  # type: ignore[arg-type]
+                    template_path=meeting_template_path,
+                    temp_dir=meeting_temp_dir,
+                    download_base_url=download_base_url,
+                )
+                logger.info("MeetingMinutesService 초기화 완료 (agent=None, init_agent에서 배선)")
+        except HwpxTemplateError as exc:
+            logger.warning(f"MeetingMinutesService 초기화 실패 (템플릿 오류): {exc}")
+            self.meeting_minutes_service = None
+        except Exception as exc:
+            logger.warning(f"MeetingMinutesService 초기화 실패: {exc}")
+            self.meeting_minutes_service = None
+
         # CR-05: ToolRouter/Adapter 조립.
         # M_05b 스펙 §4.3 "screenshot=None 금지, TypeError" → screenshot_service가 None이면 조립 안 함.
         if self.screenshot_service is not None:
@@ -289,6 +338,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 calendar=self.calendar_service,  # None 허용 — M_07 미구현
                 rag=self.rag_service,  # None 허용 — M_09 미구현
                 screenshot=self.screenshot_service,
+                meeting_minutes=self.meeting_minutes_service,
+                avatar_state=self.avatar_state,
             )
             self.tool_router_adapter = ToolRouterAdapter(self.tool_router)
             logger.info("ToolRouter/ToolRouterAdapter 조립 완료")
@@ -359,6 +410,14 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 await _call_stop(self.proactive_dispatcher, "proactive_dispatcher")
             except Exception as exc:
                 logger.error(f"proactive_dispatcher.stop() 실패: {exc}")
+
+        # M_13: meeting_minutes_service.aclose()
+        if self.meeting_minutes_service is not None:
+            try:
+                await self.meeting_minutes_service.aclose()
+                logger.debug("meeting_minutes_service.aclose() 완료")
+            except Exception as exc:
+                logger.error(f"meeting_minutes_service.aclose() 실패: {exc}")
 
         # CR-05: screenshot_service.aclose() — 연속 캡처 루프 종료 및 mss 리소스 해제
         if self.screenshot_service is not None:

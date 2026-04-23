@@ -152,6 +152,18 @@ class AppConfig(BaseModel):
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)
     screenshot_continuous_interval_sec: int = Field(default=5, ge=1, le=60)
+    meeting_download_base_url: str = Field(
+        default="http://127.0.0.1:12393",
+        description="회의록 다운로드 URL 기본 주소. loopback 또는 사설 IP만 허용.",
+    )
+    meeting_temp_dir: str = Field(
+        default="data/temp/meeting_minutes",
+        description="회의록 임시 파일 저장 디렉토리.",
+    )
+    meeting_template_path: str = Field(
+        default="data/Template/회의 결과보고 템플릿.hwpx",
+        description="HWPX 회의록 템플릿 파일 경로.",
+    )
 
     @field_validator("morning_briefing_time", mode="before")
     @classmethod

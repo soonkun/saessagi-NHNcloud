@@ -3,6 +3,8 @@
 
 from typing import Any
 
+from meeting_minutes.schemas import CREATE_MEETING_MINUTES_SCHEMA
+
 ADD_EVENT_SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
@@ -149,4 +151,5 @@ ALL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     GET_EVENTS_SCHEMA,
     SEARCH_DOCS_SCHEMA,
     TAKE_SCREENSHOT_SCHEMA,
+    CREATE_MEETING_MINUTES_SCHEMA,
 ]

@@ -53,6 +53,7 @@ class AvatarState:
                 "thinking",
                 "sleepy",
                 "study",
+                "writing",
             )
             raise ValueError(f"default must be one of {_ordered}, got {default!r}")
         self._default: Emotion = default
@@ -143,6 +144,27 @@ class AvatarState:
             # 송신 성공 시에만 상태 갱신
             self._last_emotion = event.emotion
             self._last_speaking = event.speaking
+
+    def set_send_text(self, send_text: SendTextCallback | None) -> None:
+        """현재 WebSocket 연결의 send_text 콜백을 저장한다.
+
+        ws_handler가 연결 수립/해제 시 호출. 저장된 콜백은 push_emotion에서 사용.
+        """
+        self._send_text: SendTextCallback | None = send_text
+
+    async def push_emotion(self, emotion: str) -> None:
+        """저장된 send_text로 아바타 상태를 전환한다. 콜백 없으면 스킵.
+
+        tool_call 핸들러 등 send_text 없는 컨텍스트에서 사용.
+        """
+        send_text = getattr(self, "_send_text", None)
+        if send_text is None:
+            return
+        try:
+            event = AvatarEvent(emotion=emotion)  # type: ignore[arg-type]
+            await self.push_event(event, send_text)
+        except Exception:
+            pass
 
     def make_event(
         self,

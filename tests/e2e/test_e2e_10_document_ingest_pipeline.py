@@ -39,9 +39,7 @@ if str(_TESTS_ROOT) not in sys.path:
 pytestmark = [pytest.mark.e2e, pytest.mark.e2e_fast]
 
 # HWPX 픽스처: tests/document_ingest/fixtures/sample_2011.hwpx
-_HWPX_FIXTURE = (
-    Path(__file__).parent.parent / "document_ingest" / "fixtures" / "sample_2011.hwpx"
-)
+_HWPX_FIXTURE = Path(__file__).parent.parent / "document_ingest" / "fixtures" / "sample_2011.hwpx"
 # HWPX 파일의 첫 번째 청크 텍스트 (파서 결과에서 확인, 멱등성·쿼리 앵커로 사용)
 _FIRST_CHUNK_TEXT = "2011 네임스페이스 첫 번째 단락입니다."
 
@@ -90,8 +88,7 @@ async def test_e2e_10_document_ingest_pipeline(tmp_path: Path) -> None:
         category="테스트",
     )
     assert chunk_count_first > 0, (
-        f"AC-10-1 FAIL: ingest_file()이 0 청크를 반환했습니다. "
-        f"파일: {_HWPX_FIXTURE}"
+        f"AC-10-1 FAIL: ingest_file()이 0 청크를 반환했습니다. 파일: {_HWPX_FIXTURE}"
     )
 
     # ── AC-10-2: VectorStore.search() 결과에 doc_name 포함 ───────────

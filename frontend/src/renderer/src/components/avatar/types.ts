@@ -8,7 +8,8 @@ export type Emotion =
   | 'worried'
   | 'thinking'
   | 'sleepy'
-  | 'study';
+  | 'study'
+  | 'writing';
 
 export const VALID_EMOTIONS: readonly Emotion[] = [
   'neutral',
@@ -19,6 +20,7 @@ export const VALID_EMOTIONS: readonly Emotion[] = [
   'thinking',
   'sleepy',
   'study',
+  'writing',
 ] as const;
 
 export interface AvatarRendererErrorEvent {

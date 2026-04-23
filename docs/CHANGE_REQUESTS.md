@@ -849,3 +849,173 @@ E. `tests/idle_monitor/` — NoopBackend 경로 macOS CI 테스트 추가.
 - [ ] `ruff check .`, `mypy src/` macOS에서 PASS.
 - [ ] `docs/MODULES.md` 공통 규약에 "개발 환경: Windows 10/11·macOS 14+·Linux" 한 줄 추가.
 - [ ] upstream `Open-LLM-VTuber/**` 파일 수정 없음.
+
+---
+
+## CR-MM-A: M_05 GemmaChatAgent — `complete_json` 비스트리밍 메서드 추가
+
+**상태**: APPROVED — 2026-04-23 (M_13 선행 의존성)
+
+**배경**:
+M_13 MeetingMinutes의 `MeetingDraftGenerator`가 녹취록→개조식 JSON 추출을 위해
+LLM을 비스트리밍 JSON 모드로 1회 호출해야 한다. 현재 M_05 GemmaChatAgent는
+스트리밍 `chat()` 메서드만 존재한다(src/agent/gemma_chat_agent.py).
+
+**변경 대상**: `src/agent/gemma_chat_agent.py` 단일 파일
+
+**추가 메서드 시그니처**:
+
+```python
+async def complete_json(
+    self,
+    system_prompt: str,
+    user_prompt: str,
+    json_schema: dict,
+    *,
+    max_tokens: int = 4096,
+    temperature: float = 0.2,
+    timeout_seconds: float = 60.0,
+) -> dict:
+    """비스트리밍 JSON 응답 1회 호출.
+
+    - Ollama OpenAI 호환 /v1/chat/completions에 response_format={"type":"json_object"} 전달.
+    - 응답을 json.loads로 파싱해 dict 반환.
+    - jsonschema로 json_schema 검증 (위반 시 MeetingDraftValidationError 대신
+      ValueError raise — 호출자가 처리).
+    - timeout_seconds 초과 시 asyncio.TimeoutError.
+    - 비-JSON 응답 시 ValueError.
+    """
+```
+
+**구현 방식**: 기존 httpx 클라이언트 재사용, `stream=False` 모드, `response_format={"type":"json_object"}` 페이로드 추가.
+
+**테스트**: `tests/agent/test_gemma_chat_agent.py`에 3건 추가
+- 정상: mock httpx 응답 → dict 반환
+- 타임아웃: asyncio.TimeoutError 전파
+- 비-JSON: ValueError raise
+
+**DoD**:
+- [ ] `complete_json` 메서드 구현 및 타입 힌트
+- [ ] 테스트 3건 추가
+- [ ] `ruff`, `mypy`, `pytest tests/agent` PASS
+
+---
+
+## CR-13: M_13 MeetingMinutes — 녹취록 → 개조식 회의록 → HWPX 자동 생성
+
+**상태**: APPROVED — 2026-04-23 (사용자 승인)
+
+### 배경
+
+사내 회의 후 녹취록(텍스트)을 받아 공문서 개조식 형식에 맞는 회의 결과 보고서를 HWPX 파일로 자동 생성한다.
+기존 도구(Claude Code 스킬 등)는 클라우드 의존이었으나, 본 모듈은 오프라인 로컬 환경(Gemma 4 E4B)에서 동작한다.
+
+### 프로세스 구조
+
+```
+[1] 사용자 발화: "회의록 만들어줘" + 녹취록 텍스트
+[2] LLM이 대화 중 페이지 수 질문: "1장짜리인가요, 2장짜리인가요?"
+[3] 사용자 답변 → LLM이 tool_call: create_meeting_minutes(transcript, pages)
+[4] Tool: LLM에게 개조식 초안 생성 요청 (상세 프롬프트)
+[5] Tool: 초안 JSON → HWPX 템플릿 XML 삽입
+[6] Tool: 임시 파일 저장 → 다운로드 URL 반환
+[7] LLM이 사용자에게 다운로드 링크 안내
+```
+
+### 개조식 작성 규칙 (LLM 프롬프트에 반영)
+
+#### 분량 기준
+
+| 구분 | 전체 라인 수 | 본문 내용 | 금후계획 |
+|---|---|---|---|
+| 1장 | ~20줄 | ~10줄 | ~2줄 |
+| 2장 | ~40줄 | 20~23줄 | ~3줄 |
+
+#### 위계별 규칙
+
+| 기호 | 역할 | 글자수 | 개수 제한 | 비고 |
+|---|---|---|---|---|
+| ○ | 주요내용 | 35~37자 (2줄 시 70~73자) | 분량에 따라 늘림 | 조사 생략 금지 |
+| - | 부연설명 | 35~37자 (상황에 따라 연장 가능) | ○당 최대 2개, 불필요 시 생략 | |
+| * | 구체적 근거·세부사항 (일정·수치 등) | 40~43자 (상황에 따라 연장 가능) | ○당 최대 2개, 불필요 시 생략 | |
+
+- ○, -, * 개수는 내용과 목표 분량에 따라 유동적으로 조절
+- 조사 과도 생략으로 인한 의미 왜곡 금지
+
+### 구현 범위
+
+#### 신규 모듈: `src/meeting_minutes/`
+
+- `generator.py` — LLM 호출 → 개조식 JSON 초안 생성 (`MeetingDraft` dataclass 반환)
+- `hwpx_writer.py` — `data/Template/회의 결과보고 템플릿.hwpx` 기반 XML 삽입 → .hwpx 출력
+- `tool.py` — ToolRouter에 등록할 `create_meeting_minutes(transcript, pages)` 함수
+
+#### 기존 모듈 수정
+
+- `src/tool_router/router.py` — `create_meeting_minutes` 툴 등록
+- `src/app/main.py` (또는 라우터) — `/download/{file_id}` HTTP GET 엔드포인트 추가
+- `src/app/service_context.py` — MeetingMinutesService 슬롯 추가 및 조립
+
+#### HWPX 템플릿 필드 매핑
+
+템플릿(`data/Template/회의 결과보고 템플릿.hwpx`) 구조:
+- 제목 (HY헤드라인M 18)
+- 날짜·소속과 (신명조)
+- **개요** 섹션: 일시·장소, 참석자, 주요내용 (○/-/*)
+- **세부내용** 섹션: ○/-/* 반복 블록
+- **향후계획** 섹션: ○ 항목
+
+### MeetingDraft JSON 스키마
+
+```json
+{
+  "title": "string",
+  "date": "2026.04.23.",
+  "department": "string",
+  "place": "string",
+  "attendees": ["string"],
+  "summary_items": [
+    {
+      "text": "○ 항목 (35~37자)",
+      "sub": [
+        {"text": "- 부연설명 (35~37자)", "detail": "* 세부사항 (40~43자)"}
+      ]
+    }
+  ],
+  "detail_items": [...],
+  "next_steps": [
+    {"text": "○ 향후계획 내용", "date": "0.00."}
+  ]
+}
+```
+
+### 파일 다운로드 방식
+
+- Tool 실행 시 `data/temp/` 에 UUID 기반 파일명으로 HWPX 저장
+- FastAPI 라우터에 `GET /download/{file_id}` 엔드포인트 추가
+- LLM이 사용자에게 URL 안내: `"다운로드: http://127.0.0.1:12393/download/{uuid}"`
+- 파일은 24시간 후 자동 삭제 (임시 파일 정책)
+
+### 의존성
+
+- `zipfile` (stdlib) — HWPX 조작
+- `lxml` 또는 `xml.etree.ElementTree` (stdlib) — XML 파싱·수정
+- 추가 외부 의존성 없음
+
+### 영향 범위
+
+- `src/meeting_minutes/` (신규)
+- `src/tool_router/router.py` (툴 등록)
+- `src/app/` (다운로드 엔드포인트)
+- `data/Template/` (읽기 전용 템플릿 사용)
+- `tests/meeting_minutes/` (신규)
+
+### DoD
+
+- [ ] `specs/M_13_MeetingMinutes_SPEC.md` 작성 및 Planner 설계
+- [ ] `src/meeting_minutes/` 구현 완료
+- [ ] `tests/meeting_minutes/` 테스트: 정상 ≥5, 엣지 ≥5, 적대적 ≥3
+- [ ] `pytest`, `ruff`, `mypy` 모두 PASS
+- [ ] `reviews/M_13_MeetingMinutes_REVIEW.md`에 Critic PASS 기록
+- [ ] `docs/MODULES.md` M_13 상태 `✅ DONE`
+- [ ] 실제 녹취록 샘플로 HWPX 생성 확인 (수동 검증)

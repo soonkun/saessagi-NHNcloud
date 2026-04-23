@@ -166,6 +166,31 @@ pip download \
     "APScheduler>=3.10,<4" \
     --dest "${WHEELS_DIR}"
 
+echo ""
+echo "=== [bundle_deps.sh] M_13 MeetingMinutes 의존성 ==="
+echo "  lxml: XML 파싱·생성. C extension(libxml2 바인딩), 순수 로컬 처리."
+
+# lxml — macOS ARM (arm64), Linux (x86_64/aarch64), Windows (amd64) 3종 wheel
+pip download \
+    "lxml>=5.0,<6" \
+    --dest "${WHEELS_DIR}"
+
+# Windows amd64 wheel (빌드 머신이 Linux/macOS인 경우)
+pip download \
+    "lxml>=5.0,<6" \
+    --platform win_amd64 \
+    --python-version 3.12 \
+    --only-binary=:all: \
+    --dest "${WHEELS_DIR}" || true  # Windows wheel 없어도 계속
+
+# Linux x86_64 wheel
+pip download \
+    "lxml>=5.0,<6" \
+    --platform manylinux2014_x86_64 \
+    --python-version 3.12 \
+    --only-binary=:all: \
+    --dest "${WHEELS_DIR}" || true
+
 
 # ==============================================================================
 # M_12 Frontend npm 캐시 (§12.2 / §15.2)

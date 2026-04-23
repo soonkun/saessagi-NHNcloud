@@ -60,6 +60,13 @@ class AppWebSocketServer:
             init_webtool_routes(default_context_cache=self.default_context_cache)
         )
 
+        # M_13: 회의록 다운로드 라우터 등록
+        from .meeting_minutes_routes import router as meeting_router
+
+        # service_context를 request.app.state에서 접근 가능하도록 설정
+        self.app.state.service_context = default_context_cache
+        self.app.include_router(meeting_router, prefix="", tags=["meeting_minutes"])
+
         # 캐시 디렉토리
         cache_dir = "cache"
         if not os.path.exists(cache_dir):
