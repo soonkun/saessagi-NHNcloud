@@ -19,9 +19,7 @@ dependencies = [
     "ctranslate2>=4.4,<5",
     "silero-vad>=5.0,<6",
     # M_04 TTSEngine
-    # PENDING: MeloTTS PyPI 패키지명 확정 필요 — myshell-ai/MeloTTS는 PyPI에 공식 게시되지 않음.
-    # 오프라인 번들 확정 시 git+URL 또는 wheel 경로로 대체할 것.
-    # "melo>=0.1",           # PENDING: 패키지명 확정 필요 (PyPI 미등록, git install 권장)
+    "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",  # TTS 엔진 (PyPI 미등록, git 설치)
     "TTS>=0.22.0,<1; python_version < '3.12' and sys_platform == 'win32'",  # Coqui XTTS v2 — CPML 라이선스·Python<3.12·Windows 전용 (CR-02 법무 승인 대기)
     "torch>=2.0.0",         # MeloTTS + XTTS v2 딥러닝 런타임
     "soundfile>=0.12,<1",   # WAV I/O 보조 (libsndfile 기반)
