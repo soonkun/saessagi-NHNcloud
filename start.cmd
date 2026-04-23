@@ -1,0 +1,14 @@
+@echo off
+chcp 65001 > nul
+cd /d "%~dp0"
+
+set PYTHONPATH=src;upstream/Open-LLM-VTuber/src;upstream/Open-LLM-VTuber
+
+echo.
+echo Starting AI Assistant server...
+echo Open http://127.0.0.1:12393 in your browser.
+echo Press Ctrl+C to stop.
+echo.
+
+uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
+pause
