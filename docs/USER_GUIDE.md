@@ -182,7 +182,7 @@ PDF, Word, 텍스트 파일을 지원합니다.
 | 기쁨 | ![happy](../assets/character/saessagi/happy.png) | 좋은 소식, 도움이 됐을 때 |
 | 놀람 | ![surprised](../assets/character/saessagi/surprised.png) | 예상치 못한 내용이나 질문 |
 | 슬픔 | ![sad](../assets/character/saessagi/sad.png) | 부정적인 내용이나 공감 |
-| 걱정 | ![worried](../assets/character/saessagi/worried.png) | 우려되는 상황, 주의 사항이나 조심스러운 내용 |
+| 걱정 | ![worried](../assets/character/saessagi/worried_v2.png) | 우려되는 상황, 주의 사항이나 조심스러운 내용 |
 | 생각 | ![thinking](../assets/character/saessagi/thinking.png) | 검색·처리 중 |
 | 졸림 | ![sleepy](../assets/character/saessagi/sleepy.png) | 오랫동안 대화가 없을 때 |
 | 공부 | ![study](../assets/character/saessagi/study.png) | 문서 인덱싱 등 장기 작업 처리 중 |

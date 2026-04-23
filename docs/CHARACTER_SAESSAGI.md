@@ -10,7 +10,7 @@ assets/character/saessagi/
 ├── happy.png        ← 제공됨
 ├── surprised.png    ← 제공됨
 ├── sad.png          ← 제공됨
-├── worried.png      ← 제공됨
+├── worried_v2.png   ← 제공됨
 ├── thinking.png     ← 제공됨
 ├── sleepy.png       ← 제공됨
 └── study.png        ← 제공됨 (시스템 상태 — 장기 작업 처리 중 표시)
