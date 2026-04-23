@@ -157,19 +157,19 @@ def main() -> None:
     if (root / "pyproject.toml").exists():
         run("uv", "sync")
         ok("packages installed")
-        # melotts conflicts with pypinyin version in pyproject.toml -- install separately
-        warn("Installing MeloTTS (TTS engine)...")
-        import tempfile, os as _os
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as _f:
-            _f.write("pypinyin==0.50.0\n")
-            _override = _f.name
+        # melotts: install pre-built tokenizers first to avoid Rust compilation,
+        # then install melotts without its strict old tokenizers/transformers pins.
+        warn("Installing MeloTTS (TTS engine, may take a while)...")
         try:
             run("uv", "pip", "install", "--quiet",
-                "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
-                "--override", _override)
+                "tokenizers>=0.14.0", "transformers>=4.35.0", "pypinyin==0.50.0")
+            run("uv", "pip", "install", "--quiet", "--no-deps",
+                "melotts @ git+https://github.com/myshell-ai/MeloTTS.git")
             ok("MeloTTS installed")
-        finally:
-            _os.unlink(_override)
+        except Exception:
+            warn("MeloTTS installation failed (likely missing Rust compiler).")
+            warn("Voice output will be disabled. Text chat still works.")
+            warn("To enable TTS later, install Rust from https://rustup.rs and re-run bootstrap.")
     else:
         warn("pyproject.toml not found -- installing dev tools only")
         run("uv", "pip", "install", "ruff", "mypy", "pytest", "pytest-cov")
