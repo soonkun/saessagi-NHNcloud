@@ -20,7 +20,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. 필수 도구 설치 (Homebrew / apt)
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${CYAN}[1/5] 필수 도구 확인·설치 (ffmpeg, node)...${RESET}"
+echo -e "${CYAN}[1/6] 필수 도구 확인·설치 (ffmpeg, node)...${RESET}"
 
 install_brew_pkg() {
     local pkg="$1"
@@ -71,7 +71,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. Python 버전 체크 (3.11+)
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${CYAN}[2/5] Python 버전 확인...${RESET}"
+echo -e "${CYAN}[2/6] Python 버전 확인...${RESET}"
 if ! python3 --version 2>&1 | grep -qE "Python 3\.(1[1-9]|[2-9][0-9])"; then
     py_ver=$(python3 --version 2>&1 || echo "미설치")
     echo -e "${YELLOW}Python 3.11+ 필요. 현재: ${py_ver}${RESET}"
@@ -88,7 +88,7 @@ echo ""
 # ─────────────────────────────────────────────────────────────────────────────
 # 3. uv 설치
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${CYAN}[3/5] uv 설치 확인...${RESET}"
+echo -e "${CYAN}[3/6] uv 설치 확인...${RESET}"
 if ! command -v uv &>/dev/null; then
     echo -e "  ${YELLOW}uv 설치 중 (pip install uv)...${RESET}"
     python3 -m pip install --quiet uv
@@ -99,9 +99,9 @@ fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. Python 가상환경 생성 및 개발 도구 설치
+# 4. Python 가상환경 생성 및 패키지 설치
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${CYAN}[4/5] Python 가상환경 생성...${RESET}"
+echo -e "${CYAN}[4/6] Python 가상환경 생성 및 패키지 설치...${RESET}"
 
 # macOS/Linux의 경우 OS별 .venv는 그대로 재사용 가능; 단 Windows에서 복사된 .venv는 제거
 if [ -d ".venv/Scripts" ]; then
@@ -116,30 +116,55 @@ else
     echo -e "  ${GRAY}.venv 이미 존재 — 건너뜀${RESET}"
 fi
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
-uv pip install --quiet ruff mypy pytest pytest-cov
-deactivate
+if [ -f "pyproject.toml" ]; then
+    uv sync
+    echo -e "  ${GREEN}→ 패키지 설치 완료 (uv sync)${RESET}"
+else
+    # 스타터킷 환경: pyproject.toml 없음 → 개발 도구만 설치
+    echo -e "  ${YELLOW}pyproject.toml 없음 — 개발 도구만 설치${RESET}"
+    # shellcheck disable=SC1091
+    source .venv/bin/activate
+    uv pip install --quiet ruff mypy pytest pytest-cov
+    deactivate
+fi
 echo ""
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Ollama 설치 안내
+# 5. BGE-M3 임베딩 모델 다운로드 (HuggingFace — 문서 검색용, 약 1.5GB)
 # ─────────────────────────────────────────────────────────────────────────────
-echo -e "${CYAN}[5/5] Ollama 확인...${RESET}"
+echo -e "${CYAN}[5/6] BGE-M3 임베딩 모델 다운로드 (약 1.5GB)...${RESET}"
+BGE_DIR="assets/models/bge-m3"
+if [ ! -f "${BGE_DIR}/config.json" ]; then
+    mkdir -p "${BGE_DIR}"
+    if command -v huggingface-cli &>/dev/null; then
+        echo -e "  ${YELLOW}BAAI/bge-m3 → ${BGE_DIR}${RESET}"
+        huggingface-cli download BAAI/bge-m3 \
+            --local-dir "${BGE_DIR}" \
+            --local-dir-use-symlinks False
+        echo -e "  ${GREEN}→ BGE-M3 다운로드 완료${RESET}"
+    else
+        echo -e "  ${YELLOW}huggingface-cli 미설치. 다음 명령으로 수동 다운로드하세요:${RESET}"
+        echo -e "  ${YELLOW}  pip install huggingface_hub${RESET}"
+        echo -e "  ${YELLOW}  huggingface-cli download BAAI/bge-m3 --local-dir ${BGE_DIR} --local-dir-use-symlinks False${RESET}"
+    fi
+else
+    echo -e "  ${GRAY}BGE-M3 이미 존재 (${BGE_DIR}) — 건너뜀${RESET}"
+fi
+echo ""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Ollama 확인 및 LLM 모델 다운로드
+# ─────────────────────────────────────────────────────────────────────────────
+echo -e "${CYAN}[6/6] Ollama 확인...${RESET}"
 if command -v ollama &>/dev/null; then
     echo -e "  ${GRAY}Ollama 이미 설치됨 ($(ollama --version 2>&1 | head -1)) — 건너뜀${RESET}"
     OLLAMA_MODELS=$(ollama list 2>&1 || true)
     if echo "$OLLAMA_MODELS" | grep -q "gemma4"; then
         echo -e "  ${GRAY}gemma4 이미 존재 — 건너뜀${RESET}"
     else
-        echo -e "  ${YELLOW}gemma4:e4b 다운로드 중 (약 3~5GB)...${RESET}"
+        echo -e "  ${YELLOW}gemma4:e4b 다운로드 중 (약 9GB, 시간이 걸립니다)...${RESET}"
         ollama pull gemma4:e4b
-    fi
-    if echo "$OLLAMA_MODELS" | grep -q "bge-m3"; then
-        echo -e "  ${GRAY}bge-m3 이미 존재 — 건너뜀${RESET}"
-    else
-        echo -e "  ${YELLOW}bge-m3 임베딩 모델 다운로드 중...${RESET}"
-        ollama pull bge-m3
+        echo -e "  ${GREEN}→ gemma4:e4b 완료${RESET}"
     fi
 else
     echo -e "  ${YELLOW}Ollama 미설치. 수동 설치 필요:${RESET}"
@@ -150,7 +175,7 @@ else
         echo -e "  ${YELLOW}  curl -fsSL https://ollama.com/install.sh | sh${RESET}"
         echo -e "  ${YELLOW}  (사내 오프라인 환경: 수동 rpm/deb 패키지 설치)${RESET}"
     fi
-    echo -e "  ${YELLOW}설치 후: ollama pull gemma4:e4b && ollama pull bge-m3${RESET}"
+    echo -e "  ${YELLOW}설치 후: ollama pull gemma4:e4b${RESET}"
 fi
 echo ""
 
@@ -160,7 +185,18 @@ echo -e "${GREEN}========================================${RESET}"
 echo -e "${GREEN}부트스트랩 완료${RESET}"
 echo -e "${GREEN}========================================${RESET}"
 echo ""
-echo -e "${CYAN}다음 단계:${RESET}"
-echo "  1. 이 폴더에서 Claude Code 실행: claude"
-echo "  2. prompts/00_kickoff.md 의 프롬프트를 복사해 Claude Code에 붙여넣기"
+
+if [ -f "src/app/main.py" ]; then
+    # 완성된 repo를 클론한 경우
+    echo -e "${CYAN}서버 실행 방법:${RESET}"
+    echo '  export PYTHONPATH="src:upstream/Open-LLM-VTuber/src:upstream/Open-LLM-VTuber"'
+    echo '  uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393'
+    echo ""
+    echo -e "${GREEN}브라우저에서 http://127.0.0.1:12393 접속하면 새싹이가 반겨줍니다.${RESET}"
+else
+    # 스타터킷 — Claude Code로 개발 시작
+    echo -e "${CYAN}다음 단계:${RESET}"
+    echo "  1. 이 폴더에서 Claude Code 실행: claude"
+    echo "  2. prompts/00_kickoff.md 의 프롬프트를 복사해 Claude Code에 붙여넣기"
+fi
 echo ""
