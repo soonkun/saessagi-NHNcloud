@@ -61,7 +61,7 @@ async def test_e2e_22_no_match_rag() -> None:
     # 수락 기준 1: ToolResult.ok가 True (search 자체는 성공, found=False 반환)
     # M_05b 스펙: search_docs는 hits=[] found=False도 ok=True로 반환
     # (에러가 아닌 "검색 결과 없음" 상태)
-    assert result.ok is True or result.ok is False  # 구현에 따라 허용
+    assert result.ok is True
 
     # 수락 기준 2: found=False 또는 no_match_reason 존재
     payload = result.payload or {}
