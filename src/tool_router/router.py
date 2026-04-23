@@ -337,7 +337,7 @@ class ToolRouter:
         """create_meeting_minutes 핸들러."""
         from meeting_minutes.tool import handle_create_meeting_minutes
 
-        return await handle_create_meeting_minutes(
+        return await handle_create_meeting_minutes(  # type: ignore[no-any-return]
             self._meeting_minutes, args, avatar_state=self._avatar_state
         )
 

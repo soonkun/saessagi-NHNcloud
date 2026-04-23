@@ -144,6 +144,16 @@ class MeetingMinutesService:
             logger.info(f"cleanup_expired: {deleted}개 파일 삭제")
         return deleted
 
+    def set_agent(self, agent: Any) -> None:
+        """init_agent 이후 GemmaChatAgent를 주입한다.
+
+        agent=None으로 생성된 서비스에 agent를 사후 배선할 때 사용.
+        None이 아닌 agent만 허용 (좀비 상태 방지).
+        """
+        if agent is None:
+            raise ValueError("agent must not be None")
+        self._generator._agent = agent
+
     async def aclose(self) -> None:
         """AppServiceContext.close 정리 훅. 임시 파일은 보존(다음 기동의 cleanup가 처리)."""
         logger.debug("MeetingMinutesService.aclose() 완료 (임시 파일 보존)")

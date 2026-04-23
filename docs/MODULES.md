@@ -454,7 +454,7 @@ Phase 1 산출물. 구현은 Phase 2에서 이 계약대로만 이루어진다.
 | M_10 | IdleMonitor | NEW | ✅ DONE | — |
 | M_11 | ProactiveDispatcher | NEW | ✅ DONE | M_09, M_10 |
 | M_12 | Frontend | FORK+NEW | ✅ DONE | M_01 메시지 스키마, CR-10/CR-11 |
-| M_13 | MeetingMinutes | NEW | ✅ DONE | M_05 (GemmaChatAgent.complete_json), CR-MM-A |
+| M_13 | MeetingMinutes | NEW | 🚧 IN_PROGRESS | M_05 (GemmaChatAgent.complete_json), CR-MM-A |
 
 ---
 

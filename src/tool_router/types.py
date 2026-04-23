@@ -14,6 +14,9 @@ ToolErrorCode = Literal[
     "screenshot_failed",
     "continuous_already_running",
     "continuous_not_running",
+    "invalid_llm_response",
+    "schema_violation",
+    "hwpx_write_failed",
 ]
 
 

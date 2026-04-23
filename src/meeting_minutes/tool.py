@@ -61,40 +61,30 @@ async def handle_create_meeting_minutes(
     from .errors import MeetingDraftError, MeetingDraftValidationError, MeetingMinutesError
 
     await _set_writing_state(avatar_state)
+    result: ToolResult
     try:
-        result = await service.generate(transcript, pages)  # type: ignore[arg-type]
+        payload = await service.generate(transcript, pages)  # type: ignore[arg-type]
         logger.info(
-            f"create_meeting_minutes 성공: file_id={result['file_id']}, "
-            f"download_url={result['download_url']}"
+            f"create_meeting_minutes 성공: file_id={payload['file_id']}, "
+            f"download_url={payload['download_url']}"
         )
-        await _restore_neutral_state(avatar_state)
-        return ToolResult(ok=True, payload=result)
+        result = ToolResult(ok=True, payload=payload)
     except MeetingDraftError as exc:
         logger.error(f"create_meeting_minutes LLM 실패: {exc}")
-        return ToolResult(
-            ok=False,
-            error=str(exc),
-            error_code="invalid_llm_response",
-        )
+        result = ToolResult(ok=False, error=str(exc), error_code="invalid_llm_response")
     except MeetingDraftValidationError as exc:
         logger.error(f"create_meeting_minutes Schema 위반: {exc}")
-        return ToolResult(
-            ok=False,
-            error=str(exc),
-            error_code="schema_violation",
-        )
+        result = ToolResult(ok=False, error=str(exc), error_code="schema_violation")
     except MeetingMinutesError as exc:
         logger.error(f"create_meeting_minutes 일반 오류: {exc}")
-        return ToolResult(
-            ok=False,
-            error=str(exc),
-            error_code="hwpx_write_failed",
-        )
+        result = ToolResult(ok=False, error=str(exc), error_code="hwpx_write_failed")
     except Exception as exc:
         logger.exception(f"create_meeting_minutes 예상치 못한 오류: {exc}")
-        await _restore_neutral_state(avatar_state)
-        return ToolResult(
+        result = ToolResult(
             ok=False,
             error=f"예상치 못한 오류: {exc}",
             error_code="handler_exception",
         )
+    finally:
+        await _restore_neutral_state(avatar_state)
+    return result

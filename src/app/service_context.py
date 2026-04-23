@@ -52,8 +52,9 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # CR-05: ToolRouter/Adapter 필드 신설
         self.tool_router: "ToolRouter | None" = None
         self.tool_router_adapter: "ToolRouterAdapter | None" = None
-        # M_13: MeetingMinutesService 슬롯
+        # M_13: MeetingMinutesService 슬롯 + 임시파일 정리 스케줄러
         self.meeting_minutes_service: "MeetingMinutesService | None" = None
+        self._temp_cleanup_scheduler: Any = None  # apscheduler.AsyncIOScheduler | None
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
         # D-13: 마지막으로 연결된 활성 WebSocket (단일 사용자 전제)
@@ -248,8 +249,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
         # (9) MeetingMinutesService에 agent 주입 (load_app_services에서 None으로 초기화됨)
         if self.meeting_minutes_service is not None:
-            self.meeting_minutes_service._generator._agent = gemma_agent  # type: ignore[attr-defined]
-            logger.info("AppServiceContext.init_agent: MeetingMinutesService에 agent 주입 완료")
+            self.meeting_minutes_service.set_agent(gemma_agent)
+            logger.info("AppServiceContext.init_agent: MeetingMinutesService.set_agent 완료")
 
     async def load_app_services(self, app_config: "AppConfig") -> None:
         """본 프로젝트 고유 서비스(RAG/Calendar/Idle/Avatar/Proactive/Screenshot) 초기화.
@@ -324,6 +325,20 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     download_base_url=download_base_url,
                 )
                 logger.info("MeetingMinutesService 초기화 완료 (agent=None, init_agent에서 배선)")
+
+                # B-1 fix: 1시간 주기 임시 파일 정리 스케줄러
+                from apscheduler.schedulers.asyncio import AsyncIOScheduler
+                from apscheduler.triggers.interval import IntervalTrigger
+
+                self._temp_cleanup_scheduler = AsyncIOScheduler()
+                self._temp_cleanup_scheduler.add_job(
+                    self.meeting_minutes_service.cleanup_expired,
+                    IntervalTrigger(hours=1),
+                    id="meeting_minutes_cleanup",
+                    replace_existing=True,
+                )
+                self._temp_cleanup_scheduler.start()
+                logger.info("MeetingMinutes cleanup scheduler 시작 (1h interval)")
         except HwpxTemplateError as exc:
             logger.warning(f"MeetingMinutesService 초기화 실패 (템플릿 오류): {exc}")
             self.meeting_minutes_service = None
@@ -411,7 +426,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             except Exception as exc:
                 logger.error(f"proactive_dispatcher.stop() 실패: {exc}")
 
-        # M_13: meeting_minutes_service.aclose()
+        # M_13: cleanup scheduler shutdown → meeting_minutes_service.aclose()
+        if self._temp_cleanup_scheduler is not None:
+            try:
+                self._temp_cleanup_scheduler.shutdown(wait=True)
+                logger.debug("_temp_cleanup_scheduler.shutdown 완료")
+            except Exception as exc:
+                logger.error(f"_temp_cleanup_scheduler.shutdown 실패: {exc}")
         if self.meeting_minutes_service is not None:
             try:
                 await self.meeting_minutes_service.aclose()

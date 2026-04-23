@@ -29,9 +29,7 @@ async def test_n1_generate_1page(
     assert len(draft.summary_items) == len(valid_draft_dict_1page["summary_items"])
     assert len(draft.detail_items) == len(valid_draft_dict_1page["detail_items"])
     assert len(draft.next_steps) == len(valid_draft_dict_1page["next_steps"])
-    # 1장 fixture가 14줄 한도를 초과하므로 generator가 재시도 후 통과(경고 로깅).
-    # call_count는 1(재시도 없음) 또는 2(재시도 1회) 둘 다 허용.
-    assert fake_agent.complete_json.call_count >= 1
+    assert fake_agent.complete_json.call_count == 1
 
 
 @pytest.mark.asyncio
