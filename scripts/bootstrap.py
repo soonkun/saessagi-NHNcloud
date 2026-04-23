@@ -110,6 +110,12 @@ def main() -> None:
             "https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git",
             str(upstream))
         ok(f"cloned to {upstream}")
+
+    # frontend is a git submodule -- initialize if missing
+    if not (upstream / "frontend" / "index.html").exists():
+        warn("Initializing frontend submodule...")
+        run("git", "-C", str(upstream), "submodule", "update", "--init", "--recursive")
+        ok("frontend submodule initialized")
     print()
 
     # ── 2. Ollama / Gemma4 ─────────────────────────────────────────────────
