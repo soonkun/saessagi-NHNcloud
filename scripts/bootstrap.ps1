@@ -72,19 +72,10 @@ Write-Host "[3/6] Creating Python virtual environment..." -ForegroundColor Cyan
 if (Test-Path ".venv\Scripts\python.exe") {
     Write-Host "  .venv already exists -- skipping" -ForegroundColor Gray
 } else {
-    # Remove broken venv if present
     if (Test-Path ".venv") { Remove-Item ".venv" -Recurse -Force }
-
-    # Prefer system Python to avoid downloading from GitHub (SSL proxy issue)
-    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
-    $sysPython = if ($pyCmd) { $pyCmd.Source } else { $null }
-    if ($sysPython -and (python --version 2>&1) -match "3\.(1[1-9]|[2-9]\d)") {
-        Write-Host "  Using system Python: $sysPython" -ForegroundColor Gray
-        uv venv --python $sysPython
-    } else {
-        Write-Host "  Downloading Python 3.11 via uv (needs internet)..." -ForegroundColor Yellow
-        uv venv --python 3.11
-    }
+    # Let uv pick Python automatically (uses system Python if available,
+    # downloads via UV_NATIVE_TLS=1 if not -- works through corporate proxy)
+    uv venv
     Write-Host "  -> .venv created" -ForegroundColor Green
 }
 Write-Host ""
