@@ -159,10 +159,17 @@ def main() -> None:
         ok("packages installed")
         # melotts conflicts with pypinyin version in pyproject.toml -- install separately
         warn("Installing MeloTTS (TTS engine)...")
-        run("uv", "pip", "install", "--quiet",
-            "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
-            "--override", "pypinyin==0.50.0")
-        ok("MeloTTS installed")
+        import tempfile, os as _os
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as _f:
+            _f.write("pypinyin==0.50.0\n")
+            _override = _f.name
+        try:
+            run("uv", "pip", "install", "--quiet",
+                "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
+                "--override", _override)
+            ok("MeloTTS installed")
+        finally:
+            _os.unlink(_override)
     else:
         warn("pyproject.toml not found -- installing dev tools only")
         run("uv", "pip", "install", "ruff", "mypy", "pytest", "pytest-cov")
