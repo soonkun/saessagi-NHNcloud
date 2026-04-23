@@ -3,6 +3,10 @@
 
 $ErrorActionPreference = "Stop"
 
+# UTF-8 출력 설정 (CMD에서 호출 시 한글 깨짐 방지)
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
+
 Write-Host "`n=== AI 비서 프로젝트 부트스트랩 ===" -ForegroundColor Cyan
 Write-Host ""
 

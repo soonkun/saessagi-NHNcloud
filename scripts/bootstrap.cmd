@@ -2,6 +2,9 @@
 :: bootstrap.cmd — Windows CMD에서 bootstrap.ps1을 실행하는 래퍼
 :: 사용: 이 파일을 더블클릭하거나 cmd에서 scripts\bootstrap.cmd 실행
 
+:: UTF-8 코드페이지 설정 (한글 깨짐 방지)
+chcp 65001 > nul
+
 echo.
 echo === AI 비서 프로젝트 부트스트랩 ===
 echo.
