@@ -1,20 +1,26 @@
 @echo off
 chcp 65001 > nul
+cd /d "%~dp0"
 
-:: Project root = folder where this file lives
 set ROOT=%~dp0
+set UPSTREAM=%ROOT%upstream\Open-LLM-VTuber
 
 :: Ensure frontend submodule is initialized
-if not exist "%ROOT%upstream\Open-LLM-VTuber\frontend\index.html" (
+if not exist "%UPSTREAM%\frontend\index.html" (
     echo Initializing frontend submodule...
-    git -C "%ROOT%upstream\Open-LLM-VTuber" submodule update --init --recursive
+    git -C "%UPSTREAM%" submodule update --init --recursive
 )
 
-:: Config path (absolute) -- server reads this from env var
-set SAESSAGI_CONFIG_PATH=%ROOT%conf.yaml
+:: Create directory junctions so upstream's relative paths resolve from project root
+:: (mklink /J does not require admin rights)
+if not exist "%ROOT%frontend"      mklink /J "%ROOT%frontend"      "%UPSTREAM%\frontend"
+if not exist "%ROOT%live2d-models" mklink /J "%ROOT%live2d-models" "%UPSTREAM%\live2d-models"
+if not exist "%ROOT%backgrounds"   mklink /J "%ROOT%backgrounds"   "%UPSTREAM%\backgrounds"
+if not exist "%ROOT%avatars"       mklink /J "%ROOT%avatars"       "%UPSTREAM%\avatars"
+if not exist "%ROOT%web_tool"      mklink /J "%ROOT%web_tool"      "%UPSTREAM%\web_tool"
+if not exist "%ROOT%characters"    mklink /J "%ROOT%characters"    "%UPSTREAM%\characters"
 
-:: PYTHONPATH: project src + upstream src
-set PYTHONPATH=%ROOT%src;%ROOT%upstream\Open-LLM-VTuber\src;%ROOT%upstream\Open-LLM-VTuber
+set PYTHONPATH=%ROOT%src;%UPSTREAM%\src;%UPSTREAM%
 
 echo.
 echo Starting AI Assistant server...
@@ -22,8 +28,5 @@ echo Open http://127.0.0.1:12393 in your browser.
 echo Press Ctrl+C to stop.
 echo.
 
-:: Run from upstream dir so relative paths (frontend/, live2d-models/ etc.) resolve correctly
-cd /d "%ROOT%upstream\Open-LLM-VTuber"
-"%ROOT%.venv\Scripts\python.exe" -m uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
-
+uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
 pause

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from loguru import logger
 
 
-def create_app(config_path: str | None = None) -> FastAPI:
+def create_app(config_path: str = "conf.yaml") -> FastAPI:
     """본 프로젝트 FastAPI 앱을 생성한다.
 
     1. load_full_config(config_path)
@@ -32,9 +32,6 @@ def create_app(config_path: str | None = None) -> FastAPI:
         FileNotFoundError: config_path 부재
         pydantic.ValidationError: 설정 스키마 위반
     """
-    if config_path is None:
-        config_path = os.environ.get("SAESSAGI_CONFIG_PATH", "conf.yaml")
-
     from .config import load_full_config
     from .url_guard import enforce_private_url
     from .logging import init_logging
