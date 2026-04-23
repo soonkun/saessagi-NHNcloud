@@ -48,28 +48,7 @@ if ($models -notmatch "gemma4") {
 }
 Write-Host ""
 
-# 3. BGE-M3 임베딩 모델 다운로드 (HuggingFace — 문서 검색용, 약 1.5GB)
-Write-Host "[3/7] BGE-M3 임베딩 모델 다운로드 (약 1.5GB)..." -ForegroundColor Cyan
-$bgeDir = "assets\models\bge-m3"
-if (-not (Test-Path "$bgeDir\config.json")) {
-    if (-not (Test-Path $bgeDir)) {
-        New-Item -ItemType Directory -Path $bgeDir -Force | Out-Null
-    }
-    # huggingface-cli 확인 — 없으면 uv tool로 설치 (pip 불필요)
-    if (-not (Get-Command huggingface-cli -ErrorAction SilentlyContinue)) {
-        Write-Host "  huggingface-cli 설치 중 (uv tool install)..." -ForegroundColor Yellow
-        uv tool install huggingface_hub
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
-    }
-    Write-Host "  BAAI/bge-m3 → $bgeDir" -ForegroundColor Yellow
-    huggingface-cli download BAAI/bge-m3 `
-        --local-dir $bgeDir `
-        --local-dir-use-symlinks False
-    Write-Host "  → BGE-M3 다운로드 완료" -ForegroundColor Green
-} else {
-    Write-Host "  BGE-M3 이미 존재 ($bgeDir) — 건너뜀" -ForegroundColor Gray
-}
-Write-Host ""
+# 3. BGE-M3 다운로드는 venv 생성 후 [5/7]에서 진행 (순서 조정)
 
 # 4. Python 가상환경 생성
 Write-Host "[4/7] Python 가상환경 생성..." -ForegroundColor Cyan
@@ -117,6 +96,25 @@ pythonpath = ["src"]
 }
 if (-not (Test-Path "src")) { New-Item -ItemType Directory -Path "src" | Out-Null }
 if (-not (Test-Path "tests")) { New-Item -ItemType Directory -Path "tests" | Out-Null }
+Write-Host ""
+
+# 5-b. BGE-M3 임베딩 모델 다운로드 (HuggingFace — 문서 검색용, 약 1.5GB)
+# uv tool install은 Windows trampoline 버그로 실패할 수 있으므로
+# venv의 Python으로 snapshot_download를 직접 호출한다.
+Write-Host "[5b/7] BGE-M3 임베딩 모델 다운로드 (약 1.5GB)..." -ForegroundColor Cyan
+$bgeDir = "assets\models\bge-m3"
+if (-not (Test-Path "$bgeDir\config.json")) {
+    New-Item -ItemType Directory -Path $bgeDir -Force | Out-Null
+    Write-Host "  huggingface_hub 설치 중 (venv 내부)..." -ForegroundColor Yellow
+    uv pip install --quiet huggingface_hub
+    Write-Host "  BAAI/bge-m3 → $bgeDir (시간이 걸립니다)..." -ForegroundColor Yellow
+    $bgeDirFwd = $bgeDir -replace '\\', '/'
+    $downloadScript = "from huggingface_hub import snapshot_download; snapshot_download('BAAI/bge-m3', local_dir='$bgeDirFwd', local_dir_use_symlinks=False)"
+    .\.venv\Scripts\python.exe -c $downloadScript
+    Write-Host "  → BGE-M3 다운로드 완료" -ForegroundColor Green
+} else {
+    Write-Host "  BGE-M3 이미 존재 ($bgeDir) — 건너뜀" -ForegroundColor Gray
+}
 Write-Host ""
 
 # 6. git 초기화 (스타터킷 전용 — 이미 .git이 있으면 건너뜀)
