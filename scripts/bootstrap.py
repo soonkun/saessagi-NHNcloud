@@ -166,13 +166,16 @@ def main() -> None:
         skip(f"BGE-M3 already exists ({bge_dir})")
     else:
         bge_dir.mkdir(parents=True, exist_ok=True)
-        warn("Installing huggingface_hub into venv...")
-        run("uv", "pip", "install", "--quiet", "huggingface_hub")
+        warn("Installing huggingface_hub + truststore into venv...")
+        # truststore: makes Python requests trust the OS (Windows) certificate store,
+        # which includes the corporate SSL proxy certificate
+        run("uv", "pip", "install", "--quiet", "huggingface_hub", "truststore")
         warn(f"Downloading BAAI/bge-m3 -> {bge_dir} (this will take a while)...")
         run(
             str(venv_python),
             "-c",
             (
+                "import truststore; truststore.inject_into_ssl(); "
                 "from huggingface_hub import snapshot_download; "
                 f"snapshot_download('BAAI/bge-m3', local_dir={str(bge_dir)!r}, "
                 "local_dir_use_symlinks=False)"
