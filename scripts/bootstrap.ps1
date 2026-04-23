@@ -76,7 +76,8 @@ if (Test-Path ".venv\Scripts\python.exe") {
     if (Test-Path ".venv") { Remove-Item ".venv" -Recurse -Force }
 
     # Prefer system Python to avoid downloading from GitHub (SSL proxy issue)
-    $sysPython = (Get-Command python -ErrorAction SilentlyContinue)?.Source
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    $sysPython = if ($pyCmd) { $pyCmd.Source } else { $null }
     if ($sysPython -and (python --version 2>&1) -match "3\.(1[1-9]|[2-9]\d)") {
         Write-Host "  Using system Python: $sysPython" -ForegroundColor Gray
         uv venv --python $sysPython
