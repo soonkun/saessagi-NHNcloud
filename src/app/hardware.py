@@ -134,12 +134,19 @@ def apply_to_config(upstream_config: Any, hw: HardwareProfile) -> None:
 
     try:
         asr = upstream_config.character_config.asr_config.faster_whisper
-        asr.model_path = hw.whisper_model
+        # conf.yaml에 로컬 경로(슬래시 포함)가 있으면 model_path를 건드리지 않는다.
+        existing = asr.model_path or ""
+        if existing and ("/" in existing or "\\" in existing):
+            logger.info(
+                f"HW adapt ASR: model_path는 로컬 경로이므로 유지 ({existing[:60]}…)"
+            )
+        else:
+            asr.model_path = hw.whisper_model
+            logger.info(f"HW adapt ASR: model_path={hw.whisper_model}")
         asr.device = hw.whisper_device
         asr.compute_type = hw.whisper_compute_type
         logger.info(
-            f"HW adapt ASR: model={hw.whisper_model} device={hw.whisper_device}"
-            f" compute_type={hw.whisper_compute_type}"
+            f"HW adapt ASR: device={hw.whisper_device} compute_type={hw.whisper_compute_type}"
         )
     except AttributeError as exc:
         logger.warning(f"HW adapt ASR 오버라이드 실패: {exc}")

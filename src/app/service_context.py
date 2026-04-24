@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -80,6 +81,19 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
     def init_asr(self, asr_config: Any) -> None:
         """upstream init_asr 오버라이드 — 모델 미배치 시 WARNING 후 계속."""
+        # CWD가 upstream 디렉토리일 때 상대 경로를 SAESSAGI_ROOT 기준으로 보정
+        root = os.environ.get("SAESSAGI_ROOT")
+        if root:
+            try:
+                fw = asr_config.faster_whisper
+                if fw is not None:
+                    if fw.model_path and not Path(fw.model_path).is_absolute():
+                        fw.model_path = str(Path(root) / fw.model_path)
+                        logger.debug(f"ASR model_path resolved: {fw.model_path}")
+                    if hasattr(fw, "download_root") and fw.download_root and not Path(fw.download_root).is_absolute():
+                        fw.download_root = str(Path(root) / fw.download_root)
+            except AttributeError:
+                pass
         try:
             super().init_asr(asr_config)
         except Exception as exc:
@@ -296,8 +310,17 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             from meeting_minutes import MeetingMinutesService
             from meeting_minutes.errors import HwpxTemplateError
 
+            _root = os.environ.get("SAESSAGI_ROOT")
+            _base = Path(_root) if _root else Path.cwd()
+
             meeting_template_path = Path(app_config.meeting_template_path)
+            if not meeting_template_path.is_absolute():
+                meeting_template_path = _base / meeting_template_path
+
             meeting_temp_dir = Path(app_config.meeting_temp_dir)
+            if not meeting_temp_dir.is_absolute():
+                meeting_temp_dir = _base / meeting_temp_dir
+
             download_base_url = app_config.meeting_download_base_url
 
             # loopback 검증
