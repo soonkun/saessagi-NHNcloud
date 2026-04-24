@@ -77,6 +77,17 @@ class AppWebSocketServer:
             name="cache",
         )
 
+        # Live2D 모델 — upstream CWD(live2d-models/)에서 서빙
+        live2d_dir = "live2d-models"
+        if os.path.exists(live2d_dir):
+            self.app.mount(
+                "/live2d-models",
+                CORSStaticFiles(directory=live2d_dir),
+                name="live2d-models",
+            )
+        else:
+            logger.warning(f"Live2D 모델 디렉토리 없음, /live2d-models 마운트 건너뜀: {live2d_dir}")
+
         # 배경 이미지 (디렉토리가 있을 때만 마운트)
         bg_dir = "backgrounds"
         if os.path.exists(bg_dir):
@@ -89,6 +100,7 @@ class AppWebSocketServer:
             logger.warning(f"배경 디렉토리 없음, /bg 마운트 건너뜀: {bg_dir}")
 
         # 새싹이 스프라이트 (/avatars → assets/character/saessagi/)
+        # conf.yaml avatar 필드 파일명과 실제 파일명이 일치해야 함 (예: neutral.png)
         saessagi_avatar_dir = os.path.join(
             self.full_config.app.paths.assets_dir, "character", "saessagi"
         )
