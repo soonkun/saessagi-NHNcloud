@@ -2,8 +2,9 @@
 chcp 65001 > nul
 cd /d "%~dp0"
 
-set ROOT=%~dp0
-set UPSTREAM=%ROOT%upstream\Open-LLM-VTuber
+set "ROOT=%~dp0"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "UPSTREAM=%ROOT%\upstream\Open-LLM-VTuber"
 
 :: Ensure frontend submodule is initialized
 if not exist "%UPSTREAM%\frontend\index.html" (
@@ -12,9 +13,9 @@ if not exist "%UPSTREAM%\frontend\index.html" (
 )
 
 :: Project root for resolving data/assets paths
-set SAESSAGI_ROOT=%ROOT%
-set SAESSAGI_CONFIG_PATH=%ROOT%conf.yaml
-set PYTHONPATH=%ROOT%;%ROOT%src;%UPSTREAM%\src;%UPSTREAM%
+set "SAESSAGI_ROOT=%ROOT%"
+set "SAESSAGI_CONFIG_PATH=%ROOT%\conf.yaml"
+set "PYTHONPATH=%ROOT%;%ROOT%\src;%UPSTREAM%\src;%UPSTREAM%"
 
 echo.
 echo Starting AI Assistant server...
