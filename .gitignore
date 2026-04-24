@@ -28,6 +28,15 @@ assets/hwpx_samples/
 # Upstream은 참고용 — clone되지만 git에는 안 올림
 upstream/
 
+# Upstream 런타임 파일들이 프로젝트 루트로 흘러들어올 때 무시
+avatars/
+backgrounds/
+characters/
+live2d-models/
+model_dict.json
+web_tool/
+cache/
+
 # IDE
 .vscode/
 .idea/
