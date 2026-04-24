@@ -6,6 +6,7 @@ upstream의 init_client_ws_route 대신 init_app_ws_route를 사용해 AppWebSoc
 """
 
 import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
@@ -62,10 +63,14 @@ class AppWebSocketServer:
 
         # M_13: 회의록 다운로드 라우터 등록
         from .meeting_minutes_routes import router as meeting_router
+        from .calendar_routes import router as calendar_router
+        from .rag_routes import router as rag_router
 
         # service_context를 request.app.state에서 접근 가능하도록 설정
         self.app.state.service_context = default_context_cache
         self.app.include_router(meeting_router, prefix="", tags=["meeting_minutes"])
+        self.app.include_router(calendar_router)
+        self.app.include_router(rag_router)
 
         # 캐시 디렉토리
         cache_dir = "cache"
@@ -115,8 +120,20 @@ class AppWebSocketServer:
                 f"새싹이 아바타 디렉토리 없음, /avatars 마운트 건너뜀: {saessagi_avatar_dir}"
             )
 
-        # 프론트엔드 (존재할 때만 마운트)
-        frontend_dir = "frontend"
+        # 프론트엔드 — web/dist → frontend/dist → CWD/frontend 순으로 탐색
+        _saessagi_root = os.environ.get("SAESSAGI_ROOT", "")
+        _web_dist = Path(_saessagi_root) / "web" / "dist" if _saessagi_root else None
+        _frontend_dist = Path(_saessagi_root) / "frontend" / "dist" if _saessagi_root else None
+
+        if _web_dist and (_web_dist / "index.html").exists():
+            frontend_dir = str(_web_dist)
+            logger.info(f"프론트엔드: web/dist 사용: {frontend_dir}")
+        elif _frontend_dist and (_frontend_dist / "index.html").exists():
+            frontend_dir = str(_frontend_dist)
+            logger.info(f"프론트엔드: frontend/dist 사용: {frontend_dir}")
+        else:
+            frontend_dir = "frontend"
+
         if os.path.exists(frontend_dir):
             self.app.mount(
                 "/",
