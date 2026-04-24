@@ -16,11 +16,11 @@ function dispatch(msg: WsIncomingMessage): void {
 
   switch (msg.type) {
     case "control":
-      if (msg.command === "start-mic") store.setMicOn(true);
-      else if (msg.command === "stop-mic") store.setMicOn(false);
-      else if (msg.command === "conversation-chain-start")
+      if (msg.text === "start-mic") store.setMicOn(true);
+      else if (msg.text === "stop-mic") store.setMicOn(false);
+      else if (msg.text === "conversation-chain-start")
         store.setAiStatus("thinking");
-      else if (msg.command === "conversation-chain-end")
+      else if (msg.text === "conversation-chain-end")
         store.setAiStatus("idle");
       break;
 
@@ -42,6 +42,14 @@ function dispatch(msg: WsIncomingMessage): void {
       store.setEmotion(msg.emotion);
       store.setSpeaking(msg.speaking);
       store.setAiStatus(msg.speaking ? "speaking" : "idle");
+      break;
+
+    case "backend-synth-complete":
+      // 음성 재생 미지원 — 즉시 완료 응답하여 대화 턴을 정상 종료
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "frontend-playback-complete" }));
+      }
+      store.setAiStatus("idle");
       break;
 
     case "tool-call-status":

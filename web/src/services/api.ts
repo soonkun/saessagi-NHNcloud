@@ -21,6 +21,17 @@ async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
+// 백엔드 RAG 응답 원본 형태 (doc_id 필드)
+interface RagDocumentRaw {
+  doc_id: string;
+  filename: string;
+  chunk_count: number;
+}
+
+function mapRagDoc(raw: RagDocumentRaw): RagDocument {
+  return { id: raw.doc_id, filename: raw.filename, chunk_count: raw.chunk_count };
+}
+
 // ────────────────────────────────────────────────────────────
 // Calendar API
 // ────────────────────────────────────────────────────────────
@@ -47,7 +58,8 @@ export async function deleteCalendarEvent(id: string): Promise<void> {
 // ────────────────────────────────────────────────────────────
 
 export async function fetchDocuments(): Promise<RagDocument[]> {
-  return apiFetch<RagDocument[]>("/api/rag/documents");
+  const raw = await apiFetch<RagDocumentRaw[]>("/api/rag/documents");
+  return raw.map(mapRagDoc);
 }
 
 export async function uploadDocument(
@@ -69,7 +81,8 @@ export async function uploadDocument(
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          resolve(JSON.parse(xhr.responseText) as RagDocument);
+          const raw = JSON.parse(xhr.responseText) as RagDocumentRaw;
+          resolve(mapRagDoc(raw));
         } catch {
           reject(new Error("Invalid JSON response"));
         }

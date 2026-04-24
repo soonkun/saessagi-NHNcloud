@@ -12,6 +12,7 @@ from open_llm_vtuber.agent.input_types import BatchInput
 from open_llm_vtuber.agent.stateless_llm.openai_compatible_llm import (
     AsyncLLM as OpenAICompatibleAsyncLLM,
 )
+from .no_think_llm import NoThinkLLM
 from open_llm_vtuber.mcpp.tool_executor import ToolExecutor
 from open_llm_vtuber.mcpp.tool_manager import ToolManager
 
@@ -144,8 +145,8 @@ class GemmaChatAgent:
 
         openai_url = _normalize_openai_url(base_url)
 
-        # upstream AsyncLLM 인스턴스 생성
-        self._llm = OpenAICompatibleAsyncLLM(
+        # NoThinkLLM: Ollama extended-thinking 비활성화 (gemma4:e2b/e4b 성능 개선)
+        self._llm = NoThinkLLM(
             model=model,
             base_url=openai_url,
             temperature=temperature,
@@ -497,7 +498,7 @@ class GemmaChatAgent:
         self,
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str | dict[str, Any]]:
-        """tool 없는 경로. think=False로 Ollama thinking 모드를 비활성화."""
+        """tool 없는 경로. NoThinkLLM이 think=False를 이미 주입하므로 extra_body 불필요."""
         try:
             system = self._inner._system
             messages_with_system = (
@@ -508,7 +509,6 @@ class GemmaChatAgent:
                 model=self._llm.model,
                 stream=True,
                 temperature=self._llm.temperature,
-                extra_body={"think": False},
             )
             async for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None

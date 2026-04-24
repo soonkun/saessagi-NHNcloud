@@ -27,7 +27,7 @@ class EventResponse(BaseModel):
 class CreateEventRequest(BaseModel):
     title: str
     start: str
-    duration_minutes: int
+    duration_minutes: int = 60
     description: str | None = None
 
     @field_validator("start")

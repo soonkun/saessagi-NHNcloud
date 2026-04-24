@@ -45,6 +45,7 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
   const aiStatus = useStore((s) => s.aiStatus);
   const isMicOn = useStore((s) => s.isMicOn);
   const setChatOpen = useStore((s) => s.setChatOpen);
+  const addMessage = useStore((s) => s.addMessage);
 
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -63,7 +64,8 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
   function handleSend(): void {
     const text = input.trim();
     if (!text) return;
-    send({ type: "user-message", text });
+    addMessage({ role: "human", text });
+    send({ type: "text-input", text });
     setInput("");
   }
 
@@ -75,8 +77,10 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
   }
 
   function handleMicToggle(): void {
-    send({ type: isMicOn ? "interrupt-signal" : "user-message", text: "" });
-    // 실제 마이크 상태는 서버가 control 메시지로 알려줌
+    if (isMicOn) {
+      send({ type: "interrupt-signal" });
+    }
+    // 마이크 off 상태에서 클릭 시 웹 브라우저 mic 미지원 — 서버가 start-mic 제어
   }
 
   const panelStyle = calcPanelStyle(charPosition);

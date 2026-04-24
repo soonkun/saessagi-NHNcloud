@@ -29,11 +29,7 @@ export interface Position {
 // WebSocket 수신 메시지 타입
 export interface WsControlMessage {
   type: "control";
-  command:
-    | "start-mic"
-    | "stop-mic"
-    | "conversation-chain-start"
-    | "conversation-chain-end";
+  text: string; // upstream: "start-mic" | "stop-mic" | "conversation-chain-start" | "conversation-chain-end"
 }
 
 export interface WsAudioMessage {
@@ -62,16 +58,21 @@ export interface WsToolCallStatusMessage {
   status: "running" | "completed" | "error";
 }
 
+export interface WsBackendSynthComplete {
+  type: "backend-synth-complete";
+}
+
 export type WsIncomingMessage =
   | WsControlMessage
   | WsAudioMessage
   | WsChatMessage
   | WsAvatarStateMessage
-  | WsToolCallStatusMessage;
+  | WsToolCallStatusMessage
+  | WsBackendSynthComplete;
 
 // WebSocket 송신 메시지 타입
 export interface WsSendUserMessage {
-  type: "user-message";
+  type: "text-input"; // upstream은 "text-input" 타입만 처리
   text: string;
 }
 
@@ -83,17 +84,22 @@ export interface WsSendInterrupt {
   type: "interrupt-signal";
 }
 
+export interface WsSendPlaybackComplete {
+  type: "frontend-playback-complete";
+}
+
 export type WsOutgoingMessage =
   | WsSendUserMessage
   | WsSendNewHistory
-  | WsSendInterrupt;
+  | WsSendInterrupt
+  | WsSendPlaybackComplete;
 
 // Calendar 타입
 export interface CalendarEvent {
   id: string;
   title: string;
   start: string; // ISO datetime
-  duration?: number; // minutes
+  duration_minutes?: number; // backend field name
   description?: string;
 }
 

@@ -55,7 +55,7 @@ function AddEventModal({
       await onSave({
         title: title.trim(),
         start,
-        duration: duration ? Number(duration) : undefined,
+        duration_minutes: duration ? Number(duration) : undefined,
         description: description.trim() || undefined,
       });
       onClose();
@@ -241,7 +241,10 @@ export function CalendarView(): React.ReactElement {
   async function handleAddEvent(
     event: Omit<CalendarEvent, "id">
   ): Promise<void> {
-    const created = await createCalendarEvent(event);
+    const created = await createCalendarEvent({
+      ...event,
+      duration_minutes: event.duration_minutes,
+    });
     setEvents((prev) => [...prev, created]);
   }
 
@@ -452,7 +455,7 @@ export function CalendarView(): React.ReactElement {
                 </div>
                 <div style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
                   {event.start.slice(11, 16)}
-                  {event.duration ? ` (${event.duration}분)` : ""}
+                  {event.duration_minutes ? ` (${event.duration_minutes}분)` : ""}
                 </div>
                 {event.description && (
                   <div style={{ fontSize: 12, marginTop: 4, color: "var(--color-text-muted)" }}>
