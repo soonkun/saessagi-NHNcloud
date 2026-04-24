@@ -3,10 +3,11 @@
 
 import os
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 if TYPE_CHECKING:
@@ -91,6 +92,24 @@ class PathsConfig(BaseModel):
             "None이면 AppConfig.profile에 따라 자동 결정."
         ),
     )
+
+    @model_validator(mode="after")
+    def _resolve_relative_paths(self) -> "PathsConfig":
+        """SAESSAGI_ROOT 환경변수가 있으면 상대경로를 절대경로로 변환.
+
+        upstream 디렉토리에서 서버를 실행할 때 data/assets 경로가
+        프로젝트 루트를 기준으로 해석되도록 한다.
+        """
+        root = os.environ.get("SAESSAGI_ROOT")
+        if not root:
+            return self
+        base = Path(root)
+        for field_name in ("data_dir", "assets_dir", "vector_store_dir",
+                           "calendar_db_path", "chat_history_dir", "log_dir"):
+            val = getattr(self, field_name)
+            if val and not Path(val).is_absolute():
+                object.__setattr__(self, field_name, str(base / val))
+        return self
 
 
 class AgentConfig(BaseModel):
