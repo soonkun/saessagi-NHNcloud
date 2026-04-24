@@ -73,3 +73,5 @@ dist-ui/
 # E2E 테스트 실행 산출물
 tests/e2e/artifacts/
 web/dist/
+web/dist-electron/
+web/electron-dist/
