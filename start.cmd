@@ -12,6 +12,12 @@ if not exist "%UPSTREAM%\frontend\index.html" (
     git -C "%UPSTREAM%" submodule update --init --recursive
 )
 
+:: upstream 코드가 CWD에서 conf.yaml을 직접 읽으므로 복사 배치 (symlink는 관리자 권한 필요)
+copy /Y "%ROOT%\conf.yaml" "%UPSTREAM%\conf.yaml" > nul 2>&1
+
+:: 캐릭터 아바타 이미지를 upstream avatars\ 에 복사 (서빙 경로 맞춤)
+copy /Y "%ROOT%\assets\character\saessagi\neutral.png" "%UPSTREAM%\avatars\saessagi.png" > nul 2>&1
+
 :: Project root for resolving data/assets paths
 set "SAESSAGI_ROOT=%ROOT%"
 set "SAESSAGI_CONFIG_PATH=%ROOT%\conf.yaml"

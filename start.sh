@@ -10,6 +10,12 @@ if [ ! -f "$UPSTREAM/frontend/index.html" ]; then
     git -C "$UPSTREAM" submodule update --init --recursive
 fi
 
+# upstream 코드가 CWD에서 conf.yaml을 직접 읽으므로 심볼릭 링크 배치
+ln -sf "$ROOT/conf.yaml" "$UPSTREAM/conf.yaml" 2>/dev/null || true
+
+# 캐릭터 아바타 이미지를 upstream avatars/ 에 복사 (서빙 경로 맞춤)
+cp -f "$ROOT/assets/character/saessagi/neutral.png" "$UPSTREAM/avatars/saessagi.png" 2>/dev/null || true
+
 # Project root for resolving data/assets paths (PathsConfig reads this)
 export SAESSAGI_ROOT="$ROOT"
 export SAESSAGI_CONFIG_PATH="$ROOT/conf.yaml"
