@@ -5,6 +5,7 @@ import type {
   AiStatus,
   Position,
   SidebarView,
+  ChatTab,
 } from "./types";
 
 // ────────────────────────────────────────────────────────────
@@ -20,11 +21,38 @@ function loadPosition(): Position {
   return { x: window.innerWidth - 32 - 120, y: window.innerHeight - 32 - 120 };
 }
 
+function loadCharSize(): number {
+  try {
+    const raw = localStorage.getItem("saessagi_char_size");
+    if (raw) {
+      const n = Number(raw);
+      if (n >= 60 && n <= 300) return n;
+    }
+  } catch { /* ignore */ }
+  return 120;
+}
+
 function loadWsUrl(): string {
   return (
     localStorage.getItem("saessagi_ws_url") ??
     "ws://127.0.0.1:12393/client-ws"
   );
+}
+
+function loadTtsRate(): number {
+  try {
+    const raw = localStorage.getItem("saessagi_tts_rate");
+    if (raw) {
+      const n = Number(raw);
+      if (n >= 0.5 && n <= 2.0) return n;
+    }
+  } catch { /* ignore */ }
+  return 1.2;
+}
+
+function loadTtsVoiceName(): string {
+  // 빈 문자열도 "미설정"으로 처리해 기본값 사용
+  return localStorage.getItem("saessagi_tts_voice") || "Shelley (한국어(대한민국))";
 }
 
 // ────────────────────────────────────────────────────────────
@@ -47,9 +75,11 @@ interface AvatarSlice {
   emotion: Emotion;
   speaking: boolean;
   position: Position;
+  charSize: number;
   setEmotion: (emotion: Emotion) => void;
   setSpeaking: (speaking: boolean) => void;
   setPosition: (pos: Position) => void;
+  setCharSize: (size: number) => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -57,12 +87,18 @@ interface AvatarSlice {
 // ────────────────────────────────────────────────────────────
 interface UiSlice {
   chatOpen: boolean;
+  chatTab: ChatTab;
   activeView: SidebarView | null;
   wsUrl: string;
+  ttsRate: number;
+  ttsVoiceName: string;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
+  setChatTab: (tab: ChatTab) => void;
   setActiveView: (view: SidebarView | null) => void;
   setWsUrl: (url: string) => void;
+  setTtsRate: (rate: number) => void;
+  setTtsVoiceName: (name: string) => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -95,6 +131,7 @@ export const useStore = create<AppStore>((set) => ({
   emotion: "neutral",
   speaking: false,
   position: loadPosition(),
+  charSize: loadCharSize(),
   setEmotion: (emotion) => set({ emotion }),
   setSpeaking: (speaking) => set({ speaking }),
   setPosition: (pos) => {
@@ -105,13 +142,23 @@ export const useStore = create<AppStore>((set) => ({
     }
     set({ position: pos });
   },
+  setCharSize: (size) => {
+    try {
+      localStorage.setItem("saessagi_char_size", String(size));
+    } catch { /* ignore */ }
+    set({ charSize: size });
+  },
 
   // UI
   chatOpen: false,
+  chatTab: "chat" as ChatTab,
   activeView: "calendar" as SidebarView,
   wsUrl: loadWsUrl(),
+  ttsRate: loadTtsRate(),
+  ttsVoiceName: loadTtsVoiceName(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
+  setChatTab: (tab) => set({ chatTab: tab }),
   setActiveView: (view) => set({ activeView: view }),
   setWsUrl: (url) => {
     try {
@@ -120,5 +167,13 @@ export const useStore = create<AppStore>((set) => ({
       // ignore
     }
     set({ wsUrl: url });
+  },
+  setTtsRate: (rate) => {
+    try { localStorage.setItem("saessagi_tts_rate", String(rate)); } catch { /* ignore */ }
+    set({ ttsRate: rate });
+  },
+  setTtsVoiceName: (name) => {
+    try { localStorage.setItem("saessagi_tts_voice", name); } catch { /* ignore */ }
+    set({ ttsVoiceName: name });
   },
 }));

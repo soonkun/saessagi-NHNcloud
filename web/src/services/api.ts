@@ -49,7 +49,7 @@ export async function createCalendarEvent(
   });
 }
 
-export async function deleteCalendarEvent(id: string): Promise<void> {
+export async function deleteCalendarEvent(id: number): Promise<void> {
   await apiFetch<unknown>(`/api/calendar/events/${id}`, { method: "DELETE" });
 }
 
@@ -101,4 +101,45 @@ export async function uploadDocument(
 
 export async function deleteDocument(id: string): Promise<void> {
   await apiFetch<unknown>(`/api/rag/documents/${id}`, { method: "DELETE" });
+}
+
+// ────────────────────────────────────────────────────────────
+// Meeting Minutes API
+// ────────────────────────────────────────────────────────────
+
+export interface MeetingMinutesResult {
+  file_id: string;
+  download_url: string;
+  expires_at: string;
+}
+
+interface GenerateParams {
+  transcript?: string;
+  audio_file?: File;
+  pages: 2 | 3;
+}
+
+export async function generateMeetingMinutes(
+  params: GenerateParams
+): Promise<MeetingMinutesResult> {
+  if (params.audio_file) {
+    const form = new FormData();
+    form.append("audio_file", params.audio_file);
+    form.append("pages", String(params.pages));
+    if (params.transcript) form.append("transcript", params.transcript);
+    const res = await fetch("/api/meeting-minutes/generate-audio", {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      throw new Error(`회의록 생성 실패: ${res.status} ${detail}`);
+    }
+    return res.json() as Promise<MeetingMinutesResult>;
+  }
+
+  return apiFetch<MeetingMinutesResult>("/api/meeting-minutes/generate", {
+    method: "POST",
+    body: JSON.stringify({ transcript: params.transcript, pages: params.pages }),
+  });
 }

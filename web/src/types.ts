@@ -14,6 +14,8 @@ export type AiStatus = "idle" | "thinking" | "speaking";
 
 export type SidebarView = "calendar" | "documents" | "settings";
 
+export type ChatTab = "chat" | "calendar" | "documents" | "meeting" | "settings";
+
 export interface Message {
   id: string;
   role: "human" | "ai";
@@ -62,13 +64,19 @@ export interface WsBackendSynthComplete {
   type: "backend-synth-complete";
 }
 
+export interface WsNewHistoryCreated {
+  type: "new-history-created";
+  history_uid: string;
+}
+
 export type WsIncomingMessage =
   | WsControlMessage
   | WsAudioMessage
   | WsChatMessage
   | WsAvatarStateMessage
   | WsToolCallStatusMessage
-  | WsBackendSynthComplete;
+  | WsBackendSynthComplete
+  | WsNewHistoryCreated;
 
 // WebSocket 송신 메시지 타입
 export interface WsSendUserMessage {
@@ -96,7 +104,7 @@ export type WsOutgoingMessage =
 
 // Calendar 타입
 export interface CalendarEvent {
-  id: string;
+  id: number;
   title: string;
   start: string; // ISO datetime
   duration_minutes?: number; // backend field name
