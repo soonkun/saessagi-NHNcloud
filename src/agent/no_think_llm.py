@@ -36,7 +36,7 @@ class NoThinkLLM(AsyncLLM):
             **kwargs: Any,
         ) -> Any:
             eb: dict[str, Any] = dict(extra_body) if extra_body else {}
-            eb.setdefault("think", False)
+            eb["think"] = False  # 강제 — setdefault는 caller가 think=True를 넘기면 무력화됨
             logger.debug("NoThinkLLM: injecting extra_body=%s", eb)
             return await original_create(*args, extra_body=eb, **kwargs)
 

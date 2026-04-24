@@ -131,6 +131,7 @@ class GemmaChatAgent:
         interrupt_method: Literal["system", "user"],
         use_mcpp: bool,
         extra_tool_specs: list[dict[str, Any]] | None = None,
+        tts_preprocessor_config: Any | None = None,
     ) -> None:
         """필드만 초기화. 직접 호출 금지 — create() classmethod를 사용하라.
 
@@ -157,7 +158,7 @@ class GemmaChatAgent:
             llm=self._llm,
             system=system_prompt,
             live2d_model=None,
-            tts_preprocessor_config=None,
+            tts_preprocessor_config=tts_preprocessor_config,
             faster_first_response=faster_first_response,
             use_mcpp=use_mcpp,
             interrupt_method=interrupt_method,
@@ -206,6 +207,7 @@ class GemmaChatAgent:
         interrupt_method: Literal["system", "user"] = "user",
         use_mcpp: bool = True,
         extra_tool_specs: list[dict[str, Any]] | None = None,
+        tts_preprocessor_config: Any | None = None,
     ) -> "GemmaChatAgent":
         """GemmaChatAgent를 생성하는 공식 비동기 팩토리 메서드.
 
@@ -265,6 +267,7 @@ class GemmaChatAgent:
             interrupt_method=interrupt_method,
             use_mcpp=use_mcpp,
             extra_tool_specs=extra_tool_specs,
+            tts_preprocessor_config=tts_preprocessor_config,
         )
 
     @staticmethod

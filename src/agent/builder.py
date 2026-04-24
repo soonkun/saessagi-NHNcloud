@@ -22,6 +22,7 @@ async def build_chat_agent(
     tool_executor: ToolExecutor | None,
     system_prompt: str,
     extra_tool_specs: list[dict[str, Any]] | None = None,
+    tts_preprocessor_config: Any | None = None,
 ) -> GemmaChatAgent:
     """AppConfig.agent 서브스키마를 읽어 GemmaChatAgent를 생성한다.
 
@@ -53,4 +54,5 @@ async def build_chat_agent(
         interrupt_method=agent_cfg.interrupt_method,
         use_mcpp=use_mcpp,
         extra_tool_specs=extra_tool_specs,
+        tts_preprocessor_config=tts_preprocessor_config,
     )

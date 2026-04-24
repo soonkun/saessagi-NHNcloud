@@ -167,10 +167,24 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 self.tts_engine = None  # type: ignore[assignment]
 
     async def construct_system_prompt(self, persona_prompt: str) -> str:
-        """live2d_model이 None일 때 emo_str 참조를 건너뜀."""
+        """live2d_model이 None일 때 emo_str 참조를 건너뜀. 현재 날짜·시각을 주입."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        _KST = ZoneInfo("Asia/Seoul")
+        now = datetime.now(_KST)
+        ko_days = ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"]
+        date_block = (
+            f"\n\n## 현재 날짜·시각\n"
+            f"{now.year}년 {now.month}월 {now.day}일 {ko_days[now.weekday()]} "
+            f"{now.strftime('%H:%M')} (KST)\n"
+            f"(오늘 기준으로 '내일', '다음 주 수요일' 등 상대적 날짜를 정확히 계산해서 사용해.)"
+        )
+
         if self.live2d_model is None:
-            return persona_prompt
-        return await super().construct_system_prompt(persona_prompt)
+            return persona_prompt + date_block
+        result = await super().construct_system_prompt(persona_prompt)
+        return result + date_block
 
     async def load_from_config(self, config: Any) -> None:
         """upstream Config를 받아 부모 load_from_config 호출.
@@ -251,6 +265,9 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             tool_executor=self.tool_executor,
             system_prompt=system_prompt,
             extra_tool_specs=extra_specs,
+            tts_preprocessor_config=self.character_config.tts_preprocessor_config
+            if self.character_config is not None
+            else None,
         )
 
         # (7) 어댑터 래핑

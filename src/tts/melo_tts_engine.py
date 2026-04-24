@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +31,25 @@ MELOTTS_MAX_SPEED: float = 2.0
 MELO_REQUIRED_FILES: list[str] = ["config.json", "checkpoint.pth"]
 
 MAX_TEXT_CHARS: int = 1000
+
+_TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
+
+
+def _korean_time(text: str) -> str:
+    """HH:MM 형식을 한국어 구어체로 변환한다.
+
+    09:00 → 오전 9시
+    09:30 → 오전 9시 30분
+    14:00 → 오후 2시
+    13:45 → 오후 1시 45분
+    """
+    def _replace(m: re.Match[str]) -> str:
+        h, mi = int(m.group(1)), int(m.group(2))
+        period = "오전" if h < 12 else "오후"
+        h12 = h % 12 or 12
+        return f"{period} {h12}시" if mi == 0 else f"{period} {h12}시 {mi}분"
+
+    return _TIME_RE.sub(_replace, text)
 
 
 def _project_root() -> str:
@@ -231,6 +251,9 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
         if not text or not text.strip():
             logger.error("empty text passed to generate_audio")
             raise TTSRuntimeError("empty text")
+
+        # 1-a. 시간 포맷 전처리 (09:00 → 오전 9시)
+        text = _korean_time(text)
 
         # 2. 1000자 초과 절단
         if len(text) > MAX_TEXT_CHARS:
