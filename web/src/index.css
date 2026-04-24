@@ -65,6 +65,11 @@ body,
   animation: msg-in 0.18s ease-out forwards;
 }
 
+/* ── 삭제 버튼 hover ── */
+.btn-delete:hover {
+  color: #e05050 !important;
+}
+
 /* ── 상태 점 깜빡임 ── */
 @keyframes blink {
   0%, 100% { opacity: 1; }

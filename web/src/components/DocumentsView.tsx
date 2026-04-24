@@ -241,6 +241,7 @@ export function DocumentsView(): React.ReactElement {
               </div>
               <button
                 onClick={() => void handleDelete(doc.id)}
+                className="btn-delete"
                 style={{
                   background: "none",
                   border: "none",

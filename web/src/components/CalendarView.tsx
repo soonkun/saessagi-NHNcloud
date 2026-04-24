@@ -352,8 +352,10 @@ export function CalendarView(): React.ReactElement {
                     : "transparent",
                   color: isSelected
                     ? "#fff"
-                    : i % 7 === 0 - firstDay // 일요일
+                    : (firstDay + i) % 7 === 0 // 일요일
                     ? "#e05050"
+                    : (firstDay + i) % 7 === 6 // 토요일
+                    ? "#5080e0"
                     : "var(--color-text)",
                   cursor: "pointer",
                   position: "relative",
@@ -459,6 +461,7 @@ export function CalendarView(): React.ReactElement {
                 )}
                 <button
                   onClick={() => void handleDeleteEvent(event.id)}
+                  className="btn-delete"
                   style={{
                     position: "absolute",
                     top: 8,

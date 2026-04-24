@@ -108,7 +108,7 @@ export const useStore = create<AppStore>((set) => ({
 
   // UI
   chatOpen: false,
-  activeView: null,
+  activeView: "calendar" as SidebarView,
   wsUrl: loadWsUrl(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
