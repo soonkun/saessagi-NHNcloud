@@ -7,6 +7,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, field_validator
 
+from calendar_service.errors import EventNotFoundError
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
@@ -168,8 +170,6 @@ async def update_event(request: Request, event_id: int, body: UpdateEventRequest
     try:
         event = svc.update_event(event_id, **fields)
     except Exception as exc:
-        from calendar_service.errors import EventNotFoundError
-
         if isinstance(exc, EventNotFoundError):
             raise HTTPException(status_code=404, detail=f"event {event_id} not found")
         logger.error("update_event error: %s", exc)

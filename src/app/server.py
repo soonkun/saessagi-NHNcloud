@@ -48,7 +48,6 @@ class AppWebSocketServer:
         self.app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
         )
@@ -65,12 +64,16 @@ class AppWebSocketServer:
         from .meeting_minutes_routes import router as meeting_router
         from .calendar_routes import router as calendar_router
         from .rag_routes import router as rag_router
+        from .settings_routes import router as settings_router
+        from .tts_routes import router as tts_router
 
         # service_context를 request.app.state에서 접근 가능하도록 설정
         self.app.state.service_context = default_context_cache
         self.app.include_router(meeting_router, prefix="", tags=["meeting_minutes"])
         self.app.include_router(calendar_router)
         self.app.include_router(rag_router)
+        self.app.include_router(settings_router)
+        self.app.include_router(tts_router)
 
         # 캐시 디렉토리
         cache_dir = "cache"

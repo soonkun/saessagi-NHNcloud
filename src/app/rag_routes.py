@@ -207,5 +207,8 @@ async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
         logger.error("delete_document error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail=f"doc_id '{doc_id}' not found")
+
     logger.info("delete_document: doc_id=%s, deleted=%d", doc_id, deleted)
     return DeleteResponse(ok=True, deleted_chunks=deleted)
