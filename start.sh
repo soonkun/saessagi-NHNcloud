@@ -10,6 +10,19 @@ if [ ! -f "$UPSTREAM/frontend/index.html" ]; then
     git -C "$UPSTREAM" submodule update --init --recursive
 fi
 
+# 프론트엔드 빌드 (dist 없을 때만)
+if [ ! -f "$ROOT/web/dist/index.html" ]; then
+    echo "프론트엔드 빌드 중..."
+    cd "$ROOT/web"
+    if [ -d "$ROOT/assets/npm_cache" ]; then
+        npm install --prefer-offline --cache "$ROOT/assets/npm_cache"
+    else
+        npm install
+    fi
+    npm run build
+    cd "$ROOT"
+fi
+
 # upstream 코드가 CWD에서 conf.yaml을 직접 읽으므로 심볼릭 링크 배치
 ln -sf "$ROOT/conf.yaml" "$UPSTREAM/conf.yaml" 2>/dev/null || true
 
