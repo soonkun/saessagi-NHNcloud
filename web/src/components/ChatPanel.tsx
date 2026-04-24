@@ -1,30 +1,43 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Mic, MicOff, X } from "lucide-react";
-import clsx from "clsx";
+import {
+  MessageCircle,
+  Calendar,
+  FolderOpen,
+  FileAudio,
+  Settings,
+  Send,
+  Mic,
+  MicOff,
+  X,
+  RotateCcw,
+} from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
-import type { Position } from "../types";
+import { startVoice, stopVoice } from "../services/voice";
+import { CalendarView } from "./CalendarView";
+import { DocumentsView } from "./DocumentsView";
+import { MeetingView } from "./MeetingView";
+import { SettingsView } from "./SettingsView";
+import type { Position, ChatTab } from "../types";
 
-const PANEL_W = 360;
-const PANEL_H = 520;
-const CHAR_SIZE = 120;
+const PANEL_W = 580;
+const PANEL_H = 660;
 const GAP = 8;
 
 interface ChatPanelProps {
   charPosition: Position;
+  charSize: number;
 }
 
-function calcPanelStyle(charPos: Position): React.CSSProperties {
-  // 채팅 패널은 캐릭터 위/왼쪽에 붙음
-  let left = charPos.x + CHAR_SIZE - PANEL_W;
+function calcPanelStyle(charPos: Position, charSize: number): React.CSSProperties {
+  let left = charPos.x + charSize - PANEL_W;
   let top = charPos.y - PANEL_H - GAP;
-
-  // 화면 경계 보정
   if (left < 8) left = 8;
   if (left + PANEL_W > window.innerWidth - 8)
     left = window.innerWidth - 8 - PANEL_W;
-  if (top < 8) top = charPos.y + CHAR_SIZE + GAP;
-
+  if (top < 8) top = charPos.y + charSize + GAP;
+  if (top + PANEL_H > window.innerHeight - 8)
+    top = window.innerHeight - 8 - PANEL_H;
   return { position: "fixed", left, top, width: PANEL_W, height: PANEL_H };
 }
 
@@ -40,23 +53,37 @@ const STATUS_COLOR: Record<string, string> = {
   speaking: "#4caf84",
 };
 
-export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement {
+const TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
+  { id: "chat", label: "새싹이", Icon: MessageCircle },
+  { id: "calendar", label: "일정표", Icon: Calendar },
+  { id: "documents", label: "문서", Icon: FolderOpen },
+  { id: "meeting", label: "회의록", Icon: FileAudio },
+  { id: "settings", label: "설정", Icon: Settings },
+];
+
+// ────────────────────────────────────────────────────────────
+// Chat content
+// ────────────────────────────────────────────────────────────
+
+function ChatContent(): React.ReactElement {
   const messages = useStore((s) => s.messages);
   const aiStatus = useStore((s) => s.aiStatus);
-  const isMicOn = useStore((s) => s.isMicOn);
-  const setChatOpen = useStore((s) => s.setChatOpen);
   const addMessage = useStore((s) => s.addMessage);
 
   const [input, setInput] = useState("");
+  const [voiceActive, setVoiceActive] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // 새 메시지 오면 하단 자동 스크롤
+  function handleNewHistory(): void {
+    send({ type: "create-new-history" });
+    // 백엔드 응답(new-history-created)으로 clearMessages가 호출됨
+  }
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // 패널 열릴 때 입력 포커스
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 50);
   }, []);
@@ -70,78 +97,85 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // nativeEvent.isComposing: 한국어/일본어 IME 조합 중 Enter는 무시
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
   }
 
   function handleMicToggle(): void {
-    if (isMicOn) {
-      send({ type: "interrupt-signal" });
+    if (voiceActive) {
+      stopVoice();
+      setVoiceActive(false);
+      return;
     }
-    // 마이크 off 상태에서 클릭 시 웹 브라우저 mic 미지원 — 서버가 start-mic 제어
+    void startVoice({
+      onStart: () => setVoiceActive(true),
+      onStop: () => setVoiceActive(false),
+      onText: (text) => {
+        addMessage({ role: "human", text });
+        send({ type: "text-input", text });
+      },
+      onError: (msg) => {
+        console.warn("[STT]", msg);
+        setVoiceActive(false);
+      },
+    });
   }
 
-  const panelStyle = calcPanelStyle(charPosition);
-
   return (
-    <div
-      style={{
-        ...panelStyle,
-        zIndex: 999,
-        background: "var(--color-panel)",
-        backdropFilter: "blur(12px)",
-        borderRadius: 12,
-        border: "1px solid var(--color-border)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
-      }}
-    >
-      {/* 상단 헤더 */}
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      {/* 상태 표시 줄 */}
       <div
         style={{
+          padding: "8px 16px",
+          borderBottom: "1px solid var(--color-border)",
           display: "flex",
           alignItems: "center",
-          justifyContent: "space-between",
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--color-border)",
+          gap: 8,
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            className={aiStatus !== "idle" ? "status-blink" : ""}
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: STATUS_COLOR[aiStatus] ?? "#888",
-              display: "inline-block",
-            }}
-          />
-          <span style={{ fontWeight: 600, fontSize: 14 }}>새싹이</span>
-          <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
-            {STATUS_LABEL[aiStatus] ?? ""}
-          </span>
-        </div>
-        <button
-          onClick={() => setChatOpen(false)}
+        <span
+          className={aiStatus !== "idle" ? "status-blink" : ""}
           style={{
-            background: "none",
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: STATUS_COLOR[aiStatus] ?? "#888",
+            display: "inline-block",
+            flexShrink: 0,
+          }}
+        />
+        <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
+          {STATUS_LABEL[aiStatus] ?? ""}
+        </span>
+        {voiceActive && (
+          <span
+            className="status-blink"
+            style={{ fontSize: 12, color: "#e74c3c", marginLeft: "auto" }}
+          >
+            ● 녹음 중
+          </span>
+        )}
+        <button
+          onClick={handleNewHistory}
+          title="새 대화 시작 (대화 기억 초기화)"
+          style={{
+            marginLeft: "auto",
+            background: "transparent",
             border: "none",
             cursor: "pointer",
             color: "var(--color-text-muted)",
             display: "flex",
             alignItems: "center",
-            padding: 4,
+            padding: "2px 4px",
             borderRadius: 4,
+            flexShrink: 0,
           }}
-          title="닫기"
         >
-          <X size={16} />
+          <RotateCcw size={13} />
         </button>
       </div>
 
@@ -179,9 +213,12 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
           >
             <div
               style={{
-                maxWidth: "78%",
+                maxWidth: "80%",
                 padding: "8px 12px",
-                borderRadius: msg.role === "human" ? "12px 12px 4px 12px" : "12px 12px 12px 4px",
+                borderRadius:
+                  msg.role === "human"
+                    ? "12px 12px 4px 12px"
+                    : "12px 12px 12px 4px",
                 background:
                   msg.role === "human"
                     ? "var(--color-msg-human)"
@@ -200,7 +237,7 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
         <div ref={bottomRef} />
       </div>
 
-      {/* 하단 입력 */}
+      {/* 입력 영역 */}
       <div
         style={{
           padding: "10px 12px",
@@ -213,12 +250,12 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
       >
         <button
           onClick={handleMicToggle}
-          title={isMicOn ? "마이크 끄기" : "마이크 켜기"}
+          title={voiceActive ? "녹음 중단" : "마이크 누르고 말하기"}
           style={{
-            background: isMicOn ? "var(--color-accent)" : "transparent",
-            border: `1px solid ${isMicOn ? "var(--color-accent)" : "var(--color-border)"}`,
+            background: voiceActive ? "rgba(231,76,60,0.2)" : "transparent",
+            border: `1px solid ${voiceActive ? "#e74c3c" : "var(--color-border)"}`,
             borderRadius: 8,
-            color: isMicOn ? "#fff" : "var(--color-text-muted)",
+            color: voiceActive ? "#e74c3c" : "var(--color-text-muted)",
             cursor: "pointer",
             padding: "6px 8px",
             display: "flex",
@@ -226,7 +263,7 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
             flexShrink: 0,
           }}
         >
-          {isMicOn ? <Mic size={16} /> : <MicOff size={16} />}
+          {voiceActive ? <Mic size={16} /> : <MicOff size={16} />}
         </button>
 
         <input
@@ -273,5 +310,100 @@ export function ChatPanel({ charPosition }: ChatPanelProps): React.ReactElement 
   );
 }
 
-// suppress unused warning — clsx is used transitively in other components
-void clsx;
+// ────────────────────────────────────────────────────────────
+// ChatPanel
+// ────────────────────────────────────────────────────────────
+
+export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.ReactElement {
+  const setChatOpen = useStore((s) => s.setChatOpen);
+  const chatTab = useStore((s) => s.chatTab);
+  const setChatTab = useStore((s) => s.setChatTab);
+
+  const panelStyle = calcPanelStyle(charPosition, charSize);
+
+  return (
+    <div
+      id="chat-panel"
+      style={{
+        ...panelStyle,
+        zIndex: 999,
+        background: "var(--color-panel)",
+        borderRadius: 12,
+        border: "1px solid var(--color-border)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.5)",
+        // Override #root pointer-events:none so the panel is interactive
+        pointerEvents: "auto",
+      }}
+    >
+      {/* 네비게이션 탭 */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          borderBottom: "1px solid var(--color-border)",
+          flexShrink: 0,
+          background: "var(--color-sidebar)",
+          paddingRight: 8,
+        }}
+      >
+        {TABS.map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            onClick={() => setChatTab(id)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              padding: "11px 14px",
+              border: "none",
+              borderBottom: chatTab === id
+                ? "2px solid var(--color-accent)"
+                : "2px solid transparent",
+              background: "transparent",
+              color: chatTab === id ? "var(--color-accent)" : "var(--color-text-muted)",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: chatTab === id ? 600 : 400,
+              transition: "color 0.15s",
+              flexShrink: 0,
+            }}
+          >
+            <Icon size={14} />
+            {label}
+          </button>
+        ))}
+
+        {/* 닫기 버튼 — 우측 */}
+        <button
+          onClick={() => setChatOpen(false)}
+          style={{
+            marginLeft: "auto",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--color-text-muted)",
+            display: "flex",
+            alignItems: "center",
+            padding: "4px 6px",
+            borderRadius: 4,
+          }}
+          title="닫기"
+        >
+          <X size={15} />
+        </button>
+      </div>
+
+      {/* 컨텐츠 영역 */}
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {chatTab === "chat" && <ChatContent />}
+        {chatTab === "calendar" && <CalendarView />}
+        {chatTab === "documents" && <DocumentsView />}
+        {chatTab === "meeting" && <MeetingView />}
+        {chatTab === "settings" && <SettingsView />}
+      </div>
+    </div>
+  );
+}

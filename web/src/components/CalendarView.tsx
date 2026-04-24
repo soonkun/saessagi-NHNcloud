@@ -248,7 +248,7 @@ export function CalendarView(): React.ReactElement {
     setEvents((prev) => [...prev, created]);
   }
 
-  async function handleDeleteEvent(id: string): Promise<void> {
+  async function handleDeleteEvent(id: number): Promise<void> {
     await deleteCalendarEvent(id);
     setEvents((prev) => prev.filter((e) => e.id !== id));
   }

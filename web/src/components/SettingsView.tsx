@@ -1,12 +1,111 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import { connect } from "../services/websocket";
+import { speakLocal } from "../services/speech";
+
+async function fetchModels(): Promise<string[]> {
+  try {
+    const res = await fetch("/api/settings/models");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models: string[] };
+    return data.models;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchCurrentModel(): Promise<string> {
+  try {
+    const res = await fetch("/api/settings/model");
+    if (!res.ok) return "";
+    const data = (await res.json()) as { model: string };
+    return data.model;
+  } catch {
+    return "";
+  }
+}
+
+async function setModel(model: string): Promise<boolean> {
+  try {
+    const res = await fetch("/api/settings/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부탁드려요!";
+
+const inputStyle: React.CSSProperties = {
+  background: "var(--color-bg)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 8,
+  color: "var(--color-text)",
+  padding: "8px 12px",
+  fontSize: 13,
+  outline: "none",
+  width: "100%",
+};
+
+const sectionStyle: React.CSSProperties = { marginTop: 28 };
+const labelStyle: React.CSSProperties = {
+  fontSize: 12,
+  color: "var(--color-text-muted)",
+  marginBottom: 6,
+  display: "block",
+};
 
 export function SettingsView(): React.ReactElement {
   const wsUrl = useStore((s) => s.wsUrl);
   const setWsUrl = useStore((s) => s.setWsUrl);
+  const ttsRate = useStore((s) => s.ttsRate);
+  const setTtsRate = useStore((s) => s.setTtsRate);
+  const ttsVoiceName = useStore((s) => s.ttsVoiceName);
+  const setTtsVoiceName = useStore((s) => s.setTtsVoiceName);
+
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  const [models, setModels] = useState<string[]>([]);
+  const [currentModel, setCurrentModel] = useState("");
+  const [modelSaving, setModelSaving] = useState(false);
+  const [modelSaved, setModelSaved] = useState(false);
+
+  // 모델 목록 로드
+  useEffect(() => {
+    void fetchModels().then(setModels);
+    void fetchCurrentModel().then((m) => { if (m) setCurrentModel(m); });
+  }, []);
+
+  async function handleModelSave(): Promise<void> {
+    if (!currentModel || modelSaving) return;
+    setModelSaving(true);
+    const ok = await setModel(currentModel);
+    setModelSaving(false);
+    if (ok) {
+      setModelSaved(true);
+      setTimeout(() => setModelSaved(false), 2500);
+    }
+  }
+
+  // 음성 목록 로드
+  useEffect(() => {
+    function load() {
+      const all = window.speechSynthesis?.getVoices() ?? [];
+      // 한국어 음성 우선, 나머지는 뒤에
+      const ko = all.filter((v) => v.lang.startsWith("ko"));
+      const rest = all.filter((v) => !v.lang.startsWith("ko"));
+      setVoices([...ko, ...rest]);
+    }
+    load();
+    window.speechSynthesis?.addEventListener("voiceschanged", load);
+    return () => window.speechSynthesis?.removeEventListener("voiceschanged", load);
+  }, []);
 
   function handleSave(): void {
     const trimmed = draft.trim();
@@ -17,47 +116,144 @@ export function SettingsView(): React.ReactElement {
     setTimeout(() => setSaved(false), 2000);
   }
 
+  function handleTest(): void {
+    speakLocal(SAMPLE_TEXT);
+  }
+
   return (
-    <div style={{ padding: 24, maxWidth: 480 }}>
+    <div style={{ padding: 24, maxWidth: 480, overflowY: "auto", height: "100%" }}>
       <h2 style={{ fontWeight: 700, fontSize: 18, marginBottom: 24 }}>설정</h2>
 
-      <section>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
-          WebSocket 연결
-        </h3>
-        <label
+      {/* ── LLM 모델 선택 ── */}
+      <section style={sectionStyle}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>LLM 모델</h3>
+        <label style={labelStyle}>Ollama 모델</label>
+        <select
+          value={currentModel}
+          onChange={(e) => setCurrentModel(e.target.value)}
+          style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
+          disabled={models.length === 0}
+        >
+          {models.length === 0 ? (
+            <option value="">모델 목록 로딩 중...</option>
+          ) : (
+            models.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))
+          )}
+        </select>
+        <button
+          onClick={() => { void handleModelSave(); }}
+          disabled={modelSaving || !currentModel}
           style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            marginBottom: 12,
+            marginTop: 10,
+            background: modelSaved ? "var(--color-accent)" : "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: "var(--color-text)",
+            cursor: modelSaving ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: 13,
+            width: "100%",
+            opacity: modelSaving ? 0.6 : 1,
           }}
         >
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-            WebSocket URL
-          </span>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleSave();
-            }}
+          {modelSaving ? "전환 중..." : modelSaved ? "전환 완료 ✓" : "모델 전환 (백엔드 재초기화)"}
+        </button>
+      </section>
+
+      {/* ── 음성 선택 ── */}
+      <section style={sectionStyle}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>음성 선택</h3>
+
+        <label style={labelStyle}>목소리</label>
+        <select
+          value={ttsVoiceName}
+          onChange={(e) => setTtsVoiceName(e.target.value)}
+          style={{
+            ...inputStyle,
+            cursor: "pointer",
+            appearance: "auto",
+          }}
+        >
+          <option value="">— 자동 (한국어 첫 번째) —</option>
+          {voices.map((v) => (
+            <option key={v.name} value={v.name}>
+              {v.lang.startsWith("ko") ? "🇰🇷 " : ""}{v.name}
+              {v.localService ? " (로컬)" : " (온라인)"}
+            </option>
+          ))}
+        </select>
+
+        <div style={{ marginTop: 16 }}>
+          <label style={labelStyle}>
+            재생 속도 / 음조 &nbsp;
+            <span style={{ fontWeight: 700, color: "var(--color-accent)" }}>
+              ×{ttsRate.toFixed(2)}
+            </span>
+          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 11, color: "var(--color-text-muted)", minWidth: 28 }}>느림</span>
+            <input
+              type="range"
+              min={0.5}
+              max={1.8}
+              step={0.05}
+              value={ttsRate}
+              onChange={(e) => setTtsRate(Number(e.target.value))}
+              style={{ flex: 1, accentColor: "var(--color-accent)" }}
+            />
+            <span style={{ fontSize: 11, color: "var(--color-text-muted)", minWidth: 28 }}>빠름</span>
+          </div>
+          <div
             style={{
-              background: "var(--color-bg)",
-              border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              color: "var(--color-text)",
-              padding: "8px 12px",
-              fontSize: 13,
-              outline: "none",
-              width: "100%",
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 11,
+              color: "var(--color-text-muted)",
+              marginTop: 4,
+              padding: "0 38px",
             }}
-            placeholder="ws://127.0.0.1:12393/client-ws"
-          />
-        </label>
+          >
+            <span>0.5×</span>
+            <span>1.0×</span>
+            <span>1.8×</span>
+          </div>
+        </div>
+
+        <button
+          onClick={handleTest}
+          style={{
+            marginTop: 14,
+            background: "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: "var(--color-text)",
+            cursor: "pointer",
+            padding: "7px 16px",
+            fontSize: 13,
+            width: "100%",
+          }}
+        >
+          🔊 목소리 테스트
+        </button>
+      </section>
+
+      {/* ── WebSocket ── */}
+      <section style={sectionStyle}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>WebSocket 연결</h3>
+        <label style={labelStyle}>서버 주소</label>
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
+          style={inputStyle}
+          placeholder="ws://127.0.0.1:12393/client-ws"
+        />
         <button
           onClick={handleSave}
           style={{
+            marginTop: 10,
             background: "var(--color-accent)",
             border: "none",
             borderRadius: 8,
@@ -66,19 +262,17 @@ export function SettingsView(): React.ReactElement {
             padding: "8px 18px",
             fontSize: 13,
             fontWeight: 600,
-            transition: "opacity 0.15s",
           }}
         >
-          {saved ? "저장됨" : "저장 및 재연결"}
+          {saved ? "저장됨 ✓" : "저장 및 재연결"}
         </button>
       </section>
 
-      <section style={{ marginTop: 32 }}>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
-          정보
-        </h3>
+      {/* ── 정보 ── */}
+      <section style={{ ...sectionStyle, marginBottom: 24 }}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>정보</h3>
         <p style={{ fontSize: 13, color: "var(--color-text-muted)", lineHeight: 1.7 }}>
-          새싹이 AI 비서 웹 프론트엔드 v1.0.0
+          새싹이 AI 비서 v1.0.0
           <br />
           오프라인 환경 전용 — 외부 CDN 미사용
         </p>
