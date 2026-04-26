@@ -49,6 +49,23 @@ export function initClickthrough(
     const nextIgnore = !interactive;
 
     if (nextIgnore !== lastIgnore) {
+      // Safety: never enable click-through while cursor is physically inside the
+      // panel or character widget. elementFromPoint can transiently return body
+      // during React re-renders / tab switches / file-picker dialogs, which would
+      // wrongly activate click-through while the user is still interacting.
+      if (nextIgnore) {
+        const panel = document.getElementById("chat-panel");
+        const char = document.getElementById("char-widget");
+        for (const elem of [panel, char]) {
+          if (!elem) continue;
+          const r = elem.getBoundingClientRect();
+          if (
+            r.width > 0 &&
+            e.clientX >= r.left && e.clientX <= r.right &&
+            e.clientY >= r.top  && e.clientY <= r.bottom
+          ) return; // cursor is inside an interactive widget — don't enable click-through
+        }
+      }
       lastIgnore = nextIgnore;
       window.electronAPI!.setIgnoreMouseEvents(nextIgnore);
     }

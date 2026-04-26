@@ -209,3 +209,17 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **원인**: native `<select>` 요소를 사용했기 때문. pet 모드 Electron 투명창에서 native select의 드롭다운 팝업은 OS가 렌더링하므로, 팝업 옵션 클릭 시 `mousedown` 이벤트 target이 `document.body` 등 패널 외부 요소로 올라올 수 있음. App.tsx의 `onMouseDown` 핸들러가 이를 패널 외부 클릭으로 판정해 패널을 닫거나 이벤트가 유실되는 상호작용이 발생.  
 **수정**: native `<select>` → 완전히 DOM 안에 포함된 커스텀 드롭다운(`<div>` + `<button>`)으로 교체. 옵션 클릭을 `onMouseDown` + `e.stopPropagation()`으로 처리해 App.tsx 핸들러에 전파되지 않도록 함.  
 **교훈**: pet 모드 Electron 투명창에서는 native `<select>`, native date picker 등 OS가 렌더링하는 팝업을 사용하지 말 것. 모든 인터랙티브 요소는 DOM 안에 완전히 포함된 커스텀 컴포넌트로 구현해야 한다.
+
+---
+
+## E-21: 문서 탭 사용 후 채팅 입력 클릭이 바탕화면으로 통과하는 문제
+
+**날짜**: 2026-04-26  
+**증상**: 문서 탭에서 파일 업로드 후 채팅 탭으로 전환하면 메시지 입력 클릭이 바탕화면으로 통과(click-through 활성화).  
+**원인**: `clickthrough.ts`의 `evaluate()` 함수가 `elementFromPoint`로 "비대화형 영역인지" 판정하는데, React re-render·파일 선택 다이얼로그 반환 등 일시적 DOM 상태에서 패널 내부임에도 `body`/`documentElement`가 반환되어 `setIgnoreMouseEvents(true)` 호출. 이 상태에서 마우스가 이미 패널 내부에 있으면 `onMouseEnter` fast path도 발화하지 않아 복구 불가.  
+**부수 원인**: pet mode 진입 시 `setFocusable(false)` 호출 후 `setIgnoreMouseEvents(false)` 경로에서 `setFocusable(true)`를 복원하지 않아, 파일 선택 다이얼로그 등이 포커스를 가져간 후 복귀 시 키보드 입력이 불가능해질 수 있음.  
+**수정 3가지**:  
+1. `clickthrough.ts` `evaluate()`: `setIgnoreMouseEvents(true)`를 호출하기 전 `#chat-panel`과 `#char-widget`의 bounding box를 확인 — 커서가 위젯 내부에 있으면 click-through 활성화 차단.  
+2. `ChatPanel.tsx`: `onMouseEnter`에 더해 `onMouseMove`도 `setIgnoreMouseEvents(false)` 호출 — 패널 내부에서 마우스가 움직이면 즉시 복구.  
+3. `window-manager.ts` `setIgnoreMouseEvents()`: `ignore=false` 시 `setFocusable(true)` 호출 + 중복 native 호출 방지를 위해 `lastIgnoreMouseState` 상태 추적 추가.  
+**교훈**: `elementFromPoint`는 DOM 과도기 상태에서 일시적으로 `body`를 반환할 수 있다. click-through를 활성화하기 전에 항상 bounding box로 2차 검증해야 한다. `onMouseEnter` fast path만으로는 "마우스가 이미 안에 있을 때 click-through 재활성화" 시나리오를 커버하지 못한다.
