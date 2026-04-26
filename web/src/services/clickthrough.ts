@@ -5,6 +5,8 @@ export interface ClickthroughOptions {
 
 export interface ClickthroughHandle {
   setDragLock(locked: boolean): void;
+  /** 마우스가 인터랙티브 요소 위에 진입했을 때 즉시 호출 — rAF 대기 없이 click-through 해제 */
+  setInteractive(on: boolean): void;
   dispose(): void;
 }
 
@@ -15,6 +17,7 @@ export function initClickthrough(
   if (!window.electronAPI) {
     return {
       setDragLock: () => {},
+      setInteractive: () => {},
       dispose: () => {},
     };
   }
@@ -65,6 +68,18 @@ export function initClickthrough(
   window.addEventListener("mousemove", onMouseMove, { passive: true });
 
   return {
+    /**
+     * CharacterWidget / ChatPanel의 onMouseEnter·onMouseLeave에서 직접 호출.
+     * rAF + IPC 왕복 지연 없이 즉시 ignore 상태를 전환해 "첫 클릭 통과" 버그를 방지.
+     * (다른 앱에서 마우스를 쓰다 바로 클릭하면 mousemove 이벤트가 아직 도달 전일 수 있음)
+     */
+    setInteractive(on: boolean): void {
+      const nextIgnore = !on;
+      if (nextIgnore !== lastIgnore) {
+        lastIgnore = nextIgnore;
+        window.electronAPI?.setIgnoreMouseEvents(nextIgnore);
+      }
+    },
     setDragLock(locked: boolean): void {
       dragLocked = locked;
       if (!locked) {

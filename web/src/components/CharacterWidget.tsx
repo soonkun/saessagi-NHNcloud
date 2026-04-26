@@ -241,8 +241,15 @@ export function CharacterWidget({
       id="char-widget"
       ref={ref}
       onMouseDown={onMouseDown}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
+      onMouseEnter={() => {
+        setIsHovered(true);
+        // rAF 대기 없이 즉시 click-through 해제 — 다른 앱에서 바로 클릭해도 통과 방지
+        clickthroughHandle.current?.setInteractive(true);
+      }}
+      onMouseLeave={() => {
+        setIsHovered(false);
+        clickthroughHandle.current?.setInteractive(false);
+      }}
       style={{
         position: "fixed",
         left: position.x,

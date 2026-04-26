@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { FileAudio, Download, Loader, ChevronRight } from "lucide-react";
+import { FileAudio, Download, Loader, ChevronRight, RotateCcw } from "lucide-react";
 import { API_BASE } from "../services/api";
 import { useStore } from "../store";
 import { speak } from "../services/tts";
@@ -147,8 +147,20 @@ export function MeetingView(): React.ReactElement {
   const [step3Input, setStep3Input] = useState("");
   const [step3Status, setStep3Status] = useState<"idle"|"loading"|"done"|"error">("idle");
   const [step3Steps, setStep3Steps] = useState<string[]>([]);
+
   const [step3Error, setStep3Error] = useState("");
   const [downloadUrl, setDownloadUrl] = useState("");
+
+  // ── 초기화 ────────────────────────────────────────────────
+  function handleReset(): void {
+    setAudioFile(null);
+    setStep1Status("idle"); setStep1Steps([]); setStep1Error(""); setTranscript("");
+    setStep2Input(""); setPages(1);
+    setStep2Status("idle"); setStep2Steps([]); setStep2Error(""); setMeetingNotes("");
+    setStep3Input("");
+    setStep3Status("idle"); setStep3Steps([]); setStep3Error(""); setDownloadUrl("");
+    setMeetingGenerating(false);
+  }
 
   // ── 오디오 선택 ───────────────────────────────────────────
   function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -256,12 +268,35 @@ export function MeetingView(): React.ReactElement {
     }}>{label}</button>
   );
 
+  const hasWork = step1Status !== "idle" || step2Status !== "idle" || step3Status !== "idle";
+
   return (
     <div style={{
       height: "100%", overflowY: "auto",
       padding: "14px 14px",
       display: "flex", flexDirection: "column", gap: 14,
     }}>
+
+      {/* ── 초기화 버튼 — 작업이 하나라도 시작된 경우만 표시 ── */}
+      {hasWork && (
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={handleReset}
+            title="모든 작업 초기화"
+            style={{
+              display: "flex", alignItems: "center", gap: 5,
+              padding: "5px 12px", borderRadius: 7,
+              border: "1px solid var(--color-border)",
+              background: "transparent",
+              color: "var(--color-text-muted)",
+              cursor: "pointer", fontSize: 12,
+            }}
+          >
+            <RotateCcw size={13} />
+            초기화
+          </button>
+        </div>
+      )}
 
       {/* ── STEP 1: 전사 ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
