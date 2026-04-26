@@ -23,9 +23,6 @@ export class WindowManager {
   // Track if mouse events are forcibly ignored
   private forceIgnoreMouse = false;
 
-  // Dedup: avoid redundant native setIgnoreMouseEvents calls from high-frequency IPC
-  private lastIgnoreMouseState: boolean | null = null;
-
   constructor() {
     ipcMain.on('renderer-ready-for-mode-change', (_event, newMode) => {
       if (newMode === 'pet') {
@@ -253,9 +250,6 @@ export class WindowManager {
 
   setIgnoreMouseEvents(ignore: boolean): void {
     if (!this.window) return;
-    // Dedup: onMouseMove in the panel sends this IPC at ~60 Hz; skip native call when unchanged.
-    if (this.lastIgnoreMouseState === ignore) return;
-    this.lastIgnoreMouseState = ignore;
     // forward:true — ignore=true여도 mousemove는 렌더러에 전달
     // (clickthrough.ts의 evaluate()가 실행되도록 macOS도 동일하게 적용)
     if (ignore) {
