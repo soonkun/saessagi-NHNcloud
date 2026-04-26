@@ -1,54 +1,118 @@
-# AI 비서 프로젝트 스타터 킷
+# 새싹이 — 사내 오프라인 AI 비서
 
-사내 인트라넷 **Windows** PC에서 완전 오프라인으로 동작하는 멀티모달 AI 비서 구축 키트. 캐릭터는 **새싹이(Saessagi)**. 멀티에이전트 파이프라인(기획-구현-적대적 검수)으로 개발한다.
+> 인터넷이 차단된 사내 인트라넷 환경에서 완전 오프라인으로 동작하는 AI 비서.  
+> 캐릭터 "새싹이"가 음성으로 대화하고, 사내 문서를 검색하고, 회의록을 자동으로 작성합니다.
+
+<div align="center">
+
+| ![neutral](assets/character/saessagi/neutral.png) | ![happy](assets/character/saessagi/happy.png) | ![thinking](assets/character/saessagi/thinking.png) | ![writing](assets/character/saessagi/writing.png) | ![study](assets/character/saessagi/study.png) |
+|:---:|:---:|:---:|:---:|:---:|
+| 기본 | 기뻐요 | 생각 중 | 작성 중 | 공부 중 |
+
+</div>
+
+---
+
+## 주요 기능
+
+| 기능 | 설명 |
+|---|---|
+| **음성·텍스트 대화** | 마이크 또는 텍스트로 대화. 한국어 음성 인식 + 음성 합성 |
+| **문서 RAG** | 사내 PDF·DOCX·HWPX 등을 벡터 검색해 출처 명시 답변 |
+| **일정 관리** | 자연어로 일정 등록·조회. 10분 전 알림 자동 발송 |
+| **회의록 자동 작성** | 음성 파일 업로드 → 전사 → 요약 → HWPX 결과보고서 3단계 자동화 |
+| **화면 분석** | 화면 캡처 → 멀티모달 LLM 분석 |
+| **펫 모드** | 투명 배경·항상 위·클릭 관통으로 바탕화면 위에 상주 |
+| **완전 오프라인** | 모든 AI 추론을 로컬에서 수행. 외부 네트워크 호출 없음 |
+
+---
+
+## 기술 스택
+
+```
+Backend  : Python 3.12 · FastAPI · Ollama (Gemma 4) · faster-whisper · MeloTTS
+           LanceDB (벡터 DB) · SQLite (캘린더) · pydantic v2
+Frontend : Electron 35 · React 18 · TypeScript · Vite
+Base     : Open-LLM-VTuber (상속·확장)
+```
+
+---
 
 ## 빠른 시작
 
-```powershell
-# 1. 환경 점검
-.\scripts\preflight.ps1
+### 1. 의존성 설치
 
-# 2. 부족한 도구 설치 (Git, Python 3.11, Node 20, uv, ffmpeg, Ollama, Claude Code)
+```bash
+# Python 환경
+uv venv && uv pip install -e ".[dev]"
 
-# 3. 부트스트랩 (upstream clone, 모델 pull, venv, git init)
-.\scripts\bootstrap.ps1
+# Ollama 모델 (인터넷 연결 시 1회)
+ollama pull gemma4:e4b
 
-# 4. Claude Code 실행
-claude
-
-# 5. prompts\00_kickoff.md 의 프롬프트를 복사해 Claude Code에 붙여넣기
+# 프론트엔드
+cd web && npm install
+cd ../frontend && npm install
 ```
 
-## 이 폴더에 뭐가 있나
+### 2. 프론트엔드 빌드
 
-| 파일/폴더 | 역할 |
+```bash
+cd web && ELECTRON_BUILD=1 npm run build
+cd ../frontend && npm run build
+```
+
+### 3. 실행
+
+```bash
+# 백엔드 서버
+bash start.sh        # macOS/Linux
+start.cmd            # Windows
+
+# Electron 앱 (개발)
+cd frontend && npm run dev
+```
+
+> **주의**: 브라우저에서 `http://127.0.0.1:12393`을 직접 열지 마세요.  
+> 새싹이는 Electron 앱 전용 UI입니다.
+
+---
+
+## 오프라인 USB 배포
+
+인터넷이 차단된 환경을 위한 완전 오프라인 번들:
+
+```bash
+bash scripts/bundle_usb.sh /Volumes/USB명
+```
+
+USB에 Python·Ollama·모델·wheel이 모두 포함되며, 대상 PC에서 `install.bat` / `install.sh` 하나로 설치됩니다.
+
+---
+
+## 문서
+
+| 문서 | 내용 |
 |---|---|
-| `PROJECT_PLAN.md` | **첫 번째로 읽을 실행 계획서**. |
-| `REQUIREMENTS.md` | 기능·비기능 요구사항 정전. |
-| `CLAUDE.md` | Claude Code 자동 로딩 규칙. |
-| `.claude/agents/` | 6개 서브에이전트 정의. |
-| `.claude/settings.json` | Claude Code 권한·상태바 설정. |
-| `prompts/` | Phase별 붙여넣기용 프롬프트. |
-| `specs/` | (비어있음) Planner가 모듈 스펙 채움. |
-| `reviews/` | (비어있음) Critic 리뷰 기록. |
-| `docs/` | 산출물 저장소. 유튜브 참조·새싹이 가이드 포함. |
-| `assets/character/saessagi/` | 새싹이 PNG (`neutral.png`만 제공). |
-| `scripts/` | PowerShell 부트스트랩·프리플라이트. |
-| `upstream/` | (비어있음) Open-LLM-VTuber가 bootstrap 시 clone됨. |
+| [사용자 매뉴얼](docs/USER_GUIDE.md) | 기능별 사용법 |
+| [기술 개발 보고서](TECHNICAL_REPORT.md) | 아키텍처·모듈·버그 해결 이력 |
+| [요구사항](REQUIREMENTS.md) | 기능·비기능 요구사항 정의 |
+| [아키텍처](docs/ARCHITECTURE.md) | 전체 블록 다이어그램 |
+| [에러 히스토리](docs/ERROR_HISTORY.md) | 버그 원인·해결·교훈 (E-01 ~ E-20) |
+| [프론트엔드 제약](docs/FRONTEND_CONSTRAINTS.md) | Electron 투명창 제약 사항 |
 
-## 병렬로 준비해야 할 것
+---
 
-**새싹이 표정 6장 추가 제작**:
+## 개발 방식
 
-`happy.png`, `surprised.png`, `sad.png`, `worried.png`, `thinking.png`, `sleepy.png` 를 `assets/character/saessagi/`에 배치. 상세 사양은 `docs/CHARACTER_SAESSAGI.md`. 디자이너 반나절 작업 분량. 개발과 병렬 처리 가능 — M_04 모듈 구현 전까지만 완성되면 된다.
+멀티에이전트 파이프라인으로 개발했습니다:
 
-## 멀티에이전트 규칙 (엄수)
+| 역할 | 모델 | 담당 |
+|---|---|---|
+| Planner | Opus | 아키텍처 설계·모듈 스펙 |
+| Builder | Sonnet | 구현 |
+| Critic | Opus | 독립 적대적 리뷰 |
+| Validator | Haiku | 테스트·린트·빌드 검증 |
 
-1. **Builder와 Critic은 다른 세션·다른 모델.** Builder 컨텍스트를 Critic이 봐선 안 된다.
-2. **스펙 없이 구현 금지.** Planner가 spec을 만들기 전엔 Builder 호출 X.
-3. **검수는 거부할 이유를 찾는 역할.** Critic이 "LGTM"만 하고 넘어가면 교체.
-4. **외부 네트워크 호출 즉시 거부.** 완전 오프라인이 요구사항이다.
+---
 
-## 다음 단계
-
-`PROJECT_PLAN.md` 읽기 → `scripts\preflight.ps1` 실행.
+*GitHub: https://github.com/soonkun/ai-assistant*

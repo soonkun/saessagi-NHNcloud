@@ -18,6 +18,29 @@ const shellApi = {
     ipcRenderer.invoke('shell:openPath', absolutePath),
 };
 
+// 새싹이 web UI(web/src)가 사용하는 window.electronAPI
+const saessagiElectronApi = {
+  isElectron: true as const,
+  quit: (): void => ipcRenderer.send("app-quit"),
+  setIgnoreMouseEvents: (ignore: boolean): void =>
+    ipcRenderer.send("set-ignore-mouse-events", ignore),
+  getDisplay: (): Promise<{ width: number; height: number; scaleFactor: number }> =>
+    ipcRenderer.invoke("get-display"),
+  openDevTools: (): void => ipcRenderer.send("open-dev-tools"),
+  onDisplayChanged: (
+    cb: (size: { width: number; height: number }) => void
+  ): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, size: { width: number; height: number }): void => cb(size);
+    ipcRenderer.on("display-changed", handler);
+    return () => ipcRenderer.removeListener("display-changed", handler);
+  },
+  onOpenChat: (cb: () => void): (() => void) => {
+    const handler = (): void => cb();
+    ipcRenderer.on("open-chat", handler);
+    return () => ipcRenderer.removeListener("open-chat", handler);
+  },
+};
+
 // M_12 P3 — petMode IPC API (§5.2, Q-9 B안)
 // dragMove·dragEnd 2종 추가: mouseup 감지를 위해 dragStart만으로는 dragEnd 시점을 알 수 없음.
 // renderer에서 window.mousemove / mouseup 이벤트를 받아 IPC로 전달하는 구조 필요.
@@ -115,6 +138,8 @@ if (process.contextIsolated) {
     contextBridge.exposeInMainWorld('petMode', petModeApi);
     // M_12 P4 §8.3.2: shell IPC 노출
     contextBridge.exposeInMainWorld('shell', shellApi);
+    // 새싹이 web UI용 electronAPI (quit, setIgnoreMouseEvents, getDisplay 등)
+    contextBridge.exposeInMainWorld('electronAPI', saessagiElectronApi);
   } catch (error) {
     console.error(error);
   }
@@ -123,4 +148,5 @@ if (process.contextIsolated) {
   (window as any).api = api;
   (window as any).petMode = petModeApi;
   (window as any).shell = shellApi;
+  (window as any).electronAPI = saessagiElectronApi;
 }

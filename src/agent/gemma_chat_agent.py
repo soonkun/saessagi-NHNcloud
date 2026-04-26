@@ -12,6 +12,7 @@ from open_llm_vtuber.agent.input_types import BatchInput
 from open_llm_vtuber.agent.stateless_llm.openai_compatible_llm import (
     AsyncLLM as OpenAICompatibleAsyncLLM,
 )
+from .no_think_llm import NoThinkLLM
 from open_llm_vtuber.mcpp.tool_executor import ToolExecutor
 from open_llm_vtuber.mcpp.tool_manager import ToolManager
 
@@ -130,6 +131,7 @@ class GemmaChatAgent:
         interrupt_method: Literal["system", "user"],
         use_mcpp: bool,
         extra_tool_specs: list[dict[str, Any]] | None = None,
+        tts_preprocessor_config: Any | None = None,
     ) -> None:
         """필드만 초기화. 직접 호출 금지 — create() classmethod를 사용하라.
 
@@ -144,8 +146,8 @@ class GemmaChatAgent:
 
         openai_url = _normalize_openai_url(base_url)
 
-        # upstream AsyncLLM 인스턴스 생성
-        self._llm = OpenAICompatibleAsyncLLM(
+        # NoThinkLLM: Ollama extended-thinking 비활성화 (gemma4:e2b/e4b 성능 개선)
+        self._llm = NoThinkLLM(
             model=model,
             base_url=openai_url,
             temperature=temperature,
@@ -156,7 +158,7 @@ class GemmaChatAgent:
             llm=self._llm,
             system=system_prompt,
             live2d_model=None,
-            tts_preprocessor_config=None,
+            tts_preprocessor_config=tts_preprocessor_config,
             faster_first_response=faster_first_response,
             use_mcpp=use_mcpp,
             interrupt_method=interrupt_method,
@@ -205,6 +207,7 @@ class GemmaChatAgent:
         interrupt_method: Literal["system", "user"] = "user",
         use_mcpp: bool = True,
         extra_tool_specs: list[dict[str, Any]] | None = None,
+        tts_preprocessor_config: Any | None = None,
     ) -> "GemmaChatAgent":
         """GemmaChatAgent를 생성하는 공식 비동기 팩토리 메서드.
 
@@ -264,6 +267,7 @@ class GemmaChatAgent:
             interrupt_method=interrupt_method,
             use_mcpp=use_mcpp,
             extra_tool_specs=extra_tool_specs,
+            tts_preprocessor_config=tts_preprocessor_config,
         )
 
     @staticmethod
@@ -485,6 +489,39 @@ class GemmaChatAgent:
 
         return result
 
+    async def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+        timeout_seconds: float = 120.0,
+    ) -> str:
+        """비스트리밍 플레인 텍스트 완성 메서드.
+
+        response_format 없이 호출 — JSON 모드 불필요한 경우에 사용.
+        NoThinkLLM이 think=False를 주입하므로 extra_body 불필요.
+        """
+        logger.info(
+            f"complete_text 호출: model={self.model}, max_tokens={max_tokens}, "
+            f"temperature={temperature}, timeout={timeout_seconds}s"
+        )
+        async with asyncio.timeout(timeout_seconds):
+            response = await self._llm.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=False,
+            )
+        content = response.choices[0].message.content or ""
+        logger.debug(f"complete_text 응답 길이: {len(content)}자")
+        return content.strip()
+
     async def aclose(self) -> None:
         """리소스 정리. openai AsyncClient를 닫는다."""
         try:
@@ -497,7 +534,7 @@ class GemmaChatAgent:
         self,
         messages: list[dict[str, Any]],
     ) -> AsyncIterator[str | dict[str, Any]]:
-        """tool 없는 경로. think=False로 Ollama thinking 모드를 비활성화."""
+        """tool 없는 경로. NoThinkLLM이 think=False를 이미 주입하므로 extra_body 불필요."""
         try:
             system = self._inner._system
             messages_with_system = (
@@ -508,7 +545,6 @@ class GemmaChatAgent:
                 model=self._llm.model,
                 stream=True,
                 temperature=self._llm.temperature,
-                extra_body={"think": False},
             )
             async for chunk in stream:
                 delta = chunk.choices[0].delta if chunk.choices else None

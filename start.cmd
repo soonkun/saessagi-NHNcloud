@@ -12,6 +12,19 @@ if not exist "%UPSTREAM%\frontend\index.html" (
     git -C "%UPSTREAM%" submodule update --init --recursive
 )
 
+:: 프론트엔드 빌드 (dist 없을 때만)
+if not exist "%ROOT%\web\dist\index.html" (
+    echo 프론트엔드 빌드 중...
+    cd /d "%ROOT%\web"
+    if exist "%ROOT%\assets\npm_cache" (
+        npm install --prefer-offline --cache "%ROOT%\assets\npm_cache"
+    ) else (
+        npm install
+    )
+    npm run build
+    cd /d "%ROOT%"
+)
+
 :: upstream 코드가 CWD에서 conf.yaml을 직접 읽으므로 복사 배치 (symlink는 관리자 권한 필요)
 copy /Y "%ROOT%\conf.yaml" "%UPSTREAM%\conf.yaml" > nul 2>&1
 

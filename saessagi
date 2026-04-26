@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# 새싹이 AI 비서 실행 스크립트
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_PORT=12393
+
+# ── 백엔드 서버 ──────────────────────────────────────────────
+if lsof -ti tcp:$BACKEND_PORT &>/dev/null; then
+  echo "[새싹이] 백엔드가 이미 실행 중입니다 (포트 $BACKEND_PORT)"
+else
+  echo "[새싹이] 백엔드 서버 시작 중..."
+  bash "$SCRIPT_DIR/start.sh" &>/tmp/saessagi-backend.log &
+  BACKEND_PID=$!
+  echo "[새싹이] 백엔드 PID=$BACKEND_PID (로그: /tmp/saessagi-backend.log)"
+
+  echo -n "[새싹이] 백엔드 준비 대기 중"
+  for i in $(seq 1 30); do
+    if lsof -ti tcp:$BACKEND_PORT &>/dev/null; then
+      echo " 완료"
+      break
+    fi
+    echo -n "."
+    sleep 0.5
+  done
+fi
+
+# ── 프론트엔드 (Electron) ────────────────────────────────────
+echo "[새싹이] 프론트엔드 시작 중..."
+cd "$SCRIPT_DIR/web"
+exec npm run electron:dev

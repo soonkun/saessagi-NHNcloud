@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #1a1b1e;
+  --color-sidebar: #25262b;
+  --color-panel: #25262b;
+  --color-msg-human: #2c2e33;
+  --color-msg-ai: #1a1b1e;
+  --color-accent: #c96442;
+  --color-accent-hover: #e07050;
+  --color-text: #e8e8e8;
+  --color-text-muted: #888;
+  --color-border: #373a40;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  /* CRITICAL: transparent areas must not capture pointer events so that
+     elementFromPoint returns body/html → click-through activates */
+  pointer-events: none;
+}
+
+/* 스크롤바 스타일링 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+/* ── 캐릭터 idle float 애니메이션 ── */
+@keyframes char-float {
+  0%   { transform: translateY(0)    rotate(0deg); }
+  30%  { transform: translateY(-6px) rotate(-1deg); }
+  60%  { transform: translateY(-3px) rotate(0.5deg); }
+  100% { transform: translateY(0)    rotate(0deg); }
+}
+
+.char-idle {
+  animation: char-float 3.5s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+/* ── 캐릭터 bounce 애니메이션 (말하는 중) ── */
+@keyframes char-bounce {
+  0%, 100% { transform: translateY(0); }
+  25%       { transform: translateY(-6px); }
+  75%       { transform: translateY(-3px); }
+}
+
+.char-speaking {
+  animation: char-bounce 0.6s ease-in-out infinite;
+}
+
+/* ── 메시지 fade-in ── */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg-enter {
+  animation: msg-in 0.18s ease-out forwards;
+}
+
+/* ── 삭제 버튼 hover ── */
+.btn-delete:hover {
+  color: #e05050 !important;
+}
+
+/* ── 상태 점 깜빡임 ── */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+
+.status-blink {
+  animation: blink 1.2s ease-in-out infinite;
+}
+
+/* ── 문서 행 hover — 삭제 버튼 표시 ── */
+.doc-row:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+.doc-row:hover .btn-delete {
+  opacity: 1 !important;
+}
+
+/* ── 폴더 행 hover — 아이콘 버튼 표시 ── */
+.folder-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.folder-row:hover .btn-icon {
+  opacity: 1 !important;
+}
+
+.btn-icon:hover {
+  color: var(--color-text) !important;
+}
+
+/* ── 로딩 스피너 ── */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 0.8s linear infinite;
+}
