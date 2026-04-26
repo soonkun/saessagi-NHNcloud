@@ -130,9 +130,12 @@ export class WindowManager {
     if (!this.window) return;
 
     if (is.dev && process.env.ELECTRON_RENDERER_URL) {
+      // electron-vite dev 전용 (ELECTRON_RENDERER_URL은 vite dev server 주소에만 허용)
       this.window.loadURL(process.env.ELECTRON_RENDERER_URL);
     } else {
-      this.window.loadFile(join(__dirname, '../renderer/index.html'));
+      // 새싹이 web UI를 로컬 파일로 로드 — file:// 프로토콜 (HTTP URL 절대 금지)
+      // __dirname = out/main/ → ../../../web/dist = <project-root>/web/dist
+      this.window.loadFile(join(__dirname, '../../../web/dist/index.html'));
     }
   }
 
@@ -182,6 +185,7 @@ export class WindowManager {
     this.window?.setIgnoreMouseEvents(false, { forward: true });
 
     this.window.webContents.send('mode-changed', 'window');
+    this.window.setOpacity(1);
   }
 
   private setWindowModePet(): void {
@@ -228,30 +232,30 @@ export class WindowManager {
     this.window.setSkipTaskbar(true);
     this.window.setFocusable(false);
 
+    this.window.setIgnoreMouseEvents(true, { forward: true });
     if (isMac) {
-      this.window.setIgnoreMouseEvents(true);
       this.window.setVisibleOnAllWorkspaces(true, {
         visibleOnFullScreen: true,
       });
-    } else {
-      this.window.setIgnoreMouseEvents(true, { forward: true });
     }
 
     this.window.webContents.send('mode-changed', 'pet');
+    // web UI가 mode-change-rendered를 보내지 않을 수 있으므로 직접 opacity 복구
+    this.window.setOpacity(1);
   }
-  
+
   getWindow(): BrowserWindow | null {
     return this.window;
   }
 
   setIgnoreMouseEvents(ignore: boolean): void {
     if (!this.window) return;
-
-    if (isMac) {
-      this.window.setIgnoreMouseEvents(ignore);
-      // this.window.setIgnoreMouseEvents(ignore, { forward: true });
+    // forward:true — ignore=true여도 mousemove는 렌더러에 전달
+    // (clickthrough.ts의 evaluate()가 실행되도록 macOS도 동일하게 적용)
+    if (ignore) {
+      this.window.setIgnoreMouseEvents(true, { forward: true });
     } else {
-      this.window.setIgnoreMouseEvents(ignore, { forward: true });
+      this.window.setIgnoreMouseEvents(false);
     }
   }
 
@@ -295,12 +299,10 @@ export class WindowManager {
 
     if (this.window) {
       const shouldIgnore = this.hoveringComponents.size === 0;
-      if (isMac) {
-        this.window.setIgnoreMouseEvents(shouldIgnore);
+      if (shouldIgnore) {
+        this.window.setIgnoreMouseEvents(true, { forward: true });
       } else {
-        this.window.setIgnoreMouseEvents(shouldIgnore, { forward: true });
-      }
-      if (!shouldIgnore) {
+        this.window.setIgnoreMouseEvents(false);
         this.window.setFocusable(true);
       }
     }
@@ -312,18 +314,13 @@ export class WindowManager {
 
     // Apply the new setting immediately
     if (this.forceIgnoreMouse) {
-      if (isMac) {
-        this.window?.setIgnoreMouseEvents(true);
-      } else {
-        this.window?.setIgnoreMouseEvents(true, { forward: true });
-      }
+      this.window?.setIgnoreMouseEvents(true, { forward: true });
     } else {
-      // Reapply normal behavior based on hovering components
       const shouldIgnore = this.hoveringComponents.size === 0;
-      if (isMac) {
-        this.window?.setIgnoreMouseEvents(shouldIgnore);
+      if (shouldIgnore) {
+        this.window?.setIgnoreMouseEvents(true, { forward: true });
       } else {
-        this.window?.setIgnoreMouseEvents(shouldIgnore, { forward: true });
+        this.window?.setIgnoreMouseEvents(false);
       }
     }
 

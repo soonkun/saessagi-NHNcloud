@@ -1,7 +1,8 @@
-// 앱 시작 시 오늘 일정을 가져와 랜덤 인사 메시지를 채팅에 추가하고 MeloTTS로 재생
-
+// 앱 시작 시 오늘 일정을 가져와 랜덤 인사 메시지를 채팅에 추가하고 TTS로 재생
 import { useStore } from "../store";
 import type { CalendarEvent } from "../types";
+import { API_BASE } from "./api";
+import { speak } from "./tts";
 
 const WITH_EVENTS: Array<(events: CalendarEvent[]) => string> = [
   (ev) => `안녕하세요! 오늘 ${_fmt(ev[0])}에 ${ev[0].title}이(가) 있어요. ${ev.length > 1 ? `그 외 ${ev.length - 1}개 일정도 있고요. ` : ""}잊지 마세요~`,
@@ -42,42 +43,18 @@ function _pick<T>(arr: T[]): T {
 // 모듈 스코프 플래그 — JS 프로세스(앱) 재시작 시 리셋, StrictMode 이중 호출만 차단
 let _greeted = false;
 
-async function speakViaMeloTTS(text: string): Promise<void> {
-  try {
-    const res = await fetch("/api/tts/speak", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) return;
-    const { audio } = (await res.json()) as { audio: string; format: string };
-    if (!audio) return;
-
-    // base64 → ArrayBuffer → AudioContext 재생
-    const bin = atob(audio);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-
-    const ctx = new AudioContext();
-    const decoded = await ctx.decodeAudioData(buf.buffer);
-    const src = ctx.createBufferSource();
-    src.buffer = decoded;
-    src.connect(ctx.destination);
-    src.start();
-  } catch (e) {
-    console.warn("[startup] MeloTTS 재생 실패:", e);
-  }
-}
-
 export async function showStartupGreeting(): Promise<void> {
   if (_greeted) return;
   _greeted = true;
 
-  const today = new Date().toISOString().slice(0, 10);
+  // KST 기준 오늘 날짜 (UTC로 계산하면 자정~09:00 사이에 날짜가 다를 수 있음)
+  const kstOffset = 9 * 60;
+  const kstNow = new Date(Date.now() + kstOffset * 60 * 1000);
+  const today = kstNow.toISOString().slice(0, 10);
 
   let todayEvents: CalendarEvent[] = [];
   try {
-    const res = await fetch("/api/calendar/events");
+    const res = await fetch(API_BASE + "/api/calendar/events");
     if (res.ok) {
       const all = await (res.json() as Promise<CalendarEvent[]>);
       todayEvents = all
@@ -94,6 +71,5 @@ export async function showStartupGreeting(): Promise<void> {
       : _pick(WITHOUT_EVENTS);
 
   useStore.getState().addMessage({ role: "ai", text });
-  // 1초 딜레이: Electron 창 초기화 및 백엔드 TTS 준비 대기
-  setTimeout(() => { void speakViaMeloTTS(text); }, 1000);
+  void speak(text);
 }

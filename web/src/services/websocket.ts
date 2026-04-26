@@ -1,5 +1,6 @@
 import type { WsIncomingMessage, WsOutgoingMessage, Emotion } from "../types";
 import { useStore } from "../store";
+import { speakLocalQueued, cancelLocalSpeech } from "./speech";
 
 // ────────────────────────────────────────────────────────────
 // 감정 태그 파싱 유틸
@@ -20,8 +21,8 @@ const EMOTION_MAP: Record<string, Emotion> = {
   sleepy: "sleepy",
   tired: "sleepy",
   study: "study",
-  worried: "worried_v2",
-  worried_v2: "worried_v2",
+  worried: "worried",
+  worried_v2: "worried",
   neutral: "neutral",
 };
 
@@ -59,6 +60,8 @@ let audioCtx: AudioContext | null = null;
 let audioQueue: AudioBuffer[] = [];
 let currentSource: AudioBufferSourceNode | null = null;
 let synthDone = false;
+let pendingDecodes = 0; // in-flight queueAudio decode operations
+let audioGen = 0;      // incremented on stopAudio to abandon stale decodes
 
 function getAudioCtx(): AudioContext {
   if (!audioCtx || audioCtx.state === "closed") {
@@ -75,14 +78,27 @@ function base64ToBuffer(b64: string): ArrayBuffer {
 }
 
 async function queueAudio(b64: string): Promise<void> {
+  const gen = audioGen;
+  pendingDecodes += 1;
   try {
     const ctx = getAudioCtx();
     if (ctx.state === "suspended") await ctx.resume();
     const decoded = await ctx.decodeAudioData(base64ToBuffer(b64));
+    if (gen !== audioGen) return; // stopAudio was called; discard
     audioQueue.push(decoded);
     playNextChunk();
   } catch (e) {
     console.warn("[TTS] decode error:", e);
+  } finally {
+    if (gen === audioGen) {
+      pendingDecodes -= 1;
+      // If backend-synth-complete arrived while we were decoding, check now
+      if (pendingDecodes === 0 && synthDone && currentSource === null && audioQueue.length === 0) {
+        synthDone = false;
+        send({ type: "frontend-playback-complete" });
+        useStore.getState().setAiStatus("idle");
+      }
+    }
   }
 }
 
@@ -109,6 +125,8 @@ function playNextChunk(): void {
 }
 
 function stopAudio(): void {
+  audioGen += 1; // abandon all in-flight decodes
+  pendingDecodes = 0;
   if (currentSource) {
     currentSource.onended = null;
     try { currentSource.stop(); } catch { /* ignore */ }
@@ -118,9 +136,9 @@ function stopAudio(): void {
   synthDone = false;
 }
 
-const MAX_RECONNECT_ATTEMPTS = 8;
+const MAX_RECONNECT_ATTEMPTS = Infinity; // 백엔드 재시작 시에도 무한 재시도
 const RECONNECT_BASE_MS = 1000;
-const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_MAX_MS = 10_000; // 최대 10초 간격으로 계속 시도
 const STUCK_THINKING_MS = 60_000;
 
 function dispatch(msg: WsIncomingMessage): void {
@@ -132,6 +150,7 @@ function dispatch(msg: WsIncomingMessage): void {
       else if (msg.text === "stop-mic") store.setMicOn(false);
       else if (msg.text === "conversation-chain-start") {
         stopAudio();
+        cancelLocalSpeech();
         store.setAiStatus("thinking");
         clearThinkingTimer();
         thinkingTimer = setTimeout(() => {
@@ -150,12 +169,18 @@ function dispatch(msg: WsIncomingMessage): void {
         const e = parseEmotion(msg.expression);
         if (e) store.setEmotion(e);
       }
+      let displayText = "";
       if (msg.display_text?.text) {
         const { text: clean, emotion } = stripEmotionTags(msg.display_text.text);
         if (emotion) store.setEmotion(emotion);
-        store.addMessage({ role: "ai", text: clean || msg.display_text.text });
+        displayText = clean || msg.display_text.text;
+        store.addMessage({ role: "ai", text: displayText });
       }
-      if (msg.audio) void queueAudio(msg.audio);
+      if (store.ttsEngine === "system") {
+        if (displayText) speakLocalQueued(displayText);
+      } else {
+        if (msg.audio) void queueAudio(msg.audio);
+      }
       break;
     }
 
@@ -169,14 +194,21 @@ function dispatch(msg: WsIncomingMessage): void {
     case "avatar-state": {
       // upstream expression 이름이 우리 파일명과 다를 수 있으므로 매핑 경유
       const mappedEmotion = parseEmotion(msg.emotion) ?? msg.emotion;
-      store.setEmotion(mappedEmotion as Emotion);
+      // 업로드 중에는 study 감정을 백엔드 avatar-state로 덮어쓰지 않음
+      if (!store.isUploading) {
+        store.setEmotion(mappedEmotion as Emotion);
+      }
       store.setSpeaking(msg.speaking);
       store.setAiStatus(msg.speaking ? "speaking" : "idle");
       break;
     }
 
     case "backend-synth-complete":
-      if (currentSource !== null || audioQueue.length > 0) {
+      // 시스템 TTS는 자체 큐로 재생 — 백엔드에 즉시 완료 신호 전송
+      if (store.ttsEngine === "system") {
+        send({ type: "frontend-playback-complete" });
+        store.setAiStatus("idle");
+      } else if (currentSource !== null || audioQueue.length > 0 || pendingDecodes > 0) {
         synthDone = true;
       } else {
         send({ type: "frontend-playback-complete" });

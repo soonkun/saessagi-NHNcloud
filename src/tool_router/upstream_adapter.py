@@ -24,6 +24,28 @@ def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _format_search_docs_for_llm(result: ToolResult) -> str:
+    """search_docs 결과를 LLM이 읽기 쉬운 텍스트 형식으로 변환.
+
+    JSON 중첩 구조 대신 plain text로 변환해 Gemma4 같은 소형 모델도
+    hits[].text 내용을 바로 읽을 수 있게 한다.
+    """
+    if not result.ok:
+        return f"search_docs 오류: {result.error}"
+    payload = result.payload or {}
+    if not payload.get("found") or not payload.get("hits"):
+        reason = payload.get("no_match_reason") or "등록된 문서에서 관련 내용을 찾지 못했습니다."
+        return f"검색 결과 없음: {reason}"
+
+    hits = payload["hits"]
+    lines = [f"문서 검색 결과 ({len(hits)}건):"]
+    for i, h in enumerate(hits, 1):
+        text = (h.get("text") or "").strip()
+        doc = h.get("doc_name") or ""
+        lines.append(f"\n[{i}] 출처: {doc}\n{text}")
+    return "\n".join(lines)
+
+
 def _result_to_json(result: ToolResult) -> str:
     """ToolResult를 JSON 문자열로 직렬화."""
     if result.ok:
@@ -196,6 +218,13 @@ class CompositeToolExecutor:
                 result: ToolResult = await self._router.dispatch(tool_name, tool_input or {})
                 text_content = _result_to_json(result)
 
+                # LLM에 전달할 content — search_docs는 읽기 쉬운 텍스트 형식 사용
+                llm_content = (
+                    _format_search_docs_for_llm(result)
+                    if tool_name == "search_docs"
+                    else text_content
+                )
+
                 if (
                     result.ok
                     and tool_name == "take_screenshot"
@@ -216,11 +245,11 @@ class CompositeToolExecutor:
                         "tool_id": tool_id,
                         "tool_name": tool_name,
                         "status": "error" if not result.ok else "completed",
-                        "content": (f"Error: {result.error}" if not result.ok else text_content),
+                        "content": (f"Error: {result.error}" if not result.ok else llm_content),
                         "timestamp": _now_iso(),
                     }
 
-                formatted = self._format_tool_result_openai(tool_id, text_content)
+                formatted = self._format_tool_result_openai(tool_id, llm_content)
                 tool_results_for_llm.append(formatted)
 
             else:

@@ -130,6 +130,7 @@ export function CharacterWidget({
 }: CharacterWidgetProps): React.ReactElement {
   const emotion = useStore((s) => s.emotion);
   const speaking = useStore((s) => s.speaking);
+  const isMeetingGenerating = useStore((s) => s.isMeetingGenerating);
   const position = useStore((s) => s.position);
   const setPosition = useStore((s) => s.setPosition);
   const charSize = useStore((s) => s.charSize);
@@ -138,6 +139,9 @@ export function CharacterWidget({
   const setChatOpen = useStore((s) => s.setChatOpen);
 
   const [isHovered, setIsHovered] = useState(false);
+  // imgKey가 바뀌면 <img>가 remount되어 이미지를 재요청함
+  const [imgKey, setImgKey] = useState(0);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Electron display bounds for correct clamping (B4 fix)
   const [screenSize, setScreenSize] = useState<{ width: number; height: number }>(
@@ -223,7 +227,8 @@ export function CharacterWidget({
     window.addEventListener("mouseup", onUp);
   }, []);
 
-  const imageSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
+  const displayEmotion = isMeetingGenerating ? "writing" : emotion;
+  const imageSrc = `${import.meta.env.BASE_URL}avatars/${displayEmotion}.png`;
 
   function handleQuit(e: React.MouseEvent): void {
     e.stopPropagation();
@@ -252,6 +257,7 @@ export function CharacterWidget({
       title="새싹이 — 클릭해서 채팅"
     >
       <img
+        key={imgKey}
         src={imageSrc}
         alt={`새싹이 (${emotion})`}
         draggable={false}
@@ -269,7 +275,14 @@ export function CharacterWidget({
             !img.src.endsWith("neutral.png") &&
             !img.src.endsWith("neutral.png/")
           ) {
+            // 감정 이미지 실패 → neutral로 폴백
             img.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
+          } else {
+            // neutral.png 자체 실패 → 백엔드가 아직 안 올라온 경우, 3초 후 재시도
+            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+            retryTimerRef.current = setTimeout(() => {
+              setImgKey((k) => k + 1);
+            }, 3000);
           }
         }}
       />

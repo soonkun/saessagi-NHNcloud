@@ -68,6 +68,21 @@ function doSpeak(text: string): void {
   window.speechSynthesis.speak(utt);
 }
 
+// 대화 청크용 — cancel 없이 큐에 추가 (연속 발화 시 겹침 방지)
+export function speakLocalQueued(text: string): void {
+  if (!window.speechSynthesis) return;
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = "ko-KR";
+  utt.rate = useStore.getState().ttsRate;
+  const voice = pickVoice();
+  if (voice) utt.voice = voice;
+  window.speechSynthesis.speak(utt);
+}
+
+export function cancelLocalSpeech(): void {
+  window.speechSynthesis?.cancel();
+}
+
 export function speakLocal(text: string): void {
   if (!window.speechSynthesis) return;
 

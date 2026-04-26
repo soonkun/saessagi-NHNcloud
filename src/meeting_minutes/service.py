@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .errors import MeetingFileNotFoundError
-from .generator import MeetingDraftGenerator
+from .generator import MeetingDraftGenerator, ProgressCallback
 from .hwpx_writer import HwpxWriter
 from .types import PageCount
 
@@ -55,6 +55,7 @@ class MeetingMinutesService:
         self,
         transcript: str,
         pages: PageCount,
+        progress_cb: ProgressCallback | None = None,
     ) -> dict[str, str]:
         """녹취록 → HWPX 파일 생성 → file_id 반환.
 
@@ -66,8 +67,11 @@ class MeetingMinutesService:
         """
         if self._generator._agent is None:
             from .errors import MeetingMinutesError
-            raise MeetingMinutesError("agent가 초기화되지 않았습니다. set_agent()를 먼저 호출하세요.")
-        draft = await self._generator.generate(transcript, pages)
+
+            raise MeetingMinutesError(
+                "agent가 초기화되지 않았습니다. set_agent()를 먼저 호출하세요."
+            )
+        draft = await self._generator.generate(transcript, pages, progress_cb=progress_cb)
 
         file_id = str(uuid.uuid4())
         out_path = self._temp_dir / f"{file_id}.hwpx"

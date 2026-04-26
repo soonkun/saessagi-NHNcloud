@@ -110,6 +110,19 @@ body {
   opacity: 1 !important;
 }
 
+/* ── 폴더 행 hover — 아이콘 버튼 표시 ── */
+.folder-row:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.folder-row:hover .btn-icon {
+  opacity: 1 !important;
+}
+
+.btn-icon:hover {
+  color: var(--color-text) !important;
+}
+
 /* ── 로딩 스피너 ── */
 @keyframes spin {
   from { transform: rotate(0deg); }

@@ -2,30 +2,8 @@
 
 import { useStore } from "../store";
 import type { CalendarEvent } from "../types";
-
-async function speakViaMeloTTS(text: string): Promise<void> {
-  try {
-    const res = await fetch("/api/tts/speak", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) return;
-    const { audio } = (await res.json()) as { audio: string };
-    if (!audio) return;
-    const bin = atob(audio);
-    const buf = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-    const ctx = new AudioContext();
-    const decoded = await ctx.decodeAudioData(buf.buffer);
-    const src = ctx.createBufferSource();
-    src.buffer = decoded;
-    src.connect(ctx.destination);
-    src.start();
-  } catch {
-    // 백엔드 미연결 시 조용히 무시
-  }
-}
+import { API_BASE } from "./api";
+import { speak } from "./tts";
 
 const POLL_MS = 10 * 60 * 1000; // 10분
 const REMIND_AHEAD_MS = 10 * 60 * 1000; // 10분 전
@@ -60,7 +38,7 @@ async function checkUpcoming(): Promise<void> {
 
   let events: CalendarEvent[] = [];
   try {
-    const res = await fetch("/api/calendar/events");
+    const res = await fetch(API_BASE + "/api/calendar/events");
     if (!res.ok) return;
     events = await (res.json() as Promise<CalendarEvent[]>);
   } catch {
@@ -74,7 +52,7 @@ async function checkUpcoming(): Promise<void> {
       remindedIds.add(ev.id);
       const text = pick(REMINDER_TEMPLATES)(ev);
       useStore.getState().addMessage({ role: "ai", text });
-      void speakViaMeloTTS(text);
+      void speak(text);
     }
   }
 }

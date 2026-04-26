@@ -401,7 +401,16 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
         {chatTab === "chat" && <ChatContent />}
         {chatTab === "calendar" && <CalendarView />}
         {chatTab === "documents" && <DocumentsView />}
-        {chatTab === "meeting" && <MeetingView />}
+        {/* MeetingView 항상 마운트 — 탭 전환 시 state 보존 (E-19 연장) */}
+        <div style={{
+          display: chatTab === "meeting" ? "flex" : "none",
+          flexDirection: "column",
+          flex: 1,
+          overflow: "hidden",
+          minHeight: 0,
+        }}>
+          <MeetingView />
+        </div>
         {chatTab === "settings" && <SettingsView />}
       </div>
     </div>

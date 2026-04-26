@@ -271,7 +271,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         )
 
         # (7) 어댑터 래핑
-        self.agent_engine = BasicMemoryAgentAdapter(gemma_agent)
+        self.agent_engine = BasicMemoryAgentAdapter(gemma_agent, rag_service=self.rag_service)
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 
         # (8) config 동기화

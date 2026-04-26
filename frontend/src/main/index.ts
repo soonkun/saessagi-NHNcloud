@@ -1,5 +1,5 @@
 /* eslint-disable no-shadow */
-import { app, ipcMain, globalShortcut, desktopCapturer, screen, shell } from "electron";
+import { app, ipcMain, globalShortcut, desktopCapturer, screen, shell, dialog } from "electron";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
 import { WindowManager } from "./window-manager";
 import { MenuManager } from "./menu-manager";
@@ -78,6 +78,23 @@ function setupIPC(): void {
         window.close();
       }
     }
+  });
+
+  // electronAPI.quit() — 캐릭터 X 버튼에서 호출
+  ipcMain.on("app-quit", () => {
+    isQuitting = true;
+    app.quit();
+  });
+
+  // electronAPI.getDisplay() — CharacterWidget 위치 클램핑용
+  ipcMain.handle("get-display", () => {
+    const d = screen.getPrimaryDisplay();
+    return { width: d.workAreaSize.width, height: d.workAreaSize.height, scaleFactor: d.scaleFactor };
+  });
+
+  // electronAPI.openDevTools()
+  ipcMain.on("open-dev-tools", () => {
+    windowManager.getWindow()?.webContents.openDevTools();
   });
 
   ipcMain.on(
@@ -231,12 +248,42 @@ app.whenReady().then(() => {
   windowManager = new WindowManager();
   menuManager = new MenuManager((mode) => windowManager.setWindowMode(mode));
 
+  // electronAPI.onDisplayChanged — 디스플레이 변경 시 렌더러에 통보
+  const sendDisplayChanged = (): void => {
+    const d = screen.getPrimaryDisplay();
+    windowManager.getWindow()?.webContents.send("display-changed", {
+      width: d.workAreaSize.width,
+      height: d.workAreaSize.height,
+    });
+  };
+  screen.on("display-metrics-changed", sendDisplayChanged);
+  screen.on("display-added", sendDisplayChanged);
+  screen.on("display-removed", sendDisplayChanged);
+
   const window = windowManager.createWindow({
     titleBarOverlay: {
       color: "#111111",
       symbolColor: "#FFFFFF",
       height: 30,
     },
+  });
+
+  // 회의록 다운로드: 파일 형식에 따라 save-as 다이얼로그 표시
+  window.webContents.session.on('will-download', (_event, item) => {
+    const filename = item.getFilename() || '';
+    const isTxt = filename.toLowerCase().endsWith('.txt');
+    const defaultName = filename || (isTxt ? '파일.txt' : '회의결과보고서.hwpx');
+    const savePath = dialog.showSaveDialogSync(window, {
+      defaultPath: defaultName,
+      filters: isTxt
+        ? [{ name: '텍스트 파일', extensions: ['txt'] }]
+        : [{ name: '한글 문서', extensions: ['hwpx'] }],
+    });
+    if (savePath) {
+      item.setSavePath(savePath);
+    } else {
+      item.cancel();
+    }
   });
   menuManager.createTray();
 

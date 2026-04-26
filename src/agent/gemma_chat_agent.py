@@ -489,6 +489,39 @@ class GemmaChatAgent:
 
         return result
 
+    async def complete_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.3,
+        timeout_seconds: float = 120.0,
+    ) -> str:
+        """비스트리밍 플레인 텍스트 완성 메서드.
+
+        response_format 없이 호출 — JSON 모드 불필요한 경우에 사용.
+        NoThinkLLM이 think=False를 주입하므로 extra_body 불필요.
+        """
+        logger.info(
+            f"complete_text 호출: model={self.model}, max_tokens={max_tokens}, "
+            f"temperature={temperature}, timeout={timeout_seconds}s"
+        )
+        async with asyncio.timeout(timeout_seconds):
+            response = await self._llm.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+                stream=False,
+            )
+        content = response.choices[0].message.content or ""
+        logger.debug(f"complete_text 응답 길이: {len(content)}자")
+        return content.strip()
+
     async def aclose(self) -> None:
         """리소스 정리. openai AsyncClient를 닫는다."""
         try:

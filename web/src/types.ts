@@ -8,7 +8,8 @@ export type Emotion =
   | "thinking"
   | "sleepy"
   | "study"
-  | "worried_v2";
+  | "writing"
+  | "worried";
 
 export type AiStatus = "idle" | "thinking" | "speaking";
 
@@ -111,10 +112,17 @@ export interface CalendarEvent {
   description?: string;
 }
 
+// RAG 폴더 타입
+export interface RagFolder {
+  folder_id: string;
+  name: string;
+}
+
 // RAG 문서 타입
 export interface RagDocument {
   id: string;
   filename: string;
   chunk_count: number;
+  folder_id?: string | null;
   uploaded_at?: string;
 }

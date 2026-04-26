@@ -3,6 +3,7 @@
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -11,39 +12,170 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from .gemma_chat_agent import GemmaChatAgent
 
+# RAG를 트리거할 한국어 키워드 패턴.
+# 의문사·요청어·질문 종결어미 등 정보 탐색 의도가 명확한 표현만 포함.
+_RAG_TRIGGER_RE = re.compile(
+    r"뭐야|뭔데|뭐임|뭐지|뭐예요|뭔가요|뭐인지|뭐인가|뭐였어|뭐였나|무엇이|무엇인|뭘|뭐가|뭐를|뭔지|"
+    r"어떻게|어떡해|어떠해|어떤|어디야|어디에|어디서|어디|어딨|"
+    r"왜냐|왜요|왜지|"
+    r"누구야|누군가|누가|누굴|"
+    r"언제야|언제부터|언제까지|"
+    r"얼마야|얼마나|몇 개|몇개|몇 번|몇번|"
+    r"알려줘|알려주세요|알려줘요|"
+    r"찾아줘|찾아봐|찾아주세요|"
+    r"검색해|검색해줘|검색해봐|검색해주세요|"
+    r"가르쳐줘|가르쳐주세요|"
+    r"설명해줘|설명해|설명해주세요|"
+    r"말해줘|말해주세요|"
+    r"알아\?|알고있어|알고 있어|"
+    r"있어\?|있나\?|있니\?|있어요\?|있나요\?|있어|있나|있니|있어요|있나요|"
+    r"방법|사용법|사용방법|이용방법|양식|규정|절차|기준|서식|"
+    r"어떤거|어떤 거|어떤걸|어떤 걸"
+)
+
+# Proactive RAG 주입 시 적용할 최소 유사도 임계값.
+# RagService의 min_score(0.35)보다 높게 설정해 낮은 관련성 문서 주입을 방지.
+_MIN_INJECTION_SCORE = 0.50
+
+
+def _format_rag_context(hits: list[dict[str, Any]]) -> str:
+    """RAG 검색 결과를 LLM 주입용 텍스트로 포맷.
+
+    각 청크 텍스트에는 이미 [출처: 파일명, N페이지] 접두어가 포함되어 있으므로
+    LLM에게 파일명을 언급하도록 간단히 지시하기만 한다.
+    """
+    lines = [
+        "[관련 문서 검색 결과]\n"
+        "아래 내용을 바탕으로 답변하고, 대괄호 안의 파일명을 반드시 언급하세요."
+    ]
+    for h in hits:
+        text = (h.get("text") or "").strip()
+        if text:
+            lines.append(text)
+    return "\n\n".join(lines)
+
 
 def _make_adapter_class() -> type:
     """동적으로 BasicMemoryAgentAdapter 클래스를 생성해 mypy Any 서브클래싱 에러 우회."""
     from open_llm_vtuber.agent.agents.agent_interface import AgentInterface
-    from open_llm_vtuber.agent.input_types import BatchInput
+    from open_llm_vtuber.agent.input_types import BatchInput, TextData, TextSource
 
     from .events import AgentError, EndOfTurn, TextChunk, ToolCallResult, ToolCallStart
 
     class _BasicMemoryAgentAdapter(AgentInterface):  # type: ignore[misc]
         """upstream ConversationOrchestrator가 기대하는 AgentInterface를 GemmaChatAgent로 만족시키는 얇은 어댑터.
 
-        upstream 측은 `chat(batch) -> AsyncIterator[SentenceOutput | dict]`를 기대한다.
-        본 어댑터는 GemmaChatAgent의 AgentEvent 스트림을 **문자열 토큰 스트림**으로 평탄화해
-        upstream 데코레이터 체인(sentence_divider 등)을 프로젝트의 Orchestrator 레이어에서
-        적용할 수 있게 한다.
+        Proactive RAG: 질문·탐색 의도가 감지된 메시지에 한해 벡터 검색을 수행하고
+        유사도 임계값(_MIN_INJECTION_SCORE) 이상인 결과만 컨텍스트에 주입한다.
         """
 
-        def __init__(self, agent: "GemmaChatAgent") -> None:
+        def __init__(self, agent: "GemmaChatAgent", rag_service: Any = None) -> None:
             super().__init__()
             self._agent = agent
+            self._rag_service = rag_service  # vector_search.RagService | None
             self._pending_tasks: set[asyncio.Task[None]] = set()
+
+        @staticmethod
+        def _should_trigger_rag(text: str) -> bool:
+            """질문·검색 의도 키워드가 포함돼 있으면 True 반환.
+
+            '안녕?'처럼 단순 인사나 지시어에는 RAG를 실행하지 않도록
+            정보 탐색 의도가 명확한 표현만 검사한다.
+            """
+            return bool(_RAG_TRIGGER_RE.search(text))
+
+        async def _augment_with_rag(self, input_data: BatchInput) -> BatchInput:
+            """사용자 메시지를 RAG 결과로 증강.
+
+            - rag_service가 없거나 트리거 키워드 없으면 즉시 반환(벡터 검색 생략).
+            - 유사도 _MIN_INJECTION_SCORE 미만인 hits는 주입하지 않음.
+            - 실제 rag.retrieve() 결과만 사용 — 하드코딩 없음.
+            """
+            if self._rag_service is None:
+                return input_data
+
+            # 사용자 메시지 텍스트 추출
+            user_text = " ".join(
+                t.content
+                for t in (input_data.texts or [])
+                if t.source == TextSource.INPUT
+            ).strip()
+            if not user_text:
+                return input_data
+
+            # 트리거 키워드 없으면 RAG 생략 (벡터 검색 비용 절감)
+            if not self._should_trigger_rag(user_text):
+                logger.debug("RAG 스킵: 트리거 키워드 없음 (query=%r)", user_text[:50])
+                return input_data
+
+            try:
+                # 블로킹 IO를 executor로 분리
+                retrieval = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: self._rag_service.retrieve(user_text, 5)
+                )
+                if not retrieval.found or not retrieval.hits:
+                    logger.debug("RAG 스킵: 관련 문서 없음 (query=%r)", user_text[:50])
+                    return input_data
+
+                # _MIN_INJECTION_SCORE 이상인 hits만 주입 (낮은 유사도 문서 배제)
+                hits = [
+                    {
+                        "doc_name": getattr(h, "doc_name", None),
+                        "page": getattr(h, "page", None),
+                        "text": getattr(h, "text", ""),
+                        "score": float(getattr(h, "score", 0.0)),
+                    }
+                    for h in retrieval.hits
+                    if float(getattr(h, "score", 0.0)) >= _MIN_INJECTION_SCORE
+                ]
+                if not hits:
+                    logger.debug(
+                        "RAG 스킵: 임계값(%.2f) 이상 hits 없음 (top_score=%.3f)",
+                        _MIN_INJECTION_SCORE,
+                        float(getattr(retrieval.hits[0], "score", 0.0)) if retrieval.hits else 0.0,
+                    )
+                    return input_data
+
+                context_text = _format_rag_context(hits)
+                logger.info(
+                    "Proactive RAG: %d건 주입 (query=%r, top_score=%.3f)",
+                    len(hits),
+                    user_text[:50],
+                    hits[0]["score"],
+                )
+
+                # 컨텍스트를 사용자 메시지 앞에 TextSource.INPUT으로 삽입
+                context_td = TextData(
+                    source=TextSource.INPUT,
+                    content=context_text,
+                    from_name="문서검색",
+                )
+                new_texts = [context_td] + list(input_data.texts or [])
+                return BatchInput(
+                    texts=new_texts,
+                    images=input_data.images,
+                    metadata=input_data.metadata,
+                )
+
+            except Exception as exc:
+                logger.warning("Proactive RAG 실패 (무시): %s", exc)
+                return input_data
 
         async def chat(  # type: ignore[override]
             self, input_data: BatchInput
         ) -> AsyncIterator[Any]:
             """GemmaChatAgent.chat를 소비해 upstream SentenceOutput 스트림으로 변환.
 
+            - Proactive RAG: 트리거 키워드 감지 시 자동 검색 후 컨텍스트 주입
             - TextChunk 누적 → 전체 텍스트를 하나의 SentenceOutput으로 yield
             - ToolCallStart/Result → dict yield (upstream이 JSON으로 전송)
             - EndOfTurn → 스트림 종료
             - AgentError → 에러 텍스트를 SentenceOutput으로 yield
             """
             from open_llm_vtuber.agent.output_types import SentenceOutput, DisplayText, Actions
+
+            # Proactive RAG 적용
+            input_data = await self._augment_with_rag(input_data)
 
             text_parts: list[str] = []
 
@@ -89,7 +221,6 @@ def _make_adapter_class() -> type:
                 task.add_done_callback(self._pending_tasks.discard)
                 logger.debug(f"handle_interrupt 태스크 스케줄: {heard_response!r}")
             except RuntimeError:
-                # 이벤트 루프가 없는 경우 — upstream이 동기 환경에서 호출한 케이스
                 logger.warning(
                     "handle_interrupt: 실행 중인 이벤트 루프 없음 — upstream _inner에 직접 위임"
                 )
@@ -100,11 +231,7 @@ def _make_adapter_class() -> type:
             self._agent._inner.set_memory_from_history(conf_uid, history_uid)
 
         async def close(self) -> None:
-            """GemmaChatAgent 내부 httpx 클라이언트 종료 (누수 방지).
-
-            upstream ServiceContext.close()가 hasattr(agent_engine, "close") 가드로
-            이 메서드를 호출한다 (CR-03).
-            """
+            """GemmaChatAgent 내부 httpx 클라이언트 종료 (누수 방지)."""
             await self._agent.aclose()
 
     return _BasicMemoryAgentAdapter

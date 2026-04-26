@@ -80,7 +80,7 @@
  │  ┌────────────────────────────┐   ┌──────────────────────────────────┐  │
  │  │ Ollama (native process)    │   │ Local Filesystem (Windows)       │  │
  │  │  gemma4:e4b (8.5 GB RAM)   │   │  assets/models/ (GGUF, ONNX)     │  │
- │  │  131K context, tool calls  │   │  data/vector_store/ (LanceDB)    │  │
+ │  │  131K context, tool calls  │   │  data/vector_store/ (LanceDB, 유일한 벡터 스토어) │  │
  │  │  dev  : 192.168.219.109    │   │  data/calendar.db (SQLite)       │  │
  │  │  prod : 127.0.0.1:11434    │   │  data/chat_history/ (JSON)       │  │
  │  └────────────────────────────┘   │  data/logs/ (loguru, 7d retain)  │  │

@@ -55,6 +55,10 @@ function loadTtsVoiceName(): string {
   return localStorage.getItem("saessagi_tts_voice") || "Shelley (한국어(대한민국))";
 }
 
+function loadTtsEngine(): "melo" | "system" {
+  return localStorage.getItem("saessagi_tts_engine") === "system" ? "system" : "melo";
+}
+
 // ────────────────────────────────────────────────────────────
 // Chat Slice
 // ────────────────────────────────────────────────────────────
@@ -76,10 +80,14 @@ interface AvatarSlice {
   speaking: boolean;
   position: Position;
   charSize: number;
+  isUploading: boolean;
+  isMeetingGenerating: boolean;
   setEmotion: (emotion: Emotion) => void;
   setSpeaking: (speaking: boolean) => void;
   setPosition: (pos: Position) => void;
   setCharSize: (size: number) => void;
+  setIsUploading: (v: boolean) => void;
+  setMeetingGenerating: (v: boolean) => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -92,6 +100,7 @@ interface UiSlice {
   wsUrl: string;
   ttsRate: number;
   ttsVoiceName: string;
+  ttsEngine: "melo" | "system";
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
@@ -99,6 +108,7 @@ interface UiSlice {
   setWsUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string) => void;
+  setTtsEngine: (engine: "melo" | "system") => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -132,8 +142,12 @@ export const useStore = create<AppStore>((set) => ({
   speaking: false,
   position: loadPosition(),
   charSize: loadCharSize(),
+  isUploading: false,
+  isMeetingGenerating: false,
   setEmotion: (emotion) => set({ emotion }),
   setSpeaking: (speaking) => set({ speaking }),
+  setIsUploading: (v) => set({ isUploading: v }),
+  setMeetingGenerating: (v) => set({ isMeetingGenerating: v }),
   setPosition: (pos) => {
     try {
       localStorage.setItem("saessagi_char_pos", JSON.stringify(pos));
@@ -156,6 +170,7 @@ export const useStore = create<AppStore>((set) => ({
   wsUrl: loadWsUrl(),
   ttsRate: loadTtsRate(),
   ttsVoiceName: loadTtsVoiceName(),
+  ttsEngine: loadTtsEngine(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
@@ -175,5 +190,9 @@ export const useStore = create<AppStore>((set) => ({
   setTtsVoiceName: (name) => {
     try { localStorage.setItem("saessagi_tts_voice", name); } catch { /* ignore */ }
     set({ ttsVoiceName: name });
+  },
+  setTtsEngine: (engine) => {
+    try { localStorage.setItem("saessagi_tts_engine", engine); } catch { /* ignore */ }
+    set({ ttsEngine: engine });
   },
 }));

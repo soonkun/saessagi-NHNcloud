@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
+import { speakMeloTTS } from "../services/tts";
+import { API_BASE } from "../services/api";
 
 async function fetchModels(): Promise<string[]> {
   try {
-    const res = await fetch("/api/settings/models");
+    const res = await fetch(API_BASE + "/api/settings/models");
     if (!res.ok) return [];
     const data = (await res.json()) as { models: string[] };
     return data.models;
@@ -16,7 +18,7 @@ async function fetchModels(): Promise<string[]> {
 
 async function fetchCurrentModel(): Promise<string> {
   try {
-    const res = await fetch("/api/settings/model");
+    const res = await fetch(API_BASE + "/api/settings/model");
     if (!res.ok) return "";
     const data = (await res.json()) as { model: string };
     return data.model;
@@ -27,7 +29,7 @@ async function fetchCurrentModel(): Promise<string> {
 
 async function setModel(model: string): Promise<boolean> {
   try {
-    const res = await fetch("/api/settings/model", {
+    const res = await fetch(API_BASE + "/api/settings/model", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
@@ -66,6 +68,8 @@ export function SettingsView(): React.ReactElement {
   const setTtsRate = useStore((s) => s.setTtsRate);
   const ttsVoiceName = useStore((s) => s.ttsVoiceName);
   const setTtsVoiceName = useStore((s) => s.setTtsVoiceName);
+  const ttsEngine = useStore((s) => s.ttsEngine);
+  const setTtsEngine = useStore((s) => s.setTtsEngine);
 
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
@@ -117,7 +121,11 @@ export function SettingsView(): React.ReactElement {
   }
 
   function handleTest(): void {
-    speakLocal(SAMPLE_TEXT);
+    if (ttsEngine === "system") {
+      speakLocal(SAMPLE_TEXT);
+    } else {
+      void speakMeloTTS(SAMPLE_TEXT);
+    }
   }
 
   return (
@@ -166,26 +174,56 @@ export function SettingsView(): React.ReactElement {
       <section style={sectionStyle}>
         <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>음성 선택</h3>
 
-        <label style={labelStyle}>목소리</label>
-        <select
-          value={ttsVoiceName}
-          onChange={(e) => setTtsVoiceName(e.target.value)}
-          style={{
-            ...inputStyle,
-            cursor: "pointer",
-            appearance: "auto",
-          }}
-        >
-          <option value="">— 자동 (한국어 첫 번째) —</option>
-          {voices.map((v) => (
-            <option key={v.name} value={v.name}>
-              {v.lang.startsWith("ko") ? "🇰🇷 " : ""}{v.name}
-              {v.localService ? " (로컬)" : " (온라인)"}
-            </option>
+        {/* TTS 엔진 토글 */}
+        <label style={labelStyle}>TTS 엔진</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          {(["system", "melo"] as const).map((eng) => (
+            <button
+              key={eng}
+              onMouseDown={(e) => { e.stopPropagation(); setTtsEngine(eng); }}
+              style={{
+                flex: 1,
+                padding: "7px 10px",
+                fontSize: 12,
+                fontWeight: ttsEngine === eng ? 700 : 400,
+                background: ttsEngine === eng ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${ttsEngine === eng ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: ttsEngine === eng ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {eng === "system" ? "시스템 TTS" : "MeloTTS KR"}
+            </button>
           ))}
-        </select>
+        </div>
+        <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 16, lineHeight: 1.5 }}>
+          {ttsEngine === "system"
+            ? "macOS 시스템 음성 (유나 등) — 자연스러운 목소리"
+            : "오프라인 MeloTTS — 단일 한국어 KR 음성 (더 낮은 지연)"}
+        </p>
 
-        <div style={{ marginTop: 16 }}>
+        {/* 시스템 TTS일 때만 목소리 드롭다운 표시 */}
+        {ttsEngine === "system" && (
+          <>
+            <label style={labelStyle}>목소리</label>
+            <select
+              value={ttsVoiceName}
+              onChange={(e) => setTtsVoiceName(e.target.value)}
+              style={{ ...inputStyle, cursor: "pointer", appearance: "auto", marginBottom: 16 }}
+            >
+              <option value="">— 자동 (한국어 첫 번째) —</option>
+              {voices.map((v) => (
+                <option key={v.name} value={v.name}>
+                  {v.lang.startsWith("ko") ? "🇰🇷 " : ""}{v.name}
+                  {v.localService ? " (로컬)" : " (온라인)"}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+
+        <div style={{ marginTop: 0 }}>
           <label style={labelStyle}>
             재생 속도 / 음조 &nbsp;
             <span style={{ fontWeight: 700, color: "var(--color-accent)" }}>
