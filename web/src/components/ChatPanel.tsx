@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   MessageCircle,
   Calendar,
@@ -212,6 +214,7 @@ function ChatContent(): React.ReactElement {
             }}
           >
             <div
+              className="msg-bubble"
               style={{
                 maxWidth: "80%",
                 padding: "8px 12px",
@@ -227,10 +230,66 @@ function ChatContent(): React.ReactElement {
                 fontSize: 13,
                 lineHeight: 1.5,
                 wordBreak: "break-word",
-                whiteSpace: "pre-wrap",
               }}
             >
-              {msg.text}
+              {msg.role === "human" ? (
+                <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+              ) : (
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    p: ({ children }) => (
+                      <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{children}</p>
+                    ),
+                    table: ({ children }) => (
+                      <div style={{ overflowX: "auto", margin: "6px 0" }}>
+                        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+                          {children}
+                        </table>
+                      </div>
+                    ),
+                    th: ({ children }) => (
+                      <th style={{ border: "1px solid var(--color-border)", padding: "4px 8px", background: "var(--color-sidebar)", fontWeight: 600, textAlign: "left" }}>
+                        {children}
+                      </th>
+                    ),
+                    td: ({ children }) => (
+                      <td style={{ border: "1px solid var(--color-border)", padding: "4px 8px" }}>
+                        {children}
+                      </td>
+                    ),
+                    pre: ({ children }) => (
+                      <pre style={{ background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 12, margin: "6px 0", fontFamily: "monospace" }}>
+                        {children}
+                      </pre>
+                    ),
+                    code: ({ children }) => (
+                      <code style={{ background: "rgba(255,255,255,0.08)", borderRadius: 3, padding: "1px 4px", fontSize: 12, fontFamily: "monospace" }}>
+                        {children}
+                      </code>
+                    ),
+                    ul: ({ children }) => (
+                      <ul style={{ margin: "4px 0", paddingLeft: 18 }}>{children}</ul>
+                    ),
+                    ol: ({ children }) => (
+                      <ol style={{ margin: "4px 0", paddingLeft: 18 }}>{children}</ol>
+                    ),
+                    li: ({ children }) => (
+                      <li style={{ margin: "2px 0" }}>{children}</li>
+                    ),
+                    strong: ({ children }) => (
+                      <strong style={{ fontWeight: 700 }}>{children}</strong>
+                    ),
+                    blockquote: ({ children }) => (
+                      <blockquote style={{ borderLeft: "3px solid var(--color-accent)", margin: "6px 0", paddingLeft: 10, opacity: 0.85 }}>
+                        {children}
+                      </blockquote>
+                    ),
+                  }}
+                >
+                  {msg.text}
+                </ReactMarkdown>
+              )}
             </div>
           </div>
         ))}
