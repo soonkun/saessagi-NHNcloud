@@ -48,6 +48,10 @@ function setupIPC(): void {
     }
   });
 
+  ipcMain.on("restore-focus", () => {
+    windowManager.restoreFocus();
+  });
+
   ipcMain.on("get-current-mode", (event) => {
     event.returnValue = windowManager.getCurrentMode();
   });

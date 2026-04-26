@@ -259,6 +259,23 @@ export class WindowManager {
     }
   }
 
+  /**
+   * 파일 피커 등 네이티브 다이얼로그 이후 호출.
+   * macOS pet 모드에서 setFocusable(false)로 인해 다이얼로그 종료 시
+   * Electron 창이 key window 지위를 회복하지 못하는 문제를 해결.
+   * 300ms 동안만 focusable=true로 전환 후 복원.
+   */
+  restoreFocus(): void {
+    if (!this.window || this.currentMode !== 'pet') return;
+    this.window.setFocusable(true);
+    this.window.focus();
+    setTimeout(() => {
+      if (this.window && this.currentMode === 'pet') {
+        this.window.setFocusable(false);
+      }
+    }, 300);
+  }
+
   maximizeWindow(): void {
     if (!this.window) return;
 

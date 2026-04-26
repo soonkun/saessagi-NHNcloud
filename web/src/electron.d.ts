@@ -1,6 +1,8 @@
 interface ElectronAPI {
   readonly isElectron: true;
   setIgnoreMouseEvents(ignore: boolean): void;
+  /** 파일 피커 등 네이티브 다이얼로그 종료 후 macOS pet 모드에서 키보드 포커스 복구 */
+  restoreFocus(): void;
   getDisplay(): Promise<{ width: number; height: number; scaleFactor: number }>;
   quit(): void;
   openDevTools(): void;

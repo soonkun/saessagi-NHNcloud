@@ -24,6 +24,7 @@ const saessagiElectronApi = {
   quit: (): void => ipcRenderer.send("app-quit"),
   setIgnoreMouseEvents: (ignore: boolean): void =>
     ipcRenderer.send("set-ignore-mouse-events", ignore),
+  restoreFocus: (): void => ipcRenderer.send("restore-focus"),
   getDisplay: (): Promise<{ width: number; height: number; scaleFactor: number }> =>
     ipcRenderer.invoke("get-display"),
   openDevTools: (): void => ipcRenderer.send("open-dev-tools"),

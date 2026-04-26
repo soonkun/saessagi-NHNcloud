@@ -32,6 +32,48 @@
 
 ---
 
+## 반복 발생 사고 — 반드시 읽고 같은 실수 금지
+
+### [사고 1] web/dist 재빌드 시 흰 화면 (E-22, 2026-04-26)
+
+**무슨 일이 일어났나**: 프론트엔드 작업 중 `web/dist/`를 수동으로 `npm run build`로 재빌드했다. `ELECTRON_BUILD=1`을 빠뜨렸기 때문에 Vite가 `base: "/"` (기본값)로 빌드했고, `web/dist/index.html`의 script 경로가 `/assets/...` (절대 경로)로 생성됐다. Electron은 `file://` 프로토콜로 이 파일을 로드하므로 `/assets/...`는 파일 시스템 루트를 가리켜 JS를 찾을 수 없었고, React가 마운트되지 않아 흰 화면만 표시됐다.
+
+**올바른 web/dist 빌드 명령**:
+```bash
+cd web && ELECTRON_BUILD=1 npm run build
+```
+
+**빌드 후 검증 필수**: `web/dist/index.html`을 열어 script src가 `./assets/...` (상대 경로)인지 반드시 확인. `/assets/...` (절대 경로)면 빌드가 잘못된 것이다.
+
+**`새싹이.command`의 자동 빌드는 이미 `ELECTRON_BUILD=1`을 설정**하고 있으나, Claude Code가 수동으로 빌드할 때는 반드시 직접 설정해야 한다.
+
+---
+
+### [사고 2] window-manager.ts 수정 시 pet mode 회귀 (E-21 관련, 2026-04-26)
+
+**무슨 일이 일어났나**: click-through 버그를 수정하면서 `window-manager.ts`의 `setIgnoreMouseEvents()` 메서드 안에 `setFocusable(true)`를 추가했다. `continueSetWindowModePet()`이 명시적으로 `setFocusable(false)`를 설정하는데, `setIgnoreMouseEvents(false)` 경로에서 이를 덮어써버려 pet mode가 깨졌다.
+
+**규칙**: `window-manager.ts`를 수정하기 전에 반드시 `docs/FRONTEND_CONSTRAINTS.md`와 `docs/ERROR_HISTORY.md`를 읽을 것. `continueSetWindowModePet()`의 `setFocusable(false)`는 절대 다른 경로에서 `setFocusable(true)`로 덮어쓰면 안 된다. `setIgnoreMouseEvents` 관련 로직을 수정할 때는 pet mode 전환 흐름 전체(setWindowModePet → continueSetWindowModePet)를 먼저 추적한 뒤 손댈 것.
+
+---
+
+### [사고 3] 테스트 시 백엔드 없이 Electron만 실행 (2026-04-26)
+
+**무슨 일이 일어났나**: Electron 앱을 `cd frontend && npm run start`로 단독 실행해서 테스트했다. 백엔드(uvicorn)가 없으니 calendar·documents·LLM·TTS 모두 실패하고 시작 인사도 없었다. 앱이 고장난 것처럼 보였지만 실제로는 정상이었다.
+
+**규칙**: Electron 앱 기능 테스트 시에는 반드시 백엔드도 함께 실행해야 한다. 빠른 테스트라도 아래 순서를 지킬 것:
+```bash
+# 1. 백엔드 시작
+cd /프로젝트루트 && export SAESSAGI_ROOT="$(pwd)" && export SAESSAGI_CONFIG_PATH="$(pwd)/conf.yaml" && export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/upstream/Open-LLM-VTuber/src:$(pwd)/upstream/Open-LLM-VTuber" && uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393 &
+# 2. 백엔드 준비 확인
+until curl -sf http://127.0.0.1:12393 >/dev/null 2>&1; do sleep 1; done
+# 3. Electron 실행
+cd frontend && npm run start
+```
+또는 그냥 `새싹이.command`를 실행하면 된다.
+
+---
+
 ## 멀티에이전트 역할
 
 | 에이전트 | 모델 | 호출 시점 |

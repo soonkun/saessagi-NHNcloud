@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useStore } from "../store";
+import { speak } from "../services/tts";
 import {
   Upload,
   Trash2,
@@ -264,6 +265,7 @@ export function DocumentsView(): React.ReactElement {
     setIsUploading(true);
     setEmotion("study");
 
+    let successCount = 0;
     try {
       await Promise.all(
         arr.map(async (file, i) => {
@@ -274,6 +276,7 @@ export function DocumentsView(): React.ReactElement {
             });
             setDocs((prev) => [...prev, doc]);
             setUploads((prev) => prev.filter((_, j) => j !== idx));
+            successCount++;
           } catch (err) {
             const msg = err instanceof Error ? err.message : "업로드 실패";
             setUploads((prev) => prev.map((u, j) => (j === idx ? { ...u, progress: -1, error: msg } : u)));
@@ -283,6 +286,12 @@ export function DocumentsView(): React.ReactElement {
     } finally {
       setIsUploading(false);
       setEmotion("neutral");
+      // 파일 피커 종료 후 macOS pet 모드에서 키보드 포커스 복구
+      window.electronAPI?.restoreFocus();
+    }
+
+    if (successCount > 0) {
+      void speak("문서등록이 완료되었습니다.");
     }
   }
 
@@ -311,6 +320,8 @@ export function DocumentsView(): React.ReactElement {
   }
 
   function onFileInputChange(e: React.ChangeEvent<HTMLInputElement>): void {
+    // 파일 피커가 닫힌 직후 — macOS pet 모드에서 key window 포커스를 즉시 복구
+    window.electronAPI?.restoreFocus();
     if (e.target.files) void handleFiles(e.target.files);
     e.target.value = "";
   }

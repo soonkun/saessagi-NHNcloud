@@ -217,9 +217,27 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **날짜**: 2026-04-26  
 **증상**: 문서 탭에서 파일 업로드 후 채팅 탭으로 전환하면 메시지 입력 클릭이 바탕화면으로 통과(click-through 활성화).  
 **원인**: `clickthrough.ts`의 `evaluate()` 함수가 `elementFromPoint`로 "비대화형 영역인지" 판정하는데, React re-render·파일 선택 다이얼로그 반환 등 일시적 DOM 상태에서 패널 내부임에도 `body`/`documentElement`가 반환되어 `setIgnoreMouseEvents(true)` 호출. 이 상태에서 마우스가 이미 패널 내부에 있으면 `onMouseEnter` fast path도 발화하지 않아 복구 불가.  
-**부수 원인**: pet mode 진입 시 `setFocusable(false)` 호출 후 `setIgnoreMouseEvents(false)` 경로에서 `setFocusable(true)`를 복원하지 않아, 파일 선택 다이얼로그 등이 포커스를 가져간 후 복귀 시 키보드 입력이 불가능해질 수 있음.  
-**수정 3가지**:  
+**수정 2가지** (window-manager.ts 수정은 pet mode 회귀로 인해 적용하지 않음):  
 1. `clickthrough.ts` `evaluate()`: `setIgnoreMouseEvents(true)`를 호출하기 전 `#chat-panel`과 `#char-widget`의 bounding box를 확인 — 커서가 위젯 내부에 있으면 click-through 활성화 차단.  
 2. `ChatPanel.tsx`: `onMouseEnter`에 더해 `onMouseMove`도 `setIgnoreMouseEvents(false)` 호출 — 패널 내부에서 마우스가 움직이면 즉시 복구.  
-3. `window-manager.ts` `setIgnoreMouseEvents()`: `ignore=false` 시 `setFocusable(true)` 호출 + 중복 native 호출 방지를 위해 `lastIgnoreMouseState` 상태 추적 추가.  
 **교훈**: `elementFromPoint`는 DOM 과도기 상태에서 일시적으로 `body`를 반환할 수 있다. click-through를 활성화하기 전에 항상 bounding box로 2차 검증해야 한다. `onMouseEnter` fast path만으로는 "마우스가 이미 안에 있을 때 click-through 재활성화" 시나리오를 커버하지 못한다.
+
+---
+
+## E-22: web/dist/ 재빌드 시 ELECTRON_BUILD=1 누락으로 흰 화면 발생
+
+**날짜**: 2026-04-26  
+**증상**: 앱 실행 시 흰 화면만 표시, 새싹이 캐릭터 미표시. React가 전혀 마운트되지 않음.  
+**원인**: `web/dist/`를 `ELECTRON_BUILD=1` 없이 빌드하면 Vite의 `base`가 `"/"` (기본값)로 설정되어 HTML에 절대 경로 `/assets/index-xxx.js`가 생성됨. Electron이 `loadFile()`로 `file://` 프로토콜로 로드할 때 절대 경로는 `file:///assets/...`로 해석되어 파일이 존재하지 않음 → JavaScript 로드 실패 → 흰 화면.  
+**수정**: `ELECTRON_BUILD=1 npm run build`로 재빌드 → `base: "./"` → `./assets/index-xxx.js` 상대 경로 생성 → 정상 로드.  
+**교훈**: `web/dist/`를 수동으로 재빌드할 때는 반드시 `ELECTRON_BUILD=1` 환경변수를 설정해야 함. `새싹이.command`의 자동 빌드는 이미 설정되어 있지만, Claude Code가 수동으로 빌드할 때 누락 가능. **빌드 후 반드시 `web/dist/index.html`의 script src가 `./assets/...` (상대 경로)인지 확인할 것.**
+
+---
+
+## E-23: macOS pet 모드에서 파일 피커 이후 키보드 입력 불가
+
+**날짜**: 2026-04-26  
+**증상**: 문서 탭에서 파일 업로드(파일 선택 다이얼로그)를 마친 후 채팅 탭에서 메시지 입력이 안 됨. 클릭은 정상이지만 타이핑이 무시됨.  
+**원인**: macOS pet 모드에서 `continueSetWindowModePet()`이 `setFocusable(false)`를 설정한다. `setFocusable(false)`는 `canBecomeKeyWindow = NO`를 의미하므로, 네이티브 파일 피커(NSOpenPanel)가 닫힐 때 Electron 창이 key window 지위를 회복하지 못함. 결과적으로 키보드 이벤트가 Electron 창에 전달되지 않아 입력창이 시각적으로는 정상이지만 타이핑이 불가능해 보임.  
+**수정**: `window-manager.ts`에 `restoreFocus()` 메서드 추가. `setFocusable(true)` + `win.focus()`로 일시적으로 key window 지위를 회복한 뒤 300ms 후 `setFocusable(false)` 복원. `DocumentsView.tsx`의 `onFileInputChange`(파일 선택 직후)와 `handleFiles finally`(업로드 완료 후) 두 시점에 호출.  
+**교훈**: macOS pet 모드에서 네이티브 다이얼로그(file picker, save dialog 등)를 사용한 직후에는 반드시 `restoreFocus()`를 호출해야 한다. `setFocusable(false)` 상태에서는 다이얼로그 종료 후 창이 자동으로 key window 지위를 회복하지 못한다. `restoreFocus()`는 pet 모드에서만 동작하므로 window 모드에서의 회귀 없음.
