@@ -244,11 +244,13 @@ export function CharacterWidget({
       onMouseEnter={() => {
         setIsHovered(true);
         // rAF 대기 없이 즉시 click-through 해제 — 다른 앱에서 바로 클릭해도 통과 방지
+        // onMouseLeave에서는 setIgnoreMouseEvents(true)를 직접 호출하지 않음:
+        // 패널·캐릭터 경계 근처에서 마우스가 조금만 벗어나도 입력이 차단되는 부작용이 있음.
+        // click-through 복원은 mousemove+rAF 시스템(clickthrough.ts)이 담당.
         clickthroughHandle.current?.setInteractive(true);
       }}
       onMouseLeave={() => {
         setIsHovered(false);
-        clickthroughHandle.current?.setInteractive(false);
       }}
       style={{
         position: "fixed",

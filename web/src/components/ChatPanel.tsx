@@ -325,7 +325,6 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
     <div
       id="chat-panel"
       onMouseEnter={() => window.electronAPI?.setIgnoreMouseEvents(false)}
-      onMouseLeave={() => window.electronAPI?.setIgnoreMouseEvents(true)}
       style={{
         ...panelStyle,
         zIndex: 999,
