@@ -262,10 +262,6 @@ export class WindowManager {
       this.window.setIgnoreMouseEvents(true, { forward: true });
     } else {
       this.window.setIgnoreMouseEvents(false);
-      // Pet mode starts with setFocusable(false). Restore it when the window
-      // becomes interactive so that text inputs can receive keyboard focus after
-      // native dialogs (e.g. file picker) return focus elsewhere.
-      this.window.setFocusable(true);
     }
   }
 
