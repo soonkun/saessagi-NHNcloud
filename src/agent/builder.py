@@ -7,7 +7,7 @@ from typing import Any
 from open_llm_vtuber.mcpp.tool_executor import ToolExecutor
 from open_llm_vtuber.mcpp.tool_manager import ToolManager
 
-from src.app.config import AppConfig, OllamaConfig
+from src.app.config import AppConfig, LlmProviderKind, OllamaConfig
 
 from .errors import AgentInitError, AgentBackendError  # noqa: F401
 from .gemma_chat_agent import GemmaChatAgent
@@ -26,25 +26,30 @@ async def build_chat_agent(
 ) -> GemmaChatAgent:
     """AppConfig.agent 서브스키마를 읽어 GemmaChatAgent를 생성한다.
 
-    - ollama_config.base_url은 M_01이 enforce_private_url로 이미 검증된 상태여야 함.
-    - use_mcpp는 (tool_manager is not None and tool_executor is not None)로 결정.
-    - faster_first_response는 app_config.agent.faster_first_response(기본 True).
-    - extra_tool_specs: MCP 외 추가 tool 스키마 목록(OpenAI format). 기본 None.
-
-    Raises:
-        AgentInitError | AgentBackendError: GemmaChatAgent.create()와 동일.
+    llm_provider에 따라 Ollama(로컬) 또는 외부 API(OpenAI 등)를 선택한다.
+    - Ollama: enforce_private_url 검증 + Ollama 헬스체크 수행.
+    - 외부: URL 검증·헬스체크 건너뜀, api_key 전달.
     """
     agent_cfg = app_config.agent
     use_mcpp = tool_manager is not None and tool_executor is not None
 
-    logger.info(
-        f"build_chat_agent: model={ollama_config.model}, "
-        f"base_url={ollama_config.base_url}, use_mcpp={use_mcpp}"
-    )
+    if app_config.llm_provider == LlmProviderKind.OPENAI:
+        openai_cfg = app_config.openai
+        base_url = "https://api.openai.com/v1"
+        model = openai_cfg.model
+        api_key = openai_cfg.api_key
+        is_external = True
+        logger.info(f"build_chat_agent: provider=openai, model={model}, use_mcpp={use_mcpp}")
+    else:
+        base_url = ollama_config.base_url
+        model = ollama_config.model
+        api_key = "z"
+        is_external = False
+        logger.info(f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, use_mcpp={use_mcpp}")
 
     return await GemmaChatAgent.create(
-        base_url=ollama_config.base_url,
-        model=ollama_config.model,
+        base_url=base_url,
+        model=model,
         system_prompt=system_prompt,
         tool_manager=tool_manager,
         tool_executor=tool_executor,
@@ -55,4 +60,6 @@ async def build_chat_agent(
         use_mcpp=use_mcpp,
         extra_tool_specs=extra_tool_specs,
         tts_preprocessor_config=tts_preprocessor_config,
+        llm_api_key=api_key,
+        is_external=is_external,
     )

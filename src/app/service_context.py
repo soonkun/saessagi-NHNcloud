@@ -363,6 +363,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     template_path=meeting_template_path,
                     temp_dir=meeting_temp_dir,
                     download_base_url=download_base_url,
+                    custom_system_prompt=self.app_config.meeting_minutes_prompt if self.app_config else "",
                 )
                 logger.info("MeetingMinutesService 초기화 완료 (agent=None, init_agent에서 배선)")
 

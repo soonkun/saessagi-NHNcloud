@@ -71,11 +71,25 @@ class HardwareProfile(str, Enum):
     RECOMMENDED = "recommended"
 
 
+class LlmProviderKind(str, Enum):
+    """LLM 공급자 선택."""
+
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+
+
 class OllamaConfig(BaseModel):
     base_url: str = Field(default="http://127.0.0.1:11434")
     model: str = Field(default="gemma4:e4b")
     keep_alive_seconds: int = Field(default=300)
     request_timeout_seconds: int = Field(default=120)
+
+
+class OpenAISubConfig(BaseModel):
+    """OpenAI API 설정 (테스트용 외부 API)."""
+
+    api_key: str = Field(default="")
+    model: str = Field(default="gpt-4o-mini")
 
 
 class PathsConfig(BaseModel):
@@ -162,7 +176,9 @@ class AppConfig(BaseModel):
     """
 
     profile: HardwareProfile = Field(default=HardwareProfile.MIN)
+    llm_provider: LlmProviderKind = Field(default=LlmProviderKind.OLLAMA)
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    openai: OpenAISubConfig = Field(default_factory=OpenAISubConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
@@ -182,6 +198,10 @@ class AppConfig(BaseModel):
     meeting_template_path: str = Field(
         default="data/Template/회의 결과보고 템플릿.hwpx",
         description="HWPX 회의록 템플릿 파일 경로.",
+    )
+    meeting_minutes_prompt: str = Field(
+        default="",
+        description="회의록 생성 시스템 프롬프트. 빈 문자열이면 기본값(prompts.py SYSTEM_PROMPT) 사용.",
     )
 
     @field_validator("morning_briefing_time", mode="before")

@@ -204,9 +204,11 @@ class MeetingDraftGenerator:
         agent: _ChatAgentLike,
         *,
         max_retries: int = 1,
+        custom_system_prompt: str = "",
     ) -> None:
         self._agent = agent
         self._max_retries = max_retries
+        self._custom_system_prompt = custom_system_prompt
         self._validator = Draft202012Validator(MEETING_DRAFT_SCHEMA)
 
     async def _summarize_chunk(self, chunk: str, idx: int, total: int) -> str:
@@ -358,6 +360,7 @@ class MeetingDraftGenerator:
             today_date=today,
         )
 
+        effective_system_prompt = self._custom_system_prompt.strip() or SYSTEM_PROMPT
         last_error: str = ""
         raw: dict[str, Any] | None = None
 
@@ -372,7 +375,7 @@ class MeetingDraftGenerator:
 
             try:
                 raw = await self._agent.complete_json(
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=effective_system_prompt,
                     user_prompt=attempt_user_prompt,
                     json_schema=MEETING_DRAFT_SCHEMA,
                     max_tokens=4096,

@@ -330,6 +330,7 @@ function ChatContent(): React.ReactElement {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onClick={() => window.electronAPI?.restoreFocus()}
           placeholder="메시지를 입력하세요..."
           style={{
             flex: 1,

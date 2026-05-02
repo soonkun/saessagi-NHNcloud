@@ -5,6 +5,40 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-25: OpenAI 설정 후 대화가 여전히 Ollama로 가는 문제 (2026-05-02)
+
+**증상**: 설정에서 ChatGPT(OpenAI)로 전환·저장했는데 응답이 달라지지 않음.  
+**원인**: 3단계 버그 복합.  
+1. `gemma_chat_agent.py::_validate_params()`에서 `enforce_private_url()` 호출 — OpenAI URL(`https://api.openai.com/v1`)이 사설망이 아니므로 `AgentInitError` 발생, agent 재초기화 실패.  
+2. `gemma_chat_agent.py::create()`에서 Ollama 헬스체크(`probe_ollama()`) 무조건 수행 — OpenAI엔 `/api/version`, `/api/tags` 엔드포인트가 없어 `AgentBackendError` 발생.  
+3. `builder.py::build_chat_agent()`가 항상 `ollama_config.base_url/model`만 사용 — `app_config.llm_provider`를 무시하고 Ollama로 고정.  
+**수정**:  
+- `_validate_params()`에 `is_external: bool` 파라미터 추가 — True이면 `enforce_private_url` 건너뜀.  
+- `create()`에 `is_external: bool` 파라미터 추가 — True이면 Ollama 헬스체크 건너뜀.  
+- `__init__()`에 `llm_api_key: str`, `is_external: bool` 추가 — external이면 `NoThinkLLM` 대신 `AsyncLLM`에 api_key 전달.  
+- `builder.py`: `app_config.llm_provider == LlmProviderKind.OPENAI`일 때 OpenAI base_url/model/api_key + `is_external=True` 사용.  
+**교훈**: 새 LLM 공급자를 추가할 때는 반드시 (1) URL 화이트리스트 검증, (2) 헬스체크, (3) LLM 인스턴스 생성 세 곳 모두를 확인해야 한다. `build_chat_agent()`는 `ollama_config`만 받는 것처럼 보이지만 실제로는 `app_config.llm_provider`를 먼저 확인해야 한다.
+
+---
+
+## E-26: OpenAI API 호출 시 "Invalid project ID 'z'" 400 오류 (2026-05-02)
+
+**증상**: OpenAI 설정 후 대화 시 `Error code: 400 — Invalid project ID 'z'` 오류.  
+**원인**: upstream `AsyncLLM.__init__`의 `organization_id`와 `project_id` 기본값이 `"z"`. Ollama는 이 값을 무시하지만, 공식 OpenAI API는 `project="z"`를 HTTP 헤더로 전송하면 "Invalid project ID" 400 에러를 반환한다.  
+**수정**: `gemma_chat_agent.py::__init__`에서 `is_external=True`일 때 `OpenAICompatibleAsyncLLM`을 생성 시 `organization_id=None, project_id=None`을 명시적으로 전달.  
+**교훈**: upstream `AsyncLLM`의 `organization_id="z"` / `project_id="z"` 기본값은 Ollama 전용 더미값이다. 공식 OpenAI API / 기타 외부 API 사용 시 반드시 `None`으로 재설정해야 한다.
+
+---
+
+## E-27: 백엔드 재시작 후 메시지 입력창 키보드 입력 불가 (2026-05-02)
+
+**증상**: `새싹이.command`로 백엔드를 재시작한 후 채팅 메시지 입력창을 클릭해도 키보드 입력이 안 됨. 클릭·탭 전환 등 마우스 동작은 정상.  
+**원인**: E-23과 동일한 macOS pet 모드 `setFocusable(false)` 문제. `새싹이.command`(터미널)가 실행되는 동안 터미널이 키보드 포커스(key window 지위)를 가져간다. 터미널이 닫히거나 백그라운드로 가도 Electron 창은 `setFocusable(false)` 상태이므로 key window 지위를 회복하지 못해 키보드 이벤트가 전달되지 않는다.  
+**수정**: `ChatPanel.tsx` 메시지 입력창(`<input>`)에 `onClick={() => window.electronAPI?.restoreFocus()}` 추가. 클릭 시 일시적으로 `setFocusable(true)` + `win.focus()`를 호출해 key window 지위를 회복하고, 300ms 후 `setFocusable(false)` 복원.  
+**교훈**: macOS pet 모드에서 외부 창(터미널, 다이얼로그 등)이 포커스를 가져간 후 Electron 창으로 돌아올 때는 항상 `restoreFocus()` 호출이 필요하다. 파일 피커뿐 아니라 터미널 실행 후에도 동일한 문제가 발생한다. 채팅 입력창처럼 자주 사용하는 UI 요소에는 `onClick`으로 `restoreFocus()`를 미리 걸어두는 것이 좋다.
+
+---
+
 ## E-01: dragLock이 바탕화면을 완전히 차단하는 문제
 
 **날짜**: 2026-04-25  

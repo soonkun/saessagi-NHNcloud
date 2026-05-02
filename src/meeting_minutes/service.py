@@ -34,10 +34,11 @@ class MeetingMinutesService:
         temp_dir: Path,  # data/temp/
         download_base_url: str,  # 'http://127.0.0.1:12393'
         *,
+        custom_system_prompt: str = "",
         ttl_hours: int = 24,
         clock: Callable[[], datetime] = lambda: datetime.now(tz=timezone.utc),
     ) -> None:
-        self._generator = MeetingDraftGenerator(agent)
+        self._generator = MeetingDraftGenerator(agent, custom_system_prompt=custom_system_prompt)
         self._writer = HwpxWriter(template_path)
         self._temp_dir = temp_dir
         self._download_base_url = download_base_url.rstrip("/")
@@ -160,6 +161,17 @@ class MeetingMinutesService:
         if agent is None:
             raise ValueError("agent must not be None")
         self._generator._agent = agent
+
+    def set_custom_prompt(self, prompt: str) -> None:
+        """회의록 생성 시스템 프롬프트를 런타임에 교체한다.
+
+        빈 문자열 전달 시 기본 SYSTEM_PROMPT로 복원.
+        """
+        self._generator._custom_system_prompt = prompt
+        logger.info(
+            f"회의록 커스텀 프롬프트 {'설정' if prompt.strip() else '기본값으로 초기화'} "
+            f"(길이={len(prompt)})"
+        )
 
     async def aclose(self) -> None:
         """AppServiceContext.close 정리 훅. 임시 파일은 보존(다음 기동의 cleanup가 처리)."""

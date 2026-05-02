@@ -5,7 +5,9 @@ import { speakLocal } from "../services/speech";
 import { speakMeloTTS } from "../services/tts";
 import { API_BASE } from "../services/api";
 
-async function fetchModels(): Promise<string[]> {
+// ── Ollama ────────────────────────────────────────────────────────────────────
+
+async function fetchOllamaModels(): Promise<string[]> {
   try {
     const res = await fetch(API_BASE + "/api/settings/models");
     if (!res.ok) return [];
@@ -16,23 +18,30 @@ async function fetchModels(): Promise<string[]> {
   }
 }
 
-async function fetchCurrentModel(): Promise<string> {
+// ── Meeting prompt ───────────────────────────────────────────────────────────
+
+interface MeetingPromptState {
+  prompt: string;
+  is_custom: boolean;
+  default_prompt: string;
+}
+
+async function fetchMeetingPrompt(): Promise<MeetingPromptState | null> {
   try {
-    const res = await fetch(API_BASE + "/api/settings/model");
-    if (!res.ok) return "";
-    const data = (await res.json()) as { model: string };
-    return data.model;
+    const res = await fetch(API_BASE + "/api/settings/meeting-prompt");
+    if (!res.ok) return null;
+    return (await res.json()) as MeetingPromptState;
   } catch {
-    return "";
+    return null;
   }
 }
 
-async function setModel(model: string): Promise<boolean> {
+async function saveMeetingPrompt(prompt: string): Promise<boolean> {
   try {
-    const res = await fetch(API_BASE + "/api/settings/model", {
+    const res = await fetch(API_BASE + "/api/settings/meeting-prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ prompt }),
     });
     return res.ok;
   } catch {
@@ -40,7 +49,63 @@ async function setModel(model: string): Promise<boolean> {
   }
 }
 
+// ── LLM provider ─────────────────────────────────────────────────────────────
+
+interface LlmProviderState {
+  provider: "ollama" | "openai";
+  openai_api_key_set: boolean;
+  openai_model: string;
+  ollama_model: string;
+}
+
+async function fetchLlmProvider(): Promise<LlmProviderState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/llm-provider");
+    if (!res.ok) return null;
+    return (await res.json()) as LlmProviderState;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSetLlmProvider(body: {
+  provider: string;
+  openai_api_key?: string;
+  openai_model?: string;
+  ollama_model?: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/llm-provider", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── Styles ────────────────────────────────────────────────────────────────────
+
 const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부탁드려요!";
+
+const OPENAI_MODELS = [
+  // 최신 (2025)
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  // o시리즈 추론 모델
+  "o4-mini",
+  "o3-mini",
+  "o1",
+  // 4o 시리즈
+  "gpt-4o",
+  "gpt-4o-mini",
+  // 구형
+  "gpt-4-turbo",
+  "gpt-3.5-turbo",
+];
 
 const inputStyle: React.CSSProperties = {
   background: "var(--color-bg)",
@@ -61,6 +126,8 @@ const labelStyle: React.CSSProperties = {
   display: "block",
 };
 
+// ── Component ─────────────────────────────────────────────────────────────────
+
 export function SettingsView(): React.ReactElement {
   const wsUrl = useStore((s) => s.wsUrl);
   const setWsUrl = useStore((s) => s.setWsUrl);
@@ -75,25 +142,84 @@ export function SettingsView(): React.ReactElement {
   const [saved, setSaved] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
-  const [models, setModels] = useState<string[]>([]);
-  const [currentModel, setCurrentModel] = useState("");
-  const [modelSaving, setModelSaving] = useState(false);
-  const [modelSaved, setModelSaved] = useState(false);
+  // 회의록 프롬프트 상태
+  const [meetingPrompt, setMeetingPrompt] = useState("");
+  const [meetingPromptDefault, setMeetingPromptDefault] = useState("");
+  const [isCustomPrompt, setIsCustomPrompt] = useState(false);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptSaved, setPromptSaved] = useState(false);
 
-  // 모델 목록 로드
+  // LLM 공급자 상태
+  const [llmProvider, setLlmProvider] = useState<"ollama" | "openai">("ollama");
+  const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [ollamaModel, setOllamaModel] = useState("");
+  const [openaiModel, setOpenaiModel] = useState("gpt-4o-mini");
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [openaiKeyPlaceholder, setOpenaiKeyPlaceholder] = useState("sk-...");
+  const [llmSaving, setLlmSaving] = useState(false);
+  const [llmSaved, setLlmSaved] = useState(false);
+
+  // 회의록 프롬프트 초기 로드
   useEffect(() => {
-    void fetchModels().then(setModels);
-    void fetchCurrentModel().then((m) => { if (m) setCurrentModel(m); });
+    void fetchMeetingPrompt().then((s) => {
+      if (!s) return;
+      setMeetingPrompt(s.prompt);
+      setMeetingPromptDefault(s.default_prompt);
+      setIsCustomPrompt(s.is_custom);
+    });
   }, []);
 
-  async function handleModelSave(): Promise<void> {
-    if (!currentModel || modelSaving) return;
-    setModelSaving(true);
-    const ok = await setModel(currentModel);
-    setModelSaving(false);
+  async function handlePromptSave(): Promise<void> {
+    if (promptSaving) return;
+    setPromptSaving(true);
+    const ok = await saveMeetingPrompt(meetingPrompt);
+    setPromptSaving(false);
     if (ok) {
-      setModelSaved(true);
-      setTimeout(() => setModelSaved(false), 2500);
+      setIsCustomPrompt(meetingPrompt.trim() !== meetingPromptDefault.trim());
+      setPromptSaved(true);
+      setTimeout(() => setPromptSaved(false), 2500);
+    }
+  }
+
+  function handlePromptReset(): void {
+    setMeetingPrompt(meetingPromptDefault);
+  }
+
+  // 초기 로드
+  useEffect(() => {
+    void fetchLlmProvider().then((s) => {
+      if (!s) return;
+      setLlmProvider(s.provider === "openai" ? "openai" : "ollama");
+      setOllamaModel(s.ollama_model);
+      setOpenaiModel(s.openai_model);
+      if (s.openai_api_key_set) setOpenaiKeyPlaceholder("••••••••••••••••");
+    });
+    void fetchOllamaModels().then(setOllamaModels);
+  }, []);
+
+  async function handleLlmSave(): Promise<void> {
+    if (llmSaving) return;
+    setLlmSaving(true);
+    const body =
+      llmProvider === "openai"
+        ? {
+            provider: "openai",
+            openai_api_key: openaiKey || undefined,
+            openai_model: openaiModel,
+          }
+        : {
+            provider: "ollama",
+            ollama_model: ollamaModel,
+          };
+    const ok = await apiSetLlmProvider(body);
+    setLlmSaving(false);
+    if (ok) {
+      setLlmSaved(true);
+      if (openaiKey) {
+        setOpenaiKey("");
+        setOpenaiKeyPlaceholder("••••••••••••••••");
+      }
+      setTimeout(() => setLlmSaved(false), 2500);
     }
   }
 
@@ -101,7 +227,6 @@ export function SettingsView(): React.ReactElement {
   useEffect(() => {
     function load() {
       const all = window.speechSynthesis?.getVoices() ?? [];
-      // 한국어 음성 우선, 나머지는 뒤에
       const ko = all.filter((v) => v.lang.startsWith("ko"));
       const rest = all.filter((v) => !v.lang.startsWith("ko"));
       setVoices([...ko, ...rest]);
@@ -128,45 +253,118 @@ export function SettingsView(): React.ReactElement {
     }
   }
 
+  const providerBtnStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: "8px 10px",
+    fontSize: 13,
+    fontWeight: active ? 700 : 400,
+    background: active ? "var(--color-accent)" : "transparent",
+    border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
+    borderRadius: 8,
+    color: active ? "#fff" : "var(--color-text)",
+    cursor: "pointer",
+  });
+
   return (
     <div style={{ padding: 24, maxWidth: 480, overflowY: "auto", height: "100%" }}>
       <h2 style={{ fontWeight: 700, fontSize: 18, marginBottom: 24 }}>설정</h2>
 
-      {/* ── LLM 모델 선택 ── */}
+      {/* ── LLM 공급자 선택 ── */}
       <section style={sectionStyle}>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>LLM 모델</h3>
-        <label style={labelStyle}>Ollama 모델</label>
-        <select
-          value={currentModel}
-          onChange={(e) => setCurrentModel(e.target.value)}
-          style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
-          disabled={models.length === 0}
-        >
-          {models.length === 0 ? (
-            <option value="">모델 목록 로딩 중...</option>
-          ) : (
-            models.map((m) => (
-              <option key={m} value={m}>{m}</option>
-            ))
-          )}
-        </select>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>LLM 설정</h3>
+
+        {/* 공급자 토글 */}
+        <label style={labelStyle}>LLM 공급자</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <button
+            onMouseDown={(e) => { e.stopPropagation(); setLlmProvider("ollama"); }}
+            style={providerBtnStyle(llmProvider === "ollama")}
+          >
+            Ollama (로컬)
+          </button>
+          <button
+            onMouseDown={(e) => { e.stopPropagation(); setLlmProvider("openai"); }}
+            style={providerBtnStyle(llmProvider === "openai")}
+          >
+            ChatGPT (OpenAI)
+          </button>
+        </div>
+
+        {llmProvider === "ollama" ? (
+          <>
+            <label style={labelStyle}>Ollama 모델</label>
+            <select
+              value={ollamaModel}
+              onChange={(e) => setOllamaModel(e.target.value)}
+              style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
+              disabled={ollamaModels.length === 0}
+            >
+              {ollamaModels.length === 0 ? (
+                <option value="">모델 목록 로딩 중...</option>
+              ) : (
+                ollamaModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))
+              )}
+            </select>
+            <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+              로컬 Ollama 서버의 모델을 사용합니다. 완전 오프라인 동작.
+            </p>
+          </>
+        ) : (
+          <>
+            <label style={labelStyle}>OpenAI API 키</label>
+            <input
+              type="text"
+              value={openaiKey}
+              onChange={(e) => setOpenaiKey(e.target.value)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onCopy={(e) => e.preventDefault()}
+              onCut={(e) => e.preventDefault()}
+              placeholder={openaiKeyPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+              style={{
+                ...inputStyle,
+                marginBottom: 10,
+                userSelect: "none",
+              } as React.CSSProperties}
+              // type="text"이지만 CSS로 시각적 마스킹 — Electron password 입력 호환 문제 우회
+              ref={(el) => { if (el) el.style.setProperty("-webkit-text-security", "disc"); }}
+            />
+            <label style={labelStyle}>GPT 모델</label>
+            <select
+              value={openaiModel}
+              onChange={(e) => setOpenaiModel(e.target.value)}
+              style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
+            >
+              {OPENAI_MODELS.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+            <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+              OpenAI API를 통해 ChatGPT 모델을 사용합니다. API 키가 필요하며 인터넷 연결이 있어야 합니다.
+            </p>
+          </>
+        )}
+
         <button
-          onClick={() => { void handleModelSave(); }}
-          disabled={modelSaving || !currentModel}
+          onClick={() => { void handleLlmSave(); }}
+          disabled={llmSaving}
           style={{
             marginTop: 10,
-            background: modelSaved ? "var(--color-accent)" : "transparent",
+            background: llmSaved ? "var(--color-accent)" : "transparent",
             border: "1px solid var(--color-border)",
             borderRadius: 8,
             color: "var(--color-text)",
-            cursor: modelSaving ? "not-allowed" : "pointer",
+            cursor: llmSaving ? "not-allowed" : "pointer",
             padding: "7px 16px",
             fontSize: 13,
             width: "100%",
-            opacity: modelSaving ? 0.6 : 1,
+            opacity: llmSaving ? 0.6 : 1,
           }}
         >
-          {modelSaving ? "전환 중..." : modelSaved ? "전환 완료 ✓" : "모델 전환 (백엔드 재초기화)"}
+          {llmSaving ? "전환 중..." : llmSaved ? "전환 완료 ✓" : "LLM 적용 (백엔드 재초기화)"}
         </button>
       </section>
 
@@ -306,13 +504,73 @@ export function SettingsView(): React.ReactElement {
         </button>
       </section>
 
+      {/* ── 회의록 작성 지침 ── */}
+      <section style={sectionStyle}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>회의록 작성 지침</h3>
+        <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 10, lineHeight: 1.5 }}>
+          회의록 생성 시 LLM에 전달되는 지침입니다. 직접 편집하거나 기본값으로 초기화할 수 있습니다.
+          {isCustomPrompt && (
+            <span style={{ marginLeft: 6, color: "var(--color-accent)", fontWeight: 600 }}>
+              (커스텀 적용 중)
+            </span>
+          )}
+        </p>
+        <textarea
+          value={meetingPrompt}
+          onChange={(e) => setMeetingPrompt(e.target.value)}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => window.electronAPI?.restoreFocus()}
+          rows={18}
+          style={{
+            ...inputStyle,
+            resize: "vertical",
+            fontFamily: "monospace",
+            fontSize: 11,
+            lineHeight: 1.55,
+            whiteSpace: "pre",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button
+            onClick={handlePromptReset}
+            style={{
+              flex: 1,
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: "var(--color-text-muted)",
+              cursor: "pointer",
+              padding: "7px 10px",
+              fontSize: 12,
+            }}
+          >
+            기본값으로 초기화
+          </button>
+          <button
+            onClick={() => { void handlePromptSave(); }}
+            disabled={promptSaving}
+            style={{
+              flex: 2,
+              background: promptSaved ? "var(--color-accent)" : "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: promptSaved ? "#fff" : "var(--color-text)",
+              cursor: promptSaving ? "not-allowed" : "pointer",
+              padding: "7px 10px",
+              fontSize: 12,
+              opacity: promptSaving ? 0.6 : 1,
+            }}
+          >
+            {promptSaving ? "저장 중..." : promptSaved ? "저장됨 ✓" : "지침 저장"}
+          </button>
+        </div>
+      </section>
+
       {/* ── 정보 ── */}
       <section style={{ ...sectionStyle, marginBottom: 24 }}>
         <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>정보</h3>
         <p style={{ fontSize: 13, color: "var(--color-text-muted)", lineHeight: 1.7 }}>
           새싹이 AI 비서 v1.0.0
-          <br />
-          오프라인 환경 전용 — 외부 CDN 미사용
         </p>
       </section>
     </div>

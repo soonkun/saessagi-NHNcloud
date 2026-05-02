@@ -49,6 +49,7 @@ def _validate_params(
     use_mcpp: bool,
     tool_manager: ToolManager | None,
     tool_executor: ToolExecutor | None,
+    is_external: bool = False,
 ) -> None:
     """파라미터 검증. 실패 시 AgentInitError 발생."""
     if not base_url:
@@ -66,15 +67,16 @@ def _validate_params(
         logger.error(f"base_url scheme 오류: {parsed.scheme}")
         raise AgentInitError("scheme must be http/https")
 
-    # 외부 네트워크 호출 금지: loopback/RFC1918 검증
-    from src.app.url_guard import enforce_private_url
-    from src.app.errors import PrivacyViolationError
+    # 외부 공급자(OpenAI 등)는 URL 화이트리스트 검사 면제
+    if not is_external:
+        from src.app.url_guard import enforce_private_url
+        from src.app.errors import PrivacyViolationError
 
-    try:
-        enforce_private_url(base_url, field_name="agent.base_url")
-    except PrivacyViolationError as e:
-        logger.error(f"base_url 화이트리스트 위반: {e}")
-        raise AgentInitError("base_url must be loopback or private IP") from e
+        try:
+            enforce_private_url(base_url, field_name="agent.base_url")
+        except PrivacyViolationError as e:
+            logger.error(f"base_url 화이트리스트 위반: {e}")
+            raise AgentInitError("base_url must be loopback or private IP") from e
 
     if not (0.0 <= temperature <= 2.0):
         logger.error(f"temperature 범위 오류: {temperature}")
@@ -132,6 +134,8 @@ class GemmaChatAgent:
         use_mcpp: bool,
         extra_tool_specs: list[dict[str, Any]] | None = None,
         tts_preprocessor_config: Any | None = None,
+        llm_api_key: str = "z",
+        is_external: bool = False,
     ) -> None:
         """필드만 초기화. 직접 호출 금지 — create() classmethod를 사용하라.
 
@@ -146,12 +150,24 @@ class GemmaChatAgent:
 
         openai_url = _normalize_openai_url(base_url)
 
-        # NoThinkLLM: Ollama extended-thinking 비활성화 (gemma4:e2b/e4b 성능 개선)
-        self._llm = NoThinkLLM(
-            model=model,
-            base_url=openai_url,
-            temperature=temperature,
-        )
+        if is_external:
+            # 외부 API(OpenAI 등): NoThinkLLM 패치 없이 순수 AsyncLLM 사용.
+            # organization_id/project_id를 None으로 명시 — 기본값 "z"는 OpenAI API가 400으로 거부.
+            self._llm = OpenAICompatibleAsyncLLM(
+                model=model,
+                base_url=openai_url,
+                llm_api_key=llm_api_key,
+                organization_id=None,  # type: ignore[arg-type]
+                project_id=None,  # type: ignore[arg-type]
+                temperature=temperature,
+            )
+        else:
+            # Ollama: NoThinkLLM으로 extended-thinking 비활성화 (gemma4:e2b/e4b 성능 개선)
+            self._llm = NoThinkLLM(
+                model=model,
+                base_url=openai_url,
+                temperature=temperature,
+            )
 
         # upstream BasicMemoryAgent 인스턴스 생성 (컴포지션)
         self._inner = BasicMemoryAgent(
@@ -208,38 +224,14 @@ class GemmaChatAgent:
         use_mcpp: bool = True,
         extra_tool_specs: list[dict[str, Any]] | None = None,
         tts_preprocessor_config: Any | None = None,
+        llm_api_key: str = "z",
+        is_external: bool = False,
     ) -> "GemmaChatAgent":
         """GemmaChatAgent를 생성하는 공식 비동기 팩토리 메서드.
 
-        파라미터 검증 후 Ollama 헬스체크(최대 3회 재시도)를 수행하고 인스턴스를 생성한다.
-
-        Args:
-            base_url: Ollama OpenAI-호환 엔드포인트 루트. 예: "http://127.0.0.1:11434/v1".
-                     `/v1` suffix가 없으면 자동 추가한다(OpenAI SDK 요구).
-            model: Ollama 모델 태그. 기본 "gemma4:e4b".
-            system_prompt: 시스템 프롬프트(페르소나 포함, 이미 완성된 문자열).
-            tool_manager: M_05b가 빌드한 upstream-호환 ToolManager. `use_mcpp=True`면 필수.
-            tool_executor: M_05b가 빌드한 upstream-호환 ToolExecutor. `use_mcpp=True`면 필수.
-            temperature: 0.0~2.0.
-            max_context_tokens: V1은 선언값. 실제 트리밍은 미구현(Out-of-Scope).
-            faster_first_response: upstream `BasicMemoryAgent`에 전달. True 고정 권장(R-01).
-            interrupt_method: upstream 기본 "user".
-            use_mcpp: True면 네이티브 tool calling 활성. False면 단순 스트리밍.
-            extra_tool_specs: MCP 외 추가 tool 스키마 목록(OpenAI format). 기본 None.
-                MCP 툴과 이름이 겹치면 AgentInitError 발생(FAIL-fast).
-
-        Raises:
-            AgentInitError:
-              - base_url이 비어 있음, 스킴이 http/https 외, 포트 범위 밖
-              - temperature가 0.0~2.0 밖
-              - max_context_tokens <= 0
-              - `use_mcpp=True`인데 tool_manager 또는 tool_executor 중 하나라도 None
-              - system_prompt가 None (빈 문자열은 허용)
-            AgentBackendError:
-              - Ollama 헬스체크 3회 재시도(0.5s, 1.0s, 2.0s) 모두 실패
-              - `model`이 `/api/tags` 응답의 모델 목록에 없음
+        is_external=True이면 URL 화이트리스트 검증과 Ollama 헬스체크를 건너뛴다.
+        OpenAI 같은 외부 공급자 사용 시 설정.
         """
-        # 파라미터 검증 (CancelledError 전파 전에 수행)
         _validate_params(
             base_url=base_url,
             temperature=temperature,
@@ -248,12 +240,15 @@ class GemmaChatAgent:
             use_mcpp=use_mcpp,
             tool_manager=tool_manager,
             tool_executor=tool_executor,
+            is_external=is_external,
         )
 
-        # 헬스체크 (3회 재시도, 0.5/1.0/2.0s sleep)
-        # CancelledError는 그대로 전파된다
-        health = await cls._run_health_check_with_retry(base_url, model)
-        cls._validate_health(health, model)
+        if not is_external:
+            # Ollama 헬스체크 (3회 재시도, 0.5/1.0/2.0s sleep)
+            health = await cls._run_health_check_with_retry(base_url, model)
+            cls._validate_health(health, model)
+        else:
+            logger.info(f"외부 LLM 공급자 — Ollama 헬스체크 건너뜀: model={model}")
 
         return cls(
             base_url=base_url,
@@ -268,6 +263,8 @@ class GemmaChatAgent:
             use_mcpp=use_mcpp,
             extra_tool_specs=extra_tool_specs,
             tts_preprocessor_config=tts_preprocessor_config,
+            llm_api_key=llm_api_key,
+            is_external=is_external,
         )
 
     @staticmethod
