@@ -85,16 +85,6 @@ class AppWebSocketServer:
             name="cache",
         )
 
-        # Live2D 모델 — upstream CWD(live2d-models/)에서 서빙
-        live2d_dir = "live2d-models"
-        if os.path.exists(live2d_dir):
-            self.app.mount(
-                "/live2d-models",
-                CORSStaticFiles(directory=live2d_dir),
-                name="live2d-models",
-            )
-        else:
-            logger.warning(f"Live2D 모델 디렉토리 없음, /live2d-models 마운트 건너뜀: {live2d_dir}")
 
         # 배경 이미지 (디렉토리가 있을 때만 마운트)
         bg_dir = "backgrounds"
