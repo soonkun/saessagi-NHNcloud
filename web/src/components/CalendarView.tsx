@@ -39,7 +39,9 @@ function AddEventModal({
   onSave,
 }: AddEventModalProps): React.ReactElement {
   const [title, setTitle] = useState("");
-  const [start, setStart] = useState(`${defaultDate}T09:00`);
+  const [dateStr, setDateStr] = useState(defaultDate);
+  const [hour, setHour] = useState("09");
+  const [minute, setMinute] = useState("00");
   const [duration, setDuration] = useState("60");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
@@ -54,7 +56,7 @@ function AddEventModal({
     try {
       await onSave({
         title: title.trim(),
-        start,
+        start: `${dateStr}T${hour}:${minute}`,
         duration_minutes: duration ? Number(duration) : undefined,
         description: description.trim() || undefined,
       });
@@ -119,15 +121,35 @@ function AddEventModal({
           />
         </label>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>시작 일시</span>
-          <input
-            type="datetime-local"
-            value={start}
-            onChange={(e) => setStart(e.target.value)}
-            style={inputStyle}
-          />
-        </label>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              type="date"
+              value={dateStr}
+              onChange={(e) => setDateStr(e.target.value)}
+              style={{ ...inputStyle, flex: 1, colorScheme: "dark" }}
+            />
+            <select
+              value={hour}
+              onChange={(e) => setHour(e.target.value)}
+              style={{ ...inputStyle, width: 64, padding: "7px 6px" }}
+            >
+              {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => (
+                <option key={h} value={h}>{h}시</option>
+              ))}
+            </select>
+            <select
+              value={minute}
+              onChange={(e) => setMinute(e.target.value)}
+              style={{ ...inputStyle, width: 64, padding: "7px 6px" }}
+            >
+              {["00", "10", "20", "30", "40", "50"].map((m) => (
+                <option key={m} value={m}>{m}분</option>
+              ))}
+            </select>
+          </div>
+        </div>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>기간 (분)</span>
