@@ -85,18 +85,6 @@ class AppWebSocketServer:
             name="cache",
         )
 
-
-        # 배경 이미지 (디렉토리가 있을 때만 마운트)
-        bg_dir = "backgrounds"
-        if os.path.exists(bg_dir):
-            self.app.mount(
-                "/bg",
-                CORSStaticFiles(directory=bg_dir),
-                name="backgrounds",
-            )
-        else:
-            logger.warning(f"배경 디렉토리 없음, /bg 마운트 건너뜀: {bg_dir}")
-
         # 새싹이 스프라이트 (/avatars → assets/character/saessagi/)
         # conf.yaml avatar 필드 파일명과 실제 파일명이 일치해야 함 (예: neutral.png)
         saessagi_avatar_dir = os.path.join(
