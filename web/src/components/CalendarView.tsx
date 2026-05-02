@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Plus, Trash2, X } from "lucide-react";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { Calendar, ChevronLeft, ChevronRight, Plus, Trash2, X } from "lucide-react";
 import {
   fetchCalendarEvents,
   createCalendarEvent,
@@ -22,6 +22,141 @@ function firstDayOfMonth(year: number, month: number): number {
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
+
+// ────────────────────────────────────────────────────────────
+// 커스텀 날짜 피커
+// ────────────────────────────────────────────────────────────
+
+const WEEK_DAYS_SHORT = ["일", "월", "화", "수", "목", "금", "토"];
+
+function DatePicker({ value, onChange }: { value: string; onChange: (v: string) => void }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const parsed = new Date(value + "T00:00:00");
+  const [viewYear, setViewYear] = useState(parsed.getFullYear());
+  const [viewMonth, setViewMonth] = useState(parsed.getMonth());
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onMouseDown(e: MouseEvent): void {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open]);
+
+  function prevMonth(): void {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear((y) => y - 1); }
+    else setViewMonth((m) => m - 1);
+  }
+  function nextMonth(): void {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear((y) => y + 1); }
+    else setViewMonth((m) => m + 1);
+  }
+
+  const firstDay = firstDayOfMonth(viewYear, viewMonth);
+  const totalDays = daysInMonth(viewYear, viewMonth);
+
+  return (
+    <div ref={ref} style={{ position: "relative", flex: 1 }}>
+      <div
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          ...pickerInputStyle,
+          display: "flex",
+          alignItems: "center",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <span style={{ flex: 1 }}>{value}</span>
+        <Calendar size={13} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+      </div>
+
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            zIndex: 3000,
+            background: "var(--color-sidebar)",
+            border: "1px solid var(--color-border)",
+            borderRadius: 10,
+            padding: 12,
+            width: 240,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+          }}
+        >
+          {/* 월 네비게이션 */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <button onClick={prevMonth} style={miniNavBtn}><ChevronLeft size={14} /></button>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{viewYear}년 {viewMonth + 1}월</span>
+            <button onClick={nextMonth} style={miniNavBtn}><ChevronRight size={14} /></button>
+          </div>
+
+          {/* 요일 헤더 */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
+            {WEEK_DAYS_SHORT.map((d, i) => (
+              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, padding: "2px 0",
+                color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)" }}>{d}</div>
+            ))}
+          </div>
+
+          {/* 날짜 그리드 */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+            {Array.from({ length: firstDay }, (_, i) => <div key={`e-${i}`} />)}
+            {Array.from({ length: totalDays }, (_, i) => {
+              const day = i + 1;
+              const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+              const isSelected = dateStr === value;
+              return (
+                <button
+                  key={day}
+                  onClick={() => { onChange(dateStr); setOpen(false); }}
+                  style={{
+                    padding: "5px 2px",
+                    border: "none",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    background: isSelected ? "var(--color-accent)" : "transparent",
+                    color: isSelected ? "#fff"
+                      : (firstDay + i) % 7 === 0 ? "#e05050"
+                      : (firstDay + i) % 7 === 6 ? "#5080e0"
+                      : "var(--color-text)",
+                    fontWeight: isSelected ? 700 : 400,
+                  }}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const pickerInputStyle: React.CSSProperties = {
+  background: "var(--color-bg)",
+  border: "1px solid var(--color-border)",
+  borderRadius: 6,
+  color: "var(--color-text)",
+  padding: "7px 10px",
+  fontSize: 13,
+};
+
+const miniNavBtn: React.CSSProperties = {
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  color: "var(--color-text)",
+  display: "flex",
+  alignItems: "center",
+  padding: 2,
+};
 
 // ────────────────────────────────────────────────────────────
 // 이벤트 추가 모달
@@ -124,12 +259,7 @@ function AddEventModal({
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>시작 일시</span>
           <div style={{ display: "flex", gap: 6 }}>
-            <input
-              type="date"
-              value={dateStr}
-              onChange={(e) => setDateStr(e.target.value)}
-              style={{ ...inputStyle, flex: 1, colorScheme: "dark" }}
-            />
+            <DatePicker value={dateStr} onChange={setDateStr} />
             <select
               value={hour}
               onChange={(e) => setHour(e.target.value)}
