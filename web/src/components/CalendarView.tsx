@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { Calendar, ChevronLeft, ChevronRight, Plus, Trash2, X } from "lucide-react";
 import {
   fetchCalendarEvents,
@@ -31,19 +32,36 @@ const WEEK_DAYS_SHORT = ["일", "월", "화", "수", "목", "금", "토"];
 
 function DatePicker({ value, onChange }: { value: string; onChange: (v: string) => void }): React.ReactElement {
   const [open, setOpen] = useState(false);
+  const [popupPos, setPopupPos] = useState({ top: 0, left: 0 });
   const parsed = new Date(value + "T00:00:00");
   const [viewYear, setViewYear] = useState(parsed.getFullYear());
   const [viewMonth, setViewMonth] = useState(parsed.getMonth());
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
 
+  // Close popup on outside click (document level)
   useEffect(() => {
     if (!open) return;
     function onMouseDown(e: MouseEvent): void {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const t = e.target as Node;
+      if (
+        !(popupRef.current?.contains(t)) &&
+        !(triggerRef.current?.contains(t))
+      ) {
+        setOpen(false);
+      }
     }
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [open]);
+
+  function toggleOpen(): void {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      setPopupPos({ top: r.bottom + 4, left: r.left });
+    }
+    setOpen((o) => !o);
+  }
 
   function prevMonth(): void {
     if (viewMonth === 0) { setViewMonth(11); setViewYear((y) => y - 1); }
@@ -57,84 +75,89 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
   const firstDay = firstDayOfMonth(viewYear, viewMonth);
   const totalDays = daysInMonth(viewYear, viewMonth);
 
+  const popup = open ? (
+    <div
+      ref={popupRef}
+      onMouseDown={(e) => e.stopPropagation()}
+      style={{
+        position: "fixed",
+        top: popupPos.top,
+        left: popupPos.left,
+        zIndex: 9999,
+        background: "var(--color-sidebar)",
+        border: "1px solid var(--color-border)",
+        borderRadius: 10,
+        padding: 12,
+        width: 240,
+        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+        pointerEvents: "auto",
+      }}
+    >
+      {/* 월 네비게이션 */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <button onClick={prevMonth} style={miniNavBtn}><ChevronLeft size={14} /></button>
+        <span style={{ fontSize: 13, fontWeight: 600 }}>{viewYear}년 {viewMonth + 1}월</span>
+        <button onClick={nextMonth} style={miniNavBtn}><ChevronRight size={14} /></button>
+      </div>
+
+      {/* 요일 헤더 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
+        {WEEK_DAYS_SHORT.map((d, i) => (
+          <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, padding: "2px 0",
+            color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)" }}>{d}</div>
+        ))}
+      </div>
+
+      {/* 날짜 그리드 */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+        {Array.from({ length: firstDay }, (_, i) => <div key={`e-${i}`} />)}
+        {Array.from({ length: totalDays }, (_, i) => {
+          const day = i + 1;
+          const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+          const isSelected = dateStr === value;
+          return (
+            <button
+              key={day}
+              onClick={() => { onChange(dateStr); setOpen(false); }}
+              style={{
+                padding: "5px 2px",
+                border: "none",
+                borderRadius: 6,
+                fontSize: 12,
+                cursor: "pointer",
+                background: isSelected ? "var(--color-accent)" : "transparent",
+                color: isSelected ? "#fff"
+                  : (firstDay + i) % 7 === 0 ? "#e05050"
+                  : (firstDay + i) % 7 === 6 ? "#5080e0"
+                  : "var(--color-text)",
+                fontWeight: isSelected ? 700 : 400,
+              }}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  ) : null;
+
   return (
-    <div ref={ref} style={{ position: "relative", flex: 1 }}>
+    <div ref={triggerRef} style={{ flex: 1, pointerEvents: "auto" }}>
       <div
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         style={{
           ...pickerInputStyle,
           display: "flex",
           alignItems: "center",
           cursor: "pointer",
           userSelect: "none",
+          pointerEvents: "auto",
         }}
       >
         <span style={{ flex: 1 }}>{value}</span>
         <Calendar size={13} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
       </div>
-
-      {open && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            zIndex: 3000,
-            background: "var(--color-sidebar)",
-            border: "1px solid var(--color-border)",
-            borderRadius: 10,
-            padding: 12,
-            width: 240,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-          }}
-        >
-          {/* 월 네비게이션 */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <button onClick={prevMonth} style={miniNavBtn}><ChevronLeft size={14} /></button>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{viewYear}년 {viewMonth + 1}월</span>
-            <button onClick={nextMonth} style={miniNavBtn}><ChevronRight size={14} /></button>
-          </div>
-
-          {/* 요일 헤더 */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
-            {WEEK_DAYS_SHORT.map((d, i) => (
-              <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, padding: "2px 0",
-                color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)" }}>{d}</div>
-            ))}
-          </div>
-
-          {/* 날짜 그리드 */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
-            {Array.from({ length: firstDay }, (_, i) => <div key={`e-${i}`} />)}
-            {Array.from({ length: totalDays }, (_, i) => {
-              const day = i + 1;
-              const dateStr = `${viewYear}-${String(viewMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-              const isSelected = dateStr === value;
-              return (
-                <button
-                  key={day}
-                  onClick={() => { onChange(dateStr); setOpen(false); }}
-                  style={{
-                    padding: "5px 2px",
-                    border: "none",
-                    borderRadius: 6,
-                    fontSize: 12,
-                    cursor: "pointer",
-                    background: isSelected ? "var(--color-accent)" : "transparent",
-                    color: isSelected ? "#fff"
-                      : (firstDay + i) % 7 === 0 ? "#e05050"
-                      : (firstDay + i) % 7 === 6 ? "#5080e0"
-                      : "var(--color-text)",
-                    fontWeight: isSelected ? 700 : 400,
-                  }}
-                >
-                  {day}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {createPortal(popup, document.body)}
     </div>
   );
 }
