@@ -234,6 +234,16 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-24: CalendarView 이벤트 추가 모달 — DatePicker 추가 후 모든 입력 필드 비활성화 회귀
+
+**날짜**: 2026-05-02  
+**증상**: `AddEventModal`에 커스텀 `DatePicker` 컴포넌트를 추가한 후, 제목 input·시간 select·설명 textarea 등 모든 필드가 클릭·입력 불가해짐.  
+**원인**: CSS 스태킹 컨텍스트 충돌. `#chat-panel`은 `position: fixed, z-index: 999`로 자체 스태킹 컨텍스트를 생성한다. 모달 오버레이는 `#chat-panel`의 DOM 자식이므로 `z-index: 2000`이 해당 컨텍스트 안에서만 유효하다. 즉 문서 레벨에서 모달은 `#chat-panel`의 z-index(999)와 동일한 층에 속한다. CharacterWidget은 문서 레벨 `z-index: 1000`으로 CharacterWidget이 모달보다 위에 렌더링된다. 또한 DatePicker wrapper의 `position: relative`가 #chat-panel 스태킹 컨텍스트 내 페인팅 순서에 영향을 주어 입력 필드를 덮는 현상이 발생했다.  
+**수정**: `createPortal`로 DatePicker 팝업을 `document.body`에 렌더링하고 `position: fixed, zIndex: 9999`를 사용. 팝업이 문서 레벨 z-index에서 경쟁하게 되어 CharacterWidget(1000) 및 #chat-panel(999) 위에 올바르게 표시됨. DatePicker wrapper에서 `position: relative` 제거. 팝업 컨테이너에 `onMouseDown stopPropagation` 추가하여 App.tsx의 chat-close 핸들러가 팝업 클릭 시 채팅 패널을 닫지 않도록 방지.  
+**교훈**: `position: fixed, z-index` 가 있는 컨테이너는 자체 스태킹 컨텍스트를 생성한다. 그 안에 렌더링된 `position: fixed` 자식(모달 등)의 z-index는 해당 컨텍스트 내에서만 유효하다. 문서 레벨에서 다른 요소(예: CharacterWidget)보다 위에 표시되어야 하는 팝업·모달은 `createPortal`로 `document.body`에 렌더링해야 한다. `position: relative` wrapper가 없어도 팝업 위치는 `getBoundingClientRect()` + `position: fixed`로 계산할 수 있다.
+
+---
+
 ## E-23: macOS pet 모드에서 파일 피커 이후 키보드 입력 불가
 
 **날짜**: 2026-04-26  
