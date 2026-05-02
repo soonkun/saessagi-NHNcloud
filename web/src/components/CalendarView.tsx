@@ -76,6 +76,7 @@ function AddEventModal({
         alignItems: "center",
         justifyContent: "center",
         zIndex: 2000,
+        pointerEvents: "auto",
       }}
       onClick={onClose}
     >
@@ -89,6 +90,7 @@ function AddEventModal({
           display: "flex",
           flexDirection: "column",
           gap: 12,
+          pointerEvents: "auto",
         }}
         onClick={(e) => e.stopPropagation()}
       >
