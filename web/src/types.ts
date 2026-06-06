@@ -45,6 +45,11 @@ export interface CitedNote {
   title: string;
 }
 
+export interface MessageAttachment {
+  id: string;
+  filename: string;
+}
+
 export interface Message {
   id: string;
   role: "human" | "ai";
@@ -52,6 +57,7 @@ export interface Message {
   timestamp: number;
   citedDocs?: CitedDoc[];
   citedNotes?: CitedNote[];
+  attachments?: MessageAttachment[];
 }
 
 export interface Position {

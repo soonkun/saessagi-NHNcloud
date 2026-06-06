@@ -14,10 +14,13 @@ import {
   X,
   RotateCcw,
   Download,
+  Paperclip,
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
-import { getDocumentDownloadUrl } from "../services/api";
+import { invalidateDocsCache } from "../services/websocket";
+import { getDocumentDownloadUrl, uploadDocument } from "../services/api";
+import type { MessageAttachment } from "../types";
 
 // `[[note:slug]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
 function stripNoteMarkers(text: string): string {
@@ -89,6 +92,13 @@ function ChatContent(): React.ReactElement {
   const [voiceActive, setVoiceActive] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // 첨부 자료 (업로드 완료된 doc 목록 + 업로드 진행 중 항목)
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [uploadingItems, setUploadingItems] = useState<
+    { key: string; filename: string; progress: number; error?: string }[]
+  >([]);
 
   function handleNewHistory(): void {
     send({ type: "create-new-history" });
@@ -105,10 +115,64 @@ function ChatContent(): React.ReactElement {
 
   function handleSend(): void {
     const text = input.trim();
-    if (!text) return;
-    addMessage({ role: "human", text });
-    send({ type: "text-input", text });
+    if (!text && attachments.length === 0) return;
+    // 화면 표시는 사용자 원문 + attachments 칩으로
+    addMessage({
+      role: "human",
+      text: text || "(첨부 자료를 정리해 주세요)",
+      attachments: attachments.length > 0 ? attachments : undefined,
+    });
+    // 백엔드에는 prefix로 doc_id 메타 자동 삽입 — LLM이 related_docs에 활용
+    let payload = text || "(이 첨부 자료를 검토해서 업무 노트로 정리해줘.)";
+    if (attachments.length > 0) {
+      const meta = attachments
+        .map((a) => `${a.filename} (doc_id: ${a.id})`)
+        .join("; ");
+      payload = `[첨부 자료: ${meta}]\n${payload}`;
+    }
+    send({ type: "text-input", text: payload });
     setInput("");
+    setAttachments([]);
+  }
+
+  // 첨부 파일 업로드
+  function handleAttachClick(): void {
+    fileInputRef.current?.click();
+  }
+
+  async function handleFilesPicked(files: FileList | null): Promise<void> {
+    if (!files || files.length === 0) return;
+    window.electronAPI?.restoreFocus();
+    for (const file of Array.from(files)) {
+      const key = `${Date.now()}_${file.name}`;
+      setUploadingItems((prev) => [...prev, { key, filename: file.name, progress: 0 }]);
+      try {
+        const doc = await uploadDocument(file, null, (pct) => {
+          setUploadingItems((prev) =>
+            prev.map((it) => (it.key === key ? { ...it, progress: pct } : it))
+          );
+        });
+        // 업로드 완료 → 첨부 목록에 추가하고 진행 목록에서 제거
+        setAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }]);
+        setUploadingItems((prev) => prev.filter((it) => it.key !== key));
+        invalidateDocsCache();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "업로드 실패";
+        setUploadingItems((prev) =>
+          prev.map((it) => (it.key === key ? { ...it, error: msg, progress: -1 } : it))
+        );
+        // 5초 후 자동 제거
+        setTimeout(() => {
+          setUploadingItems((prev) => prev.filter((it) => it.key !== key));
+        }, 5000);
+      }
+    }
+    // 같은 파일 재선택 가능하도록 reset
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function removeAttachment(id: string): void {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
@@ -266,7 +330,41 @@ function ChatContent(): React.ReactElement {
               }}
             >
               {msg.role === "human" ? (
-                <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+                <div>
+                  <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {msg.attachments.map((a) => (
+                        <a
+                          key={a.id}
+                          href={getDocumentDownloadUrl(a.id)}
+                          download={a.filename}
+                          title={`첨부 다운로드: ${a.filename}`}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            fontSize: 11,
+                            borderRadius: 10,
+                            background: "rgba(255,255,255,0.12)",
+                            border: "1px solid rgba(255,255,255,0.2)",
+                            color: "var(--color-text)",
+                            textDecoration: "none",
+                            maxWidth: 220,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          <Paperclip size={11} />
+                          {a.filename}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
@@ -401,6 +499,99 @@ function ChatContent(): React.ReactElement {
         <div ref={bottomRef} />
       </div>
 
+      {/* 첨부 자료 / 업로드 진행 칩 */}
+      {(attachments.length > 0 || uploadingItems.length > 0) && (
+        <div
+          style={{
+            padding: "6px 12px 0",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 4,
+            flexShrink: 0,
+          }}
+        >
+          {attachments.map((a) => (
+            <span
+              key={a.id}
+              title={`첨부: ${a.filename}`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 4px 2px 8px",
+                fontSize: 11,
+                borderRadius: 10,
+                background: "rgba(100,140,220,0.18)",
+                border: "1px solid rgba(100,140,220,0.4)",
+                color: "#7aa8ff",
+                maxWidth: 220,
+              }}
+            >
+              <Paperclip size={11} />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 160,
+                }}
+              >
+                {a.filename}
+              </span>
+              <button
+                onClick={() => removeAttachment(a.id)}
+                title="첨부 제거"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#7aa8ff",
+                  cursor: "pointer",
+                  padding: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  marginLeft: 2,
+                }}
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+          {uploadingItems.map((it) => (
+            <span
+              key={it.key}
+              title={it.error ?? `업로드 중: ${it.filename} ${it.progress}%`}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "2px 8px",
+                fontSize: 11,
+                borderRadius: 10,
+                background: it.error ? "rgba(231,76,60,0.18)" : "rgba(200,200,200,0.12)",
+                border: `1px solid ${it.error ? "rgba(231,76,60,0.5)" : "rgba(200,200,200,0.3)"}`,
+                color: it.error ? "#e74c3c" : "var(--color-text-muted)",
+                maxWidth: 220,
+              }}
+            >
+              <Paperclip size={11} />
+              <span
+                style={{
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  maxWidth: 140,
+                }}
+              >
+                {it.filename}
+              </span>
+              <span style={{ fontSize: 10 }}>
+                {it.error ? "실패" : `${it.progress}%`}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* 입력 영역 */}
       <div
         style={{
@@ -430,6 +621,33 @@ function ChatContent(): React.ReactElement {
           {voiceActive ? <Mic size={16} /> : <MicOff size={16} />}
         </button>
 
+        {/* 파일 첨부 */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".txt,.md,.pdf,.docx,.pptx,.hwpx,.markdown"
+          style={{ display: "none" }}
+          onChange={(e) => void handleFilesPicked(e.target.files)}
+        />
+        <button
+          onClick={handleAttachClick}
+          title="파일 첨부 (RAG 자동 임베딩 + 노트 자동 정리)"
+          style={{
+            background: "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: "var(--color-text-muted)",
+            cursor: "pointer",
+            padding: "6px 8px",
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+          }}
+        >
+          <Paperclip size={16} />
+        </button>
+
         <input
           ref={inputRef}
           value={input}
@@ -451,16 +669,16 @@ function ChatContent(): React.ReactElement {
 
         <button
           onClick={handleSend}
-          disabled={!input.trim()}
+          disabled={!input.trim() && attachments.length === 0}
           title="전송"
           style={{
-            background: input.trim()
+            background: (input.trim() || attachments.length > 0)
               ? "var(--color-accent)"
               : "var(--color-border)",
             border: "none",
             borderRadius: 8,
             color: "#fff",
-            cursor: input.trim() ? "pointer" : "default",
+            cursor: (input.trim() || attachments.length > 0) ? "pointer" : "default",
             padding: "6px 10px",
             display: "flex",
             alignItems: "center",

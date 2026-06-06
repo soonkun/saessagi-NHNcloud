@@ -215,31 +215,56 @@ export function NotesView(): React.ReactElement {
           minHeight: 0,
         }}
       >
-        <div style={{ padding: "10px 10px 6px", display: "flex", gap: 6 }}>
-          <button
-            onClick={() => void createNew()}
-            title="새 노트"
+        <div style={{ padding: "10px 10px 8px", display: "flex", gap: 6, position: "relative" }}>
+          <Search
+            size={11}
+            style={{
+              position: "absolute",
+              left: 18,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--color-text-muted)",
+              pointerEvents: "none",
+            }}
+          />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="검색"
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={{
               flex: 1,
+              background: "var(--color-bg)",
+              border: "1px solid var(--color-border)",
+              borderRadius: 6,
+              color: "var(--color-text)",
+              padding: "5px 8px 5px 22px",
+              fontSize: 12,
+              outline: "none",
+              minWidth: 0,
+            }}
+          />
+          <button
+            onClick={() => void createNew()}
+            title="빈 노트 직접 만들기 (보통은 채팅으로 자동 생성됨)"
+            style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              gap: 4,
-              background: "var(--color-accent)",
-              border: "none",
+              background: "transparent",
+              border: "1px solid var(--color-border)",
               borderRadius: 6,
-              color: "#fff",
+              color: "var(--color-text-muted)",
               cursor: "pointer",
-              padding: "6px 10px",
-              fontSize: 12,
-              fontWeight: 600,
+              padding: "4px 6px",
+              flexShrink: 0,
             }}
           >
-            <Plus size={13} />
-            새 노트
+            <Plus size={12} />
           </button>
         </div>
-        <div style={{ padding: "0 10px 8px", position: "relative" }}>
+        {/* 기존 검색 입력은 위쪽 row에 통합됐으므로 여기는 빈 자리 (호환 유지용 0px) */}
+        <div style={{ display: "none", padding: "0 10px 8px", position: "relative" }}>
           <Search
             size={11}
             style={{
@@ -413,7 +438,7 @@ export function NotesView(): React.ReactElement {
         {/* 본문 */}
         <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 0 }}>
           {!current && subTab !== "graph" && (
-            <EmptyHint />
+            <EmptyHint isEmptyAtAll={notes.length === 0} />
           )}
           {current && subTab === "edit" && (
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, flex: 1, overflow: "auto" }}>
@@ -535,11 +560,41 @@ export function NotesView(): React.ReactElement {
   );
 }
 
-function EmptyHint(): React.ReactElement {
+function EmptyHint({ isEmptyAtAll }: { isEmptyAtAll: boolean }): React.ReactElement {
+  if (isEmptyAtAll) {
+    return (
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--color-text-muted)",
+          flexDirection: "column",
+          gap: 14,
+          padding: "0 40px",
+          textAlign: "center",
+        }}
+      >
+        <BookOpen size={44} style={{ opacity: 0.35 }} />
+        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text)" }}>
+          노트가 비어 있습니다
+        </div>
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+          새싹이와 채팅하면서 자료를 첨부하고<br />
+          <span style={{ color: "var(--color-accent)" }}>"오늘 ⟨이 자료⟩로 ⟨이 업무⟩ 처리했어요"</span><br />
+          라고 말해보세요. AI가 알아서 정리해 저장합니다.
+        </div>
+        <div style={{ fontSize: 11, opacity: 0.7 }}>
+          채팅 입력 영역의 📎 버튼으로 자료를 첨부할 수 있습니다.
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-muted)", flexDirection: "column", gap: 8 }}>
       <BookOpen size={36} style={{ opacity: 0.4 }} />
-      <div style={{ fontSize: 13 }}>왼쪽에서 노트를 선택하거나 "새 노트"를 눌러주세요</div>
+      <div style={{ fontSize: 13 }}>왼쪽에서 노트를 선택해 주세요</div>
     </div>
   );
 }

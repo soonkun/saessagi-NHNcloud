@@ -199,7 +199,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             "호출 후 응답:\n"
             "사용자에게 자연어로 \"방금 ⟨제목⟩ 노트로 저장해 두었어요\"라고 한국어로 알리고, "
             "답변 어딘가에 ToolResult payload의 `note_marker` (예: `[[note:생성된-슬러그]]`)를 "
-            "반드시 정확히 한 번 포함하세요. 사용자에게는 이것이 노트로 점프하는 칩으로 보입니다.\n"
+            "반드시 정확히 한 번 포함하세요. 사용자에게는 이것이 노트로 점프하는 칩으로 보입니다.\n\n"
+            "[첨부 메타 처리]\n"
+            "사용자 메시지가 `[첨부 자료: 파일명 (doc_id: xxx); ...]`로 시작하면 그것은 "
+            "프론트가 자동 삽입한 첨부 파일 메타입니다. 이 doc_id들은 search_docs 결과의 doc_id와 동일한 형식이며, "
+            "save_knowledge_note의 related_docs 인자에 그대로 포함하세요. "
+            "첨부와 업무 보고가 함께 들어왔을 때는 자율 호출 우선순위가 높습니다 — "
+            "거의 항상 save_knowledge_note를 호출하세요.\n"
         )
 
         if self.live2d_model is None:
