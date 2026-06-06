@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import tempfile
 import uuid
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -23,6 +25,59 @@ _CHUNK_OVERLAP = 50
 
 _ROOT = Path(os.environ.get("SAESSAGI_ROOT", "."))
 _FOLDERS_FILE = _ROOT / "data" / "rag_folders.json"
+_ORIGINALS_DIR = _ROOT / "data" / "rag_originals"
+_NO_FOLDER_BUCKET = "__no_folder__"
+
+
+def _folder_bucket(folder_id: str | None) -> Path:
+    """폴더 ID → 원본 파일 저장 디렉토리.
+
+    None이면 __no_folder__ 버킷. 그 외엔 folder_id 자체가 디렉토리 이름.
+    """
+    return _ORIGINALS_DIR / (folder_id or _NO_FOLDER_BUCKET)
+
+
+def _ensure_folder_dir(folder_id: str | None) -> Path:
+    bucket = _folder_bucket(folder_id)
+    bucket.mkdir(parents=True, exist_ok=True)
+    return bucket
+
+
+def _save_original(folder_id: str | None, doc_id: str, filename: str, data: bytes) -> Path:
+    """원본을 data/rag_originals/<folder|__no_folder__>/<doc_id>/<filename> 에 저장.
+
+    청크 upsert 성공 후 호출 — 실패 경로에서 호출 금지.
+    """
+    target_dir = _folder_bucket(folder_id) / doc_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / filename
+    target_path.write_bytes(data)
+    return target_path
+
+
+def _find_doc_dir(doc_id: str) -> Path | None:
+    """모든 폴더 버킷을 글로빙해서 doc_id 디렉토리 위치를 찾는다."""
+    if not _ORIGINALS_DIR.is_dir():
+        return None
+    for bucket in _ORIGINALS_DIR.iterdir():
+        if not bucket.is_dir():
+            continue
+        candidate = bucket / doc_id
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def _delete_original(doc_id: str) -> None:
+    """원본 디렉토리를 제거 (있는 위치에서)."""
+    d = _find_doc_dir(doc_id)
+    if d is not None:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def _delete_folder_dir(folder_id: str) -> None:
+    """폴더 버킷 전체를 제거 (폴더 안 모든 doc 디렉토리 포함)."""
+    shutil.rmtree(_folder_bucket(folder_id), ignore_errors=True)
 
 
 # ---------- Pydantic models ----------
@@ -188,6 +243,9 @@ def _list_documents_from_store(store: Any) -> list[DocumentInfo]:
 
         seen: dict[str, DocumentInfo] = {}
         for doc_id, doc_name, category in zip(doc_ids, doc_names, categories):
+            # M_15: __knowledge__ 카테고리는 문서 탭에서 제외 (노트 탭에서 별도 관리)
+            if category == "__knowledge__":
+                continue
             if doc_id not in seen:
                 seen[doc_id] = DocumentInfo(
                     doc_id=doc_id,
@@ -228,6 +286,8 @@ async def create_folder(body: CreateFolderRequest) -> FolderInfo:
     new_folder = {"folder_id": folder_id, "name": name}
     folders.append(new_folder)
     _save_folders(folders)
+    # 원본 저장소 디렉토리도 동기 생성
+    _ensure_folder_dir(folder_id)
     logger.info("create_folder: %s (%s)", name, folder_id)
     return FolderInfo(**new_folder)
 
@@ -283,14 +343,21 @@ async def delete_folder(
 
     folders = _load_folders()
     _save_folders([f for f in folders if f["folder_id"] != folder_id])
-    logger.info("delete_folder: %s, deleted_chunks=%d", folder_id, deleted_chunks)
+    # delete_docs=True 인 경우만 원본 디렉토리 통째 제거 (안의 doc 디렉토리도 함께)
+    # delete_docs=False 라면 원본은 보존하되 폴더 메타만 사라짐 — 이후 doc들은 "폴더 없음" 상태로 노출
+    if delete_docs:
+        _delete_folder_dir(folder_id)
+    logger.info(
+        "delete_folder: %s, deleted_chunks=%d, delete_docs=%s",
+        folder_id, deleted_chunks, delete_docs,
+    )
     return {"ok": True, "folder_id": folder_id, "deleted_chunks": deleted_chunks}
 
 
 # ---------- document endpoints ----------
 
 
-_MAX_UPLOAD_PART_BYTES = 50 * 1024 * 1024  # 50 MB (Starlette 기본 1 MB 한도 우회)
+_MAX_UPLOAD_PART_BYTES = 1 * 1024 * 1024 * 1024  # 1 GB
 
 
 @router.post("/documents", response_model=UploadResponse, status_code=201)
@@ -376,6 +443,14 @@ async def upload_document(request: Request) -> UploadResponse:
         logger.error("upload_document error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
 
+    # 청크 upsert 성공 후에만 원본 저장 — 다운로드용
+    try:
+        _save_original(folder_id, doc_id, filename, data)
+    except Exception as exc:
+        logger.error("original save failed (doc_id=%s): %s", doc_id, exc)
+        # 원본 저장 실패는 업로드를 실패로 처리하지 않는다(이미 임베딩은 성공).
+        # 대신 다음 다운로드 요청 시 404로 응답된다.
+
     logger.info("upload_document: doc_id=%s, chunks=%d, folder_id=%s", doc_id, len(chunk_metas), folder_id)
     return UploadResponse(doc_id=doc_id, filename=filename, chunk_count=len(chunk_metas), folder_id=folder_id)
 
@@ -407,6 +482,26 @@ async def list_documents(request: Request) -> list[DocumentInfo]:
     return _list_documents_from_store(store)
 
 
+@router.get("/documents/{doc_id}/download")
+async def download_document(doc_id: str) -> FileResponse:
+    """업로드 시 보관한 원본 파일을 그대로 반환.
+
+    저장 위치는 폴더별 버킷(__no_folder__ 또는 folder_id) 하위의 doc_id 디렉토리.
+    """
+    doc_dir = _find_doc_dir(doc_id)
+    if doc_dir is None:
+        raise HTTPException(status_code=404, detail=f"원본 파일이 없습니다: {doc_id}")
+    files = [p for p in doc_dir.iterdir() if p.is_file()]
+    if not files:
+        raise HTTPException(status_code=404, detail=f"원본 파일이 비어있습니다: {doc_id}")
+    target = files[0]
+    return FileResponse(
+        path=str(target),
+        filename=target.name,
+        media_type="application/octet-stream",
+    )
+
+
 @router.delete("/documents/{doc_id}", response_model=DeleteResponse)
 async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
     ctx = _get_context(request)
@@ -424,6 +519,9 @@ async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
 
     if deleted == 0:
         raise HTTPException(status_code=404, detail=f"doc_id '{doc_id}' not found")
+
+    # 청크 삭제 성공 시 원본도 정리 (디렉토리 부재 OK)
+    _delete_original(doc_id)
 
     logger.info("delete_document: doc_id=%s, deleted=%d", doc_id, deleted)
     return DeleteResponse(ok=True, deleted_chunks=deleted)

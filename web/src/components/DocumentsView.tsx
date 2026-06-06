@@ -4,6 +4,7 @@ import { speak } from "../services/tts";
 import {
   Upload,
   Trash2,
+  Download,
   FileText,
   Folder,
   FolderOpen,
@@ -19,10 +20,12 @@ import {
   fetchFolders,
   uploadDocument,
   deleteDocument,
+  getDocumentDownloadUrl,
   createFolder,
   renameFolder,
   deleteFolder,
 } from "../services/api";
+import { invalidateDocsCache } from "../services/websocket";
 import type { RagDocument, RagFolder } from "../types";
 
 const ALLOWED_EXTS = [".txt", ".md", ".pdf", ".docx", ".pptx", ".hwpx"];
@@ -276,6 +279,7 @@ export function DocumentsView(): React.ReactElement {
             });
             setDocs((prev) => [...prev, doc]);
             setUploads((prev) => prev.filter((_, j) => j !== idx));
+            invalidateDocsCache();
             successCount++;
           } catch (err) {
             const msg = err instanceof Error ? err.message : "업로드 실패";
@@ -332,6 +336,11 @@ export function DocumentsView(): React.ReactElement {
     if (isCreating) return;
     const name = newFolderName.trim();
     if (!name) { setAddingFolder(false); return; }
+    // 클라이언트 측 사전 중복 검사 — 백엔드 409보다 더 빠르고 친절한 메시지
+    if (folders.some((f) => f.name === name)) {
+      alert(`이미 '${name}' 이름의 폴더가 있습니다. 다른 이름을 입력하세요.`);
+      return;
+    }
     setIsCreating(true);
     try {
       const folder = await createFolder(name);
@@ -340,7 +349,9 @@ export function DocumentsView(): React.ReactElement {
       setNewFolderName("");
       setAddingFolder(false);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "폴더 생성 실패");
+      const msg = err instanceof Error ? err.message : String(err);
+      // 백엔드 응답을 그대로 alert — 사용자가 원인을 파악할 수 있게
+      alert(`폴더 생성 실패\n\n원인: ${msg}\n\n백엔드가 실행 중인지, 폴더 이름이 중복되지 않는지 확인하세요.`);
     } finally {
       setIsCreating(false);
     }
@@ -353,16 +364,36 @@ export function DocumentsView(): React.ReactElement {
 
   async function handleDeleteFolder(folderId: string): Promise<void> {
     const folder = folders.find((f) => f.folder_id === folderId);
+    if (!folder) return;
     const docCount = docs.filter((d) => d.folder_id === folderId).length;
-    const msg = docCount > 0
-      ? `'${folder?.name}' 폴더와 문서 ${docCount}개를 함께 삭제하시겠습니까?`
-      : `'${folder?.name}' 폴더를 삭제하시겠습니까?`;
-    if (!confirm(msg)) return;
+
+    if (docCount === 0) {
+      if (!confirm(`'${folder.name}' 폴더를 삭제하시겠습니까?`)) return;
+    } else {
+      // 1차: 경고
+      const ok = confirm(
+        `⚠️ '${folder.name}' 폴더 안에 문서 ${docCount}개가 있습니다.\n\n` +
+          `폴더와 문서 ${docCount}개의 임베딩·원본 파일이 모두 영구 삭제됩니다.\n` +
+          `이 작업은 되돌릴 수 없습니다.\n\n` +
+          `정말 진행하시겠습니까?`
+      );
+      if (!ok) return;
+      // 2차: 폴더 이름 직접 입력
+      const typed = prompt(
+        `확인을 위해 폴더 이름 '${folder.name}'을 정확히 입력하세요:`
+      );
+      if (typed?.trim() !== folder.name) {
+        alert("폴더 이름이 일치하지 않아 취소되었습니다.");
+        return;
+      }
+    }
+
     try {
       await deleteFolder(folderId, true);
       setFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
       setDocs((prev) => prev.filter((d) => d.folder_id !== folderId));
       if (targetFolderId === folderId) setTargetFolderId("");
+      invalidateDocsCache();
     } catch (err) {
       alert(err instanceof Error ? err.message : "폴더 삭제 실패");
     }
@@ -372,6 +403,7 @@ export function DocumentsView(): React.ReactElement {
     try {
       await deleteDocument(id);
       setDocs((prev) => prev.filter((d) => d.id !== id));
+      invalidateDocsCache();
     } catch (err) {
       alert(err instanceof Error ? err.message : "문서 삭제 실패");
     }
@@ -669,6 +701,16 @@ function DocRow({ doc, onDelete }: { doc: RagDocument; onDelete: (id: string) =>
           {doc.uploaded_at ? ` · ${new Date(doc.uploaded_at).toLocaleDateString("ko-KR")}` : ""}
         </div>
       </div>
+      <a
+        href={getDocumentDownloadUrl(doc.id)}
+        download={doc.filename}
+        className="btn-download"
+        style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", flexShrink: 0, padding: 2, display: "flex", alignItems: "center", opacity: 0 }}
+        title="원본 다운로드"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Download size={12} />
+      </a>
       <button
         onClick={() => void onDelete(doc.id)}
         className="btn-delete"

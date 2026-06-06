@@ -106,8 +106,13 @@ body {
   background: rgba(255,255,255,0.04);
 }
 
-.doc-row:hover .btn-delete {
+.doc-row:hover .btn-delete,
+.doc-row:hover .btn-download {
   opacity: 1 !important;
+}
+
+.btn-download:hover {
+  color: var(--color-accent) !important;
 }
 
 /* ── 폴더 행 hover — 아이콘 버튼 표시 ── */
