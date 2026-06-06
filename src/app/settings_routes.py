@@ -154,6 +154,18 @@ class SetLlmProviderRequest(BaseModel):
     ollama_model: str | None = None
 
 
+def _default_temperature_for(model: str) -> float:
+    """OpenAI 모델별 안전한 기본 temperature.
+
+    gpt-5 계열은 temperature=1만 허용 (Only the default (1) value is supported).
+    o-series 추론 모델(o1, o3, o4)도 동일. 그 외에는 0.7 사용.
+    """
+    m = (model or "").lower()
+    if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+        return 1.0
+    return 0.7
+
+
 @router.post("/llm-provider")
 async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dict[str, Any]:
     """LLM 공급자를 전환하고 agent를 재초기화한다.
@@ -197,7 +209,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
             "base_url": "https://api.openai.com/v1",
             "llm_api_key": api_key,
             "model": model,
-            "temperature": 0.7,
+            "temperature": _default_temperature_for(model),
             "interrupt_method": "system",
         }
     else:
@@ -242,7 +254,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
                 base_url="https://api.openai.com/v1",
                 llm_api_key=api_key,
                 model=model,
-                temperature=0.7,
+                temperature=_default_temperature_for(model),
             )
         else:
             _patch_agent_settings_provider(agent_settings, "ollama_llm")
