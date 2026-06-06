@@ -90,28 +90,13 @@ async function apiSetLlmProvider(body: {
 
 const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부탁드려요!";
 
-// 자주 쓰는 OpenAI 모델 추천 목록 (datalist suggestion용).
-// 자유 입력이 허용되므로 OpenAI가 신규 모델을 출시하면 직접 입력하면 됨.
-const OPENAI_MODELS = [
-  // 5 시리즈 (있을 경우)
-  "gpt-5",
-  "gpt-5-mini",
-  "gpt-5-nano",
-  // 4.5 / 4.1 시리즈
-  "gpt-4.5-preview",
-  "gpt-4.1",
-  "gpt-4.1-mini",
-  "gpt-4.1-nano",
-  // o시리즈 추론 모델
-  "o4-mini",
-  "o3-mini",
-  "o1",
-  // 4o 시리즈
-  "gpt-4o",
-  "gpt-4o-mini",
-  // 구형
-  "gpt-4-turbo",
-  "gpt-3.5-turbo",
+// GPT 모델 4종 — 계열별로 안정·고성능 / 가볍고 빠름.
+// OpenAI가 신규 모델 출시 시 여기를 갱신하면 됨.
+const OPENAI_MODELS: { value: string; label: string }[] = [
+  { value: "gpt-5", label: "GPT-5 (안정·고성능)" },
+  { value: "gpt-5-mini", label: "GPT-5 mini (가볍고 빠름)" },
+  { value: "gpt-4o", label: "GPT-4o (안정·고성능)" },
+  { value: "gpt-4o-mini", label: "GPT-4o mini (가볍고 빠름)" },
 ];
 
 const inputStyle: React.CSSProperties = {
@@ -359,24 +344,22 @@ export function SettingsView(): React.ReactElement {
               ref={(el) => { if (el) el.style.setProperty("-webkit-text-security", "disc"); }}
             />
             <label style={labelStyle}>GPT 모델</label>
-            <input
-              type="text"
-              list="openai-model-suggestions"
+            <select
               value={openaiModel}
               onChange={(e) => setOpenaiModel(e.target.value)}
-              onClick={() => window.electronAPI?.restoreFocus()}
-              placeholder="gpt-5 또는 OpenAI 모델명 직접 입력"
-              autoComplete="off"
-              spellCheck={false}
-              style={inputStyle}
-            />
-            <datalist id="openai-model-suggestions">
+              style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
+            >
+              {/* 저장된 값이 4개 목록에 없으면 표시용으로 한 번만 추가 */}
+              {!OPENAI_MODELS.some((m) => m.value === openaiModel) && openaiModel && (
+                <option value={openaiModel}>{openaiModel} (저장된 값)</option>
+              )}
               {OPENAI_MODELS.map((m) => (
-                <option key={m} value={m} />
+                <option key={m.value} value={m.value}>{m.label}</option>
               ))}
-            </datalist>
+            </select>
             <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
-              OpenAI API 모델명을 직접 입력하거나 추천 목록에서 선택하세요. 신규 모델이 출시되면 그 이름을 그대로 입력하면 됩니다. API 키 필요.
+              OpenAI API를 통해 ChatGPT 모델을 사용합니다. API 키가 필요하며 인터넷 연결이 있어야 합니다.
+              비전(이미지) 처리는 GPT-4o 이상에서 지원됩니다.
             </p>
           </>
         )}
