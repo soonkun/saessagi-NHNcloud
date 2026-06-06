@@ -7,6 +7,8 @@ export interface ClickthroughHandle {
   setDragLock(locked: boolean): void;
   /** 마우스가 인터랙티브 요소 위에 진입했을 때 즉시 호출 — rAF 대기 없이 click-through 해제 */
   setInteractive(on: boolean): void;
+  /** window 모드 전환 시 false, pet 모드 복귀 시 true — false면 항상 interactive 유지 */
+  setEnabled(enabled: boolean): void;
   dispose(): void;
 }
 
@@ -18,12 +20,14 @@ export function initClickthrough(
     return {
       setDragLock: () => {},
       setInteractive: () => {},
+      setEnabled: () => {},
       dispose: () => {},
     };
   }
 
   let lastIgnore = true;
   let dragLocked = false;
+  let enabled = true;
   let rafId: number | null = null;
   let pendingEvent: MouseEvent | null = null;
   let lastEvent: MouseEvent | null = null;
@@ -32,6 +36,7 @@ export function initClickthrough(
   window.electronAPI.setIgnoreMouseEvents(true);
 
   function evaluate(e: MouseEvent): void {
+    if (!enabled) return;
     if (dragLocked) {
       // During drag: always interactive
       if (lastIgnore !== false) {
@@ -95,6 +100,17 @@ export function initClickthrough(
       if (nextIgnore !== lastIgnore) {
         lastIgnore = nextIgnore;
         window.electronAPI?.setIgnoreMouseEvents(nextIgnore);
+      }
+    },
+    setEnabled(on: boolean): void {
+      enabled = on;
+      if (!on) {
+        // window 모드: 항상 interactive — click-through 즉시 해제
+        lastIgnore = false;
+        window.electronAPI?.setIgnoreMouseEvents(false);
+      } else if (lastEvent) {
+        // pet 모드 복귀: 마지막 커서 위치로 즉시 재평가
+        evaluate(lastEvent);
       }
     },
     setDragLock(locked: boolean): void {

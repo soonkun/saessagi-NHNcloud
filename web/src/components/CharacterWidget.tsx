@@ -3,8 +3,6 @@ import { useStore } from "../store";
 import type { ClickthroughHandle } from "../services/clickthrough";
 import type { Position } from "../types";
 
-const QUIT_BTN_SIZE = 16;
-
 const DRAG_THRESHOLD_PX = 5;
 const MIN_CHAR_SIZE = 60;
 const MAX_CHAR_SIZE = 300;
@@ -137,6 +135,7 @@ export function CharacterWidget({
   const setCharSize = useStore((s) => s.setCharSize);
   const toggleChat = useStore((s) => s.toggleChat);
   const setChatOpen = useStore((s) => s.setChatOpen);
+  const windowMode = useStore((s) => s.windowMode);
 
   const [isHovered, setIsHovered] = useState(false);
   // imgKey가 바뀌면 <img>가 remount되어 이미지를 재요청함
@@ -296,17 +295,56 @@ export function CharacterWidget({
         }}
       />
 
-      {/* Resize handle — bottom-right corner (hover 시 표시) */}
+      {/* Mode toggle — bottom-left (안쪽 5px, hover 시 표시) */}
+      {isHovered && (
+        <div
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (windowMode === "pet") {
+              void window.petMode?.disable();
+            } else {
+              void window.petMode?.enable();
+            }
+          }}
+          title={windowMode === "pet" ? "창 모드로 전환" : "펫 모드로 전환"}
+          style={{
+            position: "absolute",
+            left: 5,
+            bottom: 5,
+            width: 26,
+            height: 26,
+            borderRadius: "50%",
+            background: "rgba(60,130,210,0.9)",
+            border: "1.5px solid rgba(0,0,0,0.2)",
+            cursor: "pointer",
+            zIndex: 1001,
+            boxShadow: "0 1px 3px rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+            fontSize: 14,
+            fontWeight: 700,
+            lineHeight: 1,
+            userSelect: "none",
+          }}
+        >
+          {windowMode === "pet" ? "⊞" : "◉"}
+        </div>
+      )}
+
+      {/* Resize handle — bottom-right (안쪽 5px, hover 시 표시) */}
       {isHovered && (
         <div
           onMouseDown={onResizeMouseDown}
           title="크기 조절"
           style={{
             position: "absolute",
-            right: -5,
-            bottom: -5,
-            width: 14,
-            height: 14,
+            right: 5,
+            bottom: 5,
+            width: 26,
+            height: 26,
             borderRadius: "50%",
             background: "rgba(255,255,255,0.85)",
             border: "1.5px solid rgba(0,0,0,0.25)",
@@ -317,17 +355,17 @@ export function CharacterWidget({
         />
       )}
 
-      {/* Quit button — top-right corner (hover 시 표시) */}
+      {/* Quit button — top-right (안쪽 5px, hover 시 표시) */}
       {isHovered && (
         <div
           onMouseDown={handleQuit}
           title="새싹이 종료"
           style={{
             position: "absolute",
-            right: -5,
-            top: -5,
-            width: QUIT_BTN_SIZE,
-            height: QUIT_BTN_SIZE,
+            right: 5,
+            top: 5,
+            width: 26,
+            height: 26,
             borderRadius: "50%",
             background: "rgba(220,60,50,0.9)",
             border: "1.5px solid rgba(0,0,0,0.2)",
@@ -338,7 +376,7 @@ export function CharacterWidget({
             alignItems: "center",
             justifyContent: "center",
             color: "#fff",
-            fontSize: 11,
+            fontSize: 14,
             fontWeight: 700,
             lineHeight: 1,
             userSelect: "none",

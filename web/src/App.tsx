@@ -16,7 +16,12 @@ export function App(): React.ReactElement {
   const setChatOpen = useStore((s) => s.setChatOpen);
   const charPosition = useStore((s) => s.position);
   const charSize = useStore((s) => s.charSize);
+  const setPositionSilent = useStore((s) => s.setPositionSilent);
+  const setWindowMode = useStore((s) => s.setWindowMode);
+  const windowMode = useStore((s) => s.windowMode);
   const clickthroughRef = useRef<ClickthroughHandle | null>(null);
+  const charSizeRef = useRef(charSize);
+  charSizeRef.current = charSize;
 
   // WebSocket — reconnects when URL changes
   useEffect(() => {
@@ -42,6 +47,38 @@ export function App(): React.ReactElement {
     };
   }, []);
 
+  // mode-changed IPC → store 동기화 + clickthrough/위치/채팅 패널 제어
+  useEffect(() => {
+    const ipc = (window as any).electron?.ipcRenderer;
+    if (!ipc) return;
+    const handler = (_e: unknown, mode: string): void => {
+      if (mode !== "pet" && mode !== "window") return;
+      setWindowMode(mode);
+      if (mode === "window") {
+        // click-through 비활성화 — 흰 배경 위에서도 클릭 가능하게
+        clickthroughRef.current?.setEnabled(false);
+        // 채팅 패널 자동 열기
+        setChatOpen(true);
+        // 캐릭터를 창 안에 보이는 위치로 이동 (localStorage 덮어쓰지 않음)
+        const sz = charSizeRef.current;
+        setPositionSilent({
+          x: Math.max(8, window.innerWidth - sz - 24),
+          y: Math.max(8, window.innerHeight - sz - 24),
+        });
+      } else {
+        // pet 모드 복귀: click-through 재활성화 + localStorage 저장 위치 복원
+        clickthroughRef.current?.setEnabled(true);
+        const saved = (() => {
+          try { return JSON.parse(localStorage.getItem("saessagi_char_pos") ?? "null"); }
+          catch { return null; }
+        })() as { x: number; y: number } | null;
+        if (saved) setPositionSilent(saved);
+      }
+    };
+    ipc.on("mode-changed", handler);
+    return () => ipc.removeListener("mode-changed", handler);
+  }, [setWindowMode, setChatOpen, setPositionSilent]);
+
   // Clickthrough — initialized once on mount (M5 fix: separate effect with [])
   useEffect(() => {
     clickthroughRef.current = initClickthrough();
@@ -64,9 +101,10 @@ export function App(): React.ReactElement {
     return unsub;
   }, [setChatOpen]);
 
-  // Close chat on mousedown outside the panel — no overlay div needed
+  // Close chat on mousedown outside the panel — pet 모드 한정
+  // window 모드에서는 외부 클릭으로 닫으면 흰 화면만 남으므로 비활성화
   useEffect(() => {
-    if (!chatOpen) return;
+    if (!chatOpen || windowMode === "window") return;
     function onMouseDown(e: MouseEvent): void {
       const target = e.target as Node;
       const panel = document.getElementById("chat-panel");
@@ -82,7 +120,7 @@ export function App(): React.ReactElement {
     }
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
-  }, [chatOpen, setChatOpen]);
+  }, [chatOpen, setChatOpen, windowMode]);
 
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative", pointerEvents: "none" }}>

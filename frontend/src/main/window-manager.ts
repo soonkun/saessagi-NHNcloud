@@ -168,12 +168,17 @@ export class WindowManager {
 
   private continueSetWindowModeWindow(): void {
     if (!this.window) return;
-    if (this.windowedBounds) {
-      this.window.setBounds(this.windowedBounds);
-    } else {
-      this.window.setSize(900, 670);
-      this.window.center();
-    }
+    // pet 모드는 가상 스크린 전체 크기로 저장되므로 windowedBounds를 신뢰할 수 없다.
+    // 항상 primary display work area의 80%를 차지하는 큰 창으로 시작.
+    const { width: dw, height: dh, x: dx, y: dy } = screen.getPrimaryDisplay().workArea;
+    const w = Math.round(dw * 0.8);
+    const h = Math.round(dh * 0.85);
+    this.window.setBounds({
+      x: dx + Math.round((dw - w) / 2),
+      y: dy + Math.round((dh - h) / 2),
+      width: w,
+      height: h,
+    });
 
     if (isMac) {
       this.window.setWindowButtonVisibility(true);

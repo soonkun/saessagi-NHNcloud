@@ -137,6 +137,8 @@ export function SettingsView(): React.ReactElement {
   const setTtsVoiceName = useStore((s) => s.setTtsVoiceName);
   const ttsEngine = useStore((s) => s.ttsEngine);
   const setTtsEngine = useStore((s) => s.setTtsEngine);
+  const llmInfo = useStore((s) => s.llmInfo);
+  const setLlmInfo = useStore((s) => s.setLlmInfo);
 
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
@@ -149,11 +151,17 @@ export function SettingsView(): React.ReactElement {
   const [promptSaving, setPromptSaving] = useState(false);
   const [promptSaved, setPromptSaved] = useState(false);
 
-  // LLM 공급자 상태
-  const [llmProvider, setLlmProvider] = useState<"ollama" | "openai">("ollama");
+  // LLM 공급자 상태 — store(localStorage)와 동기화돼 탭 전환 후에도 유지
+  const [llmProvider, setLlmProvider] = useState<"ollama" | "openai">(
+    llmInfo?.provider ?? "ollama"
+  );
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
-  const [ollamaModel, setOllamaModel] = useState("");
-  const [openaiModel, setOpenaiModel] = useState("gpt-4o-mini");
+  const [ollamaModel, setOllamaModel] = useState(
+    llmInfo?.provider === "ollama" ? llmInfo.model : ""
+  );
+  const [openaiModel, setOpenaiModel] = useState(
+    llmInfo?.provider === "openai" ? llmInfo.model : "gpt-4o-mini"
+  );
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiKeyPlaceholder, setOpenaiKeyPlaceholder] = useState("sk-...");
   const [llmSaving, setLlmSaving] = useState(false);
@@ -185,17 +193,23 @@ export function SettingsView(): React.ReactElement {
     setMeetingPrompt(meetingPromptDefault);
   }
 
-  // 초기 로드
+  // 초기 로드 — 백엔드 값을 가져와 UI·store 모두 동기화
   useEffect(() => {
     void fetchLlmProvider().then((s) => {
       if (!s) return;
-      setLlmProvider(s.provider === "openai" ? "openai" : "ollama");
+      const provider = s.provider === "openai" ? "openai" : "ollama";
+      setLlmProvider(provider);
       setOllamaModel(s.ollama_model);
       setOpenaiModel(s.openai_model);
       if (s.openai_api_key_set) setOpenaiKeyPlaceholder("••••••••••••••••");
+      // store 동기화 — 백엔드 = source of truth
+      setLlmInfo({
+        provider,
+        model: provider === "openai" ? s.openai_model : s.ollama_model,
+      });
     });
     void fetchOllamaModels().then(setOllamaModels);
-  }, []);
+  }, [setLlmInfo]);
 
   async function handleLlmSave(): Promise<void> {
     if (llmSaving) return;
@@ -215,6 +229,11 @@ export function SettingsView(): React.ReactElement {
     setLlmSaving(false);
     if (ok) {
       setLlmSaved(true);
+      // store + localStorage 즉시 갱신 — 탭 이동·재시작 후에도 표시 유지
+      setLlmInfo({
+        provider: llmProvider,
+        model: llmProvider === "openai" ? openaiModel : ollamaModel,
+      });
       if (openaiKey) {
         setOpenaiKey("");
         setOpenaiKeyPlaceholder("••••••••••••••••");

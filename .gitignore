@@ -36,6 +36,11 @@ live2d-models/
 model_dict.json
 web_tool/
 cache/
+chat_history/
+
+# macOS 실행 번들·런처 (사용자 환경별, 저장소에 안 올림)
+새싹이.app/
+새싹이.command
 
 # IDE
 .vscode/
