@@ -122,12 +122,24 @@ export type WsIncomingMessage =
   | WsBackendSynthComplete
   | WsNewHistoryCreated;
 
+/**
+ * upstream ImageData dataclass 매칭 — `{source, data, mime_type}` 필수.
+ * - source: "camera" | "screen" | "clipboard" | "upload"
+ * - data: "data:image/png;base64,..." 형식의 full data URL
+ * - mime_type: "image/png" 등
+ */
+export interface WsImagePayload {
+  source: "camera" | "screen" | "clipboard" | "upload";
+  data: string;
+  mime_type: string;
+}
+
 // WebSocket 송신 메시지 타입
 export interface WsSendUserMessage {
   type: "text-input"; // upstream은 "text-input" 타입만 처리
   text: string;
-  /** 비전 LLM에 전달할 이미지 data URL 배열 (선택). 백엔드 _handle_conversation_trigger가 처리 */
-  images?: string[];
+  /** 비전 LLM에 전달할 이미지. upstream conversation_utils.create_batch_input이 dict로 인덱싱 */
+  images?: WsImagePayload[];
 }
 
 export interface WsSendNewHistory {

@@ -90,14 +90,15 @@ async function apiSetLlmProvider(body: {
 
 const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부탁드려요!";
 
-// GPT 모델 4종 — 계열별로 안정·고성능 / 가볍고 빠름.
-// OpenAI가 신규 모델 출시 시 여기를 갱신하면 됨.
+// GPT 모델 4종 — 계열별 안정·고성능 / 가볍고 빠름. value는 OpenAI alias (항상 최신 안정 버전으로 라우팅됨).
+// 정확한 dated 버전(예: gpt-5-2025-08-07)을 쓰고 싶으면 "직접 입력" 선택.
 const OPENAI_MODELS: { value: string; label: string }[] = [
-  { value: "gpt-5", label: "GPT-5 (안정·고성능)" },
-  { value: "gpt-5-mini", label: "GPT-5 mini (가볍고 빠름)" },
-  { value: "gpt-4o", label: "GPT-4o (안정·고성능)" },
-  { value: "gpt-4o-mini", label: "GPT-4o mini (가볍고 빠름)" },
+  { value: "gpt-5", label: "GPT-5 (alias · 최신 안정·멀티모달)" },
+  { value: "gpt-5-mini", label: "GPT-5 mini (alias · 가볍고 빠름)" },
+  { value: "gpt-4o", label: "GPT-4o (alias · 안정·멀티모달)" },
+  { value: "gpt-4o-mini", label: "GPT-4o mini (alias · 가볍고 빠름)" },
 ];
+const CUSTOM_MODEL_VALUE = "__custom__";
 
 const inputStyle: React.CSSProperties = {
   background: "var(--color-bg)",
@@ -344,21 +345,48 @@ export function SettingsView(): React.ReactElement {
               ref={(el) => { if (el) el.style.setProperty("-webkit-text-security", "disc"); }}
             />
             <label style={labelStyle}>GPT 모델</label>
-            <select
-              value={openaiModel}
-              onChange={(e) => setOpenaiModel(e.target.value)}
-              style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
-            >
-              {/* 저장된 값이 4개 목록에 없으면 표시용으로 한 번만 추가 */}
-              {!OPENAI_MODELS.some((m) => m.value === openaiModel) && openaiModel && (
-                <option value={openaiModel}>{openaiModel} (저장된 값)</option>
-              )}
-              {OPENAI_MODELS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            {(() => {
+              const isCustom = !OPENAI_MODELS.some((m) => m.value === openaiModel) && !!openaiModel;
+              const selectValue = isCustom ? CUSTOM_MODEL_VALUE : openaiModel;
+              return (
+                <>
+                  <select
+                    value={selectValue}
+                    onChange={(e) => {
+                      if (e.target.value === CUSTOM_MODEL_VALUE) {
+                        // 직접 입력 모드 진입 — 기존 alias가 있었으면 그 값을 시드로 두기
+                        if (OPENAI_MODELS.some((m) => m.value === openaiModel)) {
+                          setOpenaiModel(openaiModel + "-2025-08-07");
+                        }
+                      } else {
+                        setOpenaiModel(e.target.value);
+                      }
+                    }}
+                    style={{ ...inputStyle, cursor: "pointer", appearance: "auto", marginBottom: isCustom ? 6 : 0 }}
+                  >
+                    {OPENAI_MODELS.map((m) => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                    <option value={CUSTOM_MODEL_VALUE}>── 직접 입력 (정확한 dated 버전) ──</option>
+                  </select>
+                  {isCustom && (
+                    <input
+                      type="text"
+                      value={openaiModel}
+                      onChange={(e) => setOpenaiModel(e.target.value)}
+                      onClick={() => window.electronAPI?.restoreFocus()}
+                      placeholder="예: gpt-5-2025-08-07, gpt-4o-2024-11-20"
+                      autoComplete="off"
+                      spellCheck={false}
+                      style={inputStyle}
+                    />
+                  )}
+                </>
+              );
+            })()}
             <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
-              OpenAI API를 통해 ChatGPT 모델을 사용합니다. API 키가 필요하며 인터넷 연결이 있어야 합니다.
+              <strong>alias</strong>는 OpenAI가 항상 최신 안정 버전으로 라우팅하는 별칭입니다(예: <code>gpt-5</code> → 최신 GPT-5 안정 버전).
+              특정 dated 버전을 고정하려면 "직접 입력"을 선택하고 OpenAI 콘솔의 모델 ID를 그대로 입력하세요.
               비전(이미지) 처리는 GPT-4o 이상에서 지원됩니다.
             </p>
           </>

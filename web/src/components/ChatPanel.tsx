@@ -148,7 +148,14 @@ export function ChatContent({
     send({
       type: "text-input",
       text: payload,
-      images: pendingImages.length > 0 ? pendingImages.map((i) => i.dataUrl) : undefined,
+      images: pendingImages.length > 0
+        ? pendingImages.map((i) => ({
+            source: "clipboard" as const,
+            data: i.dataUrl,
+            mime_type:
+              (i.dataUrl.match(/^data:([^;]+);/)?.[1]) ?? "image/png",
+          }))
+        : undefined,
     });
     setInput("");
     setAttachments([]);
