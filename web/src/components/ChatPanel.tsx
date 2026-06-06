@@ -7,18 +7,27 @@ import {
   FolderOpen,
   FileAudio,
   Settings,
+  BookOpen,
   Send,
   Mic,
   MicOff,
   X,
   RotateCcw,
+  Download,
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
+import { getDocumentDownloadUrl } from "../services/api";
+
+// `[[note:slug]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
+function stripNoteMarkers(text: string): string {
+  return text.replace(/\[\[note:[^\]]+\]\]/g, "").replace(/\s{2,}/g, " ").trim();
+}
 import { startVoice, stopVoice } from "../services/voice";
 import { CalendarView } from "./CalendarView";
 import { DocumentsView } from "./DocumentsView";
 import { MeetingView } from "./MeetingView";
+import { NotesView } from "./NotesView";
 import { SettingsView } from "./SettingsView";
 import type { Position, ChatTab } from "../types";
 
@@ -60,6 +69,7 @@ const TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
   { id: "calendar", label: "일정표", Icon: Calendar },
   { id: "documents", label: "문서", Icon: FolderOpen },
   { id: "meeting", label: "회의록", Icon: FileAudio },
+  { id: "notes", label: "노트", Icon: BookOpen },
   { id: "settings", label: "설정", Icon: Settings },
 ];
 
@@ -71,6 +81,9 @@ function ChatContent(): React.ReactElement {
   const messages = useStore((s) => s.messages);
   const aiStatus = useStore((s) => s.aiStatus);
   const addMessage = useStore((s) => s.addMessage);
+  const llmInfo = useStore((s) => s.llmInfo);
+  const setChatTab = useStore((s) => s.setChatTab);
+  const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
 
   const [input, setInput] = useState("");
   const [voiceActive, setVoiceActive] = useState(false);
@@ -153,6 +166,26 @@ function ChatContent(): React.ReactElement {
         <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
           {STATUS_LABEL[aiStatus] ?? ""}
         </span>
+        {llmInfo && (
+          <span
+            title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
+            style={{
+              fontSize: 11,
+              fontWeight: 600,
+              padding: "2px 7px",
+              borderRadius: 10,
+              background: llmInfo.provider === "openai" ? "rgba(16,163,127,0.18)" : "rgba(100,140,220,0.18)",
+              color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
+              border: `1px solid ${llmInfo.provider === "openai" ? "rgba(16,163,127,0.4)" : "rgba(100,140,220,0.4)"}`,
+              whiteSpace: "nowrap",
+              maxWidth: 160,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+            }}
+          >
+            {llmInfo.provider === "openai" ? "GPT" : "Ollama"} · {llmInfo.model}
+          </span>
+        )}
         {voiceActive && (
           <span
             className="status-blink"
@@ -287,8 +320,80 @@ function ChatContent(): React.ReactElement {
                     ),
                   }}
                 >
-                  {msg.text}
+                  {stripNoteMarkers(msg.text)}
                 </ReactMarkdown>
+              )}
+              {msg.role === "ai" && ((msg.citedDocs && msg.citedDocs.length > 0) || (msg.citedNotes && msg.citedNotes.length > 0)) && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    paddingTop: 6,
+                    borderTop: "1px dashed var(--color-border)",
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 4,
+                  }}
+                >
+                  {msg.citedNotes?.map((n) => (
+                    <button
+                      key={`note-${n.slug}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedNoteSlug(n.slug);
+                        setChatTab("notes");
+                      }}
+                      title={`업무 노트로 이동: ${n.title}`}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        borderRadius: 10,
+                        background: "rgba(255,180,80,0.18)",
+                        border: "1px solid rgba(255,180,80,0.5)",
+                        color: "#ffc875",
+                        cursor: "pointer",
+                        maxWidth: 240,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      <BookOpen size={11} />
+                      노트 · {n.title}
+                    </button>
+                  ))}
+                  {msg.citedDocs?.map((c) => (
+                    <a
+                      key={`doc-${c.id}`}
+                      href={getDocumentDownloadUrl(c.id)}
+                      download={c.filename}
+                      title={`원본 다운로드: ${c.filename}`}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: "2px 8px",
+                        fontSize: 11,
+                        borderRadius: 10,
+                        background: "rgba(100,140,220,0.18)",
+                        border: "1px solid rgba(100,140,220,0.4)",
+                        color: "#7aa8ff",
+                        textDecoration: "none",
+                        maxWidth: 220,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <Download size={11} />
+                      {c.filename}
+                    </a>
+                  ))}
+                </div>
               )}
             </div>
           </div>
@@ -472,6 +577,16 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
           minHeight: 0,
         }}>
           <MeetingView />
+        </div>
+        {/* NotesView도 항상 마운트 — 편집 buffer·선택 상태 보존 */}
+        <div style={{
+          display: chatTab === "notes" ? "flex" : "none",
+          flexDirection: "column",
+          flex: 1,
+          overflow: "hidden",
+          minHeight: 0,
+        }}>
+          <NotesView />
         </div>
         {chatTab === "settings" && <SettingsView />}
       </div>

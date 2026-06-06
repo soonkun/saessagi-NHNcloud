@@ -59,6 +59,19 @@ function loadTtsEngine(): "melo" | "system" {
   return localStorage.getItem("saessagi_tts_engine") === "system" ? "system" : "melo";
 }
 
+export interface LlmInfo {
+  provider: "ollama" | "openai";
+  model: string;
+}
+
+function loadLlmInfo(): LlmInfo | null {
+  try {
+    const raw = localStorage.getItem("saessagi_llm_info");
+    if (raw) return JSON.parse(raw) as LlmInfo;
+  } catch { /* ignore */ }
+  return null;
+}
+
 // ────────────────────────────────────────────────────────────
 // Chat Slice
 // ────────────────────────────────────────────────────────────
@@ -66,10 +79,12 @@ interface ChatSlice {
   messages: Message[];
   aiStatus: AiStatus;
   isMicOn: boolean;
-  addMessage: (msg: Omit<Message, "id" | "timestamp">) => void;
+  addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
   setAiStatus: (status: AiStatus) => void;
   setMicOn: (on: boolean) => void;
   clearMessages: () => void;
+  attachCitations: (messageId: string, citedDocs: import("./types").CitedDoc[]) => void;
+  attachNoteCitations: (messageId: string, citedNotes: import("./types").CitedNote[]) => void;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -85,6 +100,7 @@ interface AvatarSlice {
   setEmotion: (emotion: Emotion) => void;
   setSpeaking: (speaking: boolean) => void;
   setPosition: (pos: Position) => void;
+  setPositionSilent: (pos: Position) => void;
   setCharSize: (size: number) => void;
   setIsUploading: (v: boolean) => void;
   setMeetingGenerating: (v: boolean) => void;
@@ -101,10 +117,16 @@ interface UiSlice {
   ttsRate: number;
   ttsVoiceName: string;
   ttsEngine: "melo" | "system";
+  windowMode: "pet" | "window";
+  llmInfo: LlmInfo | null;
+  selectedNoteSlug: string | null;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
   setActiveView: (view: SidebarView | null) => void;
+  setWindowMode: (mode: "pet" | "window") => void;
+  setLlmInfo: (info: LlmInfo | null) => void;
+  setSelectedNoteSlug: (slug: string | null) => void;
   setWsUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string) => void;
@@ -126,16 +148,31 @@ export const useStore = create<AppStore>((set) => ({
   messages: [],
   aiStatus: "idle",
   isMicOn: false,
-  addMessage: (msg) =>
+  addMessage: (msg) => {
+    const id = nextId();
     set((state) => ({
       messages: [
         ...state.messages,
-        { ...msg, id: nextId(), timestamp: Date.now() },
+        { ...msg, id, timestamp: Date.now() },
       ],
-    })),
+    }));
+    return id;
+  },
   setAiStatus: (status) => set({ aiStatus: status }),
   setMicOn: (on) => set({ isMicOn: on }),
   clearMessages: () => set({ messages: [] }),
+  attachCitations: (messageId, citedDocs) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId ? { ...m, citedDocs } : m
+      ),
+    })),
+  attachNoteCitations: (messageId, citedNotes) =>
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === messageId ? { ...m, citedNotes } : m
+      ),
+    })),
 
   // Avatar
   emotion: "neutral",
@@ -156,6 +193,7 @@ export const useStore = create<AppStore>((set) => ({
     }
     set({ position: pos });
   },
+  setPositionSilent: (pos) => set({ position: pos }),
   setCharSize: (size) => {
     try {
       localStorage.setItem("saessagi_char_size", String(size));
@@ -171,10 +209,22 @@ export const useStore = create<AppStore>((set) => ({
   ttsRate: loadTtsRate(),
   ttsVoiceName: loadTtsVoiceName(),
   ttsEngine: loadTtsEngine(),
+  windowMode: "pet" as "pet" | "window",
+  llmInfo: loadLlmInfo(),
+  selectedNoteSlug: null as string | null,
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
   setActiveView: (view) => set({ activeView: view }),
+  setWindowMode: (mode) => set({ windowMode: mode }),
+  setLlmInfo: (info) => {
+    try {
+      if (info) localStorage.setItem("saessagi_llm_info", JSON.stringify(info));
+      else localStorage.removeItem("saessagi_llm_info");
+    } catch { /* ignore */ }
+    set({ llmInfo: info });
+  },
+  setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
   setWsUrl: (url) => {
     try {
       localStorage.setItem("saessagi_ws_url", url);

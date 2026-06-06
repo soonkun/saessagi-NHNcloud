@@ -146,10 +146,64 @@ TAKE_SCREENSHOT_SCHEMA: dict[str, Any] = {
     },
 }
 
+SAVE_KNOWLEDGE_NOTE_SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "save_knowledge_note",
+        "description": (
+            "사용자가 자기 업무 처리 사례·절차·노하우·해결방법을 보고하면 호출. "
+            "후임자에게 인계 가능한 업무 지식 노트(markdown)로 저장한다. "
+            "사용자가 '저장해/기록해/노트로/메모해'라고 명시 요청하면 무조건 호출. "
+            "그렇지 않아도 사용자가 자기가 처리한 일이나 경험을 설명하는 흐름이면 자율 호출하라. "
+            "단순 질문·인사·잡담에는 호출하지 말 것."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "간결한 업무명 (예: '출장비 정산', '연구노트 제외신청')",
+                },
+                "summary": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000,
+                    "description": (
+                        "노트 본문 markdown. 가능하면 다음 섹션으로 구조화: "
+                        "## 상황 / ## 절차 / ## 사용 자료 / ## 교훈."
+                    ),
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 30},
+                    "maxItems": 10,
+                    "description": "분류 태그 (예: ['회계', '출장'])",
+                },
+                "related_docs": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "maxItems": 20,
+                    "description": (
+                        "관련 RAG 문서의 doc_id 목록. "
+                        "search_docs hit의 doc_id 필드 값을 그대로 넣을 것. "
+                        "없으면 빈 배열."
+                    ),
+                },
+            },
+            "required": ["title", "summary"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
 ALL_TOOL_SCHEMAS: list[dict[str, Any]] = [
     ADD_EVENT_SCHEMA,
     GET_EVENTS_SCHEMA,
     SEARCH_DOCS_SCHEMA,
     TAKE_SCREENSHOT_SCHEMA,
     CREATE_MEETING_MINUTES_SCHEMA,
+    SAVE_KNOWLEDGE_NOTE_SCHEMA,
 ]

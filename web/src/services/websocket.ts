@@ -1,6 +1,151 @@
-import type { WsIncomingMessage, WsOutgoingMessage, Emotion } from "../types";
+import type {
+  WsIncomingMessage,
+  WsOutgoingMessage,
+  Emotion,
+  CitedDoc,
+  CitedNote,
+  RagDocument,
+  KnowledgeNoteMeta,
+} from "../types";
 import { useStore } from "../store";
 import { speakLocalQueued, cancelLocalSpeech } from "./speech";
+import { fetchDocuments, fetchNotes } from "./api";
+
+// ────────────────────────────────────────────────────────────
+// 인용 문서 매칭 — AI 답변 텍스트에 documents의 파일명이 substring으로
+// 등장하는지 검사. 공백·괄호·한글 포함 파일명도 정확히 매칭.
+// ────────────────────────────────────────────────────────────
+
+let _docCache: RagDocument[] = [];
+let _docCacheFetchedAt = 0;
+const _DOC_CACHE_TTL_MS = 60_000;
+
+async function getDocsCached(): Promise<RagDocument[]> {
+  const now = Date.now();
+  if (now - _docCacheFetchedAt < _DOC_CACHE_TTL_MS && _docCache.length > 0) {
+    return _docCache;
+  }
+  try {
+    _docCache = await fetchDocuments();
+    _docCacheFetchedAt = now;
+  } catch {
+    /* 빈 캐시 유지 — 다음 호출에서 재시도 */
+  }
+  return _docCache;
+}
+
+function findDocCitations(text: string, docs: RagDocument[]): CitedDoc[] {
+  if (docs.length === 0) return [];
+  const matched = new Map<string, CitedDoc>();
+  // 긴 파일명 우선 매칭 — 짧은 부분 문자열에 휘둘리지 않게
+  const sorted = [...docs].sort(
+    (a, b) => b.filename.length - a.filename.length
+  );
+  const lowerText = text.toLowerCase();
+  for (const d of sorted) {
+    const f = d.filename;
+    if (!f) continue;
+    // 1차: 원문 그대로 substring (가장 정확)
+    if (text.includes(f) || lowerText.includes(f.toLowerCase())) {
+      if (!matched.has(d.id)) {
+        matched.set(d.id, { id: d.id, filename: f });
+      }
+      continue;
+    }
+    // 2차: 확장자 떼고 stem이 8자 이상이면 stem만으로도 매칭 시도
+    // (LLM이 ".hwpx" 같은 확장자를 빼고 언급하는 경우 대비)
+    const stem = f.replace(/\.[^.]+$/, "");
+    if (stem.length >= 8 && lowerText.includes(stem.toLowerCase())) {
+      if (!matched.has(d.id)) {
+        matched.set(d.id, { id: d.id, filename: f });
+      }
+    }
+  }
+  return [...matched.values()];
+}
+
+async function attachCitationsToMessage(
+  messageId: string,
+  text: string
+): Promise<void> {
+  const docs = await getDocsCached();
+  const cited = findDocCitations(text, docs);
+  if (cited.length > 0) {
+    useStore.getState().attachCitations(messageId, cited);
+  }
+}
+
+/** 외부에서 documents 캐시 무효화 (업로드·삭제 시 호출) */
+export function invalidateDocsCache(): void {
+  _docCache = [];
+  _docCacheFetchedAt = 0;
+}
+
+// ────────────────────────────────────────────────────────────
+// 노트 마커 매칭 — AI 답변 텍스트에 [[note:slug]] 마커가 있으면
+// 노트 목록과 매칭해 칩으로 표시
+// ────────────────────────────────────────────────────────────
+
+const _NOTE_MARKER_RE = /\[\[note:([^\]]+)\]\]/g;
+
+let _noteCache: KnowledgeNoteMeta[] = [];
+let _noteCacheFetchedAt = 0;
+const _NOTE_CACHE_TTL_MS = 30_000;
+
+async function getNotesCached(): Promise<KnowledgeNoteMeta[]> {
+  const now = Date.now();
+  if (now - _noteCacheFetchedAt < _NOTE_CACHE_TTL_MS && _noteCache.length > 0) {
+    return _noteCache;
+  }
+  try {
+    _noteCache = await fetchNotes();
+    _noteCacheFetchedAt = now;
+  } catch {
+    /* 빈 캐시 유지 */
+  }
+  return _noteCache;
+}
+
+export function invalidateNotesCache(): void {
+  _noteCache = [];
+  _noteCacheFetchedAt = 0;
+}
+
+function findNoteCitations(
+  text: string,
+  notes: KnowledgeNoteMeta[]
+): CitedNote[] {
+  const slugs = new Set<string>();
+  for (const m of text.matchAll(_NOTE_MARKER_RE)) {
+    slugs.add(m[1].trim());
+  }
+  if (slugs.size === 0) return [];
+  const bySlug = new Map(notes.map((n) => [n.slug, n] as const));
+  const out: CitedNote[] = [];
+  for (const slug of slugs) {
+    const note = bySlug.get(slug);
+    out.push({
+      slug,
+      // 캐시에 아직 없으면(방금 LLM이 만든 노트) slug를 그대로 제목으로 사용
+      title: note?.title ?? slug,
+    });
+  }
+  return out;
+}
+
+async function attachNoteCitationsToMessage(
+  messageId: string,
+  text: string
+): Promise<void> {
+  if (!text.includes("[[note:")) return;
+  // 새로 만든 노트가 캐시에 없을 수 있으니 즉시 무효화 후 fetch
+  invalidateNotesCache();
+  const notes = await getNotesCached();
+  const cited = findNoteCitations(text, notes);
+  if (cited.length > 0) {
+    useStore.getState().attachNoteCitations(messageId, cited);
+  }
+}
 
 // ────────────────────────────────────────────────────────────
 // 감정 태그 파싱 유틸
@@ -174,7 +319,9 @@ function dispatch(msg: WsIncomingMessage): void {
         const { text: clean, emotion } = stripEmotionTags(msg.display_text.text);
         if (emotion) store.setEmotion(emotion);
         displayText = clean || msg.display_text.text;
-        store.addMessage({ role: "ai", text: displayText });
+        const mid = store.addMessage({ role: "ai", text: displayText });
+        void attachCitationsToMessage(mid, displayText);
+        void attachNoteCitationsToMessage(mid, displayText);
       }
       if (store.ttsEngine === "system") {
         if (displayText) speakLocalQueued(displayText);
@@ -184,12 +331,15 @@ function dispatch(msg: WsIncomingMessage): void {
       break;
     }
 
-    case "message":
-      store.addMessage({ role: msg.role, text: msg.message });
+    case "message": {
+      const mid = store.addMessage({ role: msg.role, text: msg.message });
       if (msg.role === "ai") {
         store.setAiStatus("idle");
+        void attachCitationsToMessage(mid, msg.message);
+        void attachNoteCitationsToMessage(mid, msg.message);
       }
       break;
+    }
 
     case "avatar-state": {
       // upstream expression 이름이 우리 파일명과 다를 수 있으므로 매핑 경유

@@ -1,4 +1,11 @@
-import type { CalendarEvent, RagDocument, RagFolder } from "../types";
+import type {
+  CalendarEvent,
+  RagDocument,
+  RagFolder,
+  KnowledgeNote,
+  KnowledgeNoteMeta,
+  KnowledgeGraphData,
+} from "../types";
 
 // Electron은 file:// 로드 → 상대경로가 백엔드로 라우팅되지 않으므로 절대 URL 필요
 export const API_BASE: string =
@@ -157,6 +164,60 @@ export async function uploadDocument(
 
 export async function deleteDocument(id: string): Promise<void> {
   await apiFetch<unknown>(`/api/rag/documents/${id}`, { method: "DELETE" });
+}
+
+export function getDocumentDownloadUrl(docId: string): string {
+  return `${API_BASE}/api/rag/documents/${encodeURIComponent(docId)}/download`;
+}
+
+// ────────────────────────────────────────────────────────────
+// Knowledge Notes API (M_15)
+// ────────────────────────────────────────────────────────────
+
+export async function fetchNotes(): Promise<KnowledgeNoteMeta[]> {
+  return apiFetch<KnowledgeNoteMeta[]>("/api/knowledge/notes");
+}
+
+export async function fetchNote(slug: string): Promise<KnowledgeNote> {
+  return apiFetch<KnowledgeNote>(`/api/knowledge/notes/${encodeURIComponent(slug)}`);
+}
+
+export async function createNote(body: {
+  title: string;
+  content?: string;
+  tags?: string[];
+  related_docs?: string[];
+}): Promise<KnowledgeNote> {
+  return apiFetch<KnowledgeNote>("/api/knowledge/notes", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateNote(
+  slug: string,
+  body: {
+    title?: string;
+    content?: string;
+    tags?: string[];
+    related_docs?: string[];
+  }
+): Promise<KnowledgeNote> {
+  return apiFetch<KnowledgeNote>(
+    `/api/knowledge/notes/${encodeURIComponent(slug)}`,
+    { method: "PATCH", body: JSON.stringify(body) }
+  );
+}
+
+export async function deleteNote(slug: string): Promise<void> {
+  await apiFetch<unknown>(
+    `/api/knowledge/notes/${encodeURIComponent(slug)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function fetchKnowledgeGraph(): Promise<KnowledgeGraphData> {
+  return apiFetch<KnowledgeGraphData>("/api/knowledge/graph");
 }
 
 // ────────────────────────────────────────────────────────────

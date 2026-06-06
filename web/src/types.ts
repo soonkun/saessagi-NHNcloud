@@ -15,13 +15,43 @@ export type AiStatus = "idle" | "thinking" | "speaking";
 
 export type SidebarView = "calendar" | "documents" | "settings";
 
-export type ChatTab = "chat" | "calendar" | "documents" | "meeting" | "settings";
+export type ChatTab = "chat" | "calendar" | "documents" | "meeting" | "notes" | "settings";
+
+export interface KnowledgeNoteMeta {
+  slug: string;
+  title: string;
+  tags: string[];
+  related_docs: string[];
+  created: string;
+  updated: string;
+}
+
+export interface KnowledgeNote extends KnowledgeNoteMeta {
+  content: string;
+}
+
+export interface KnowledgeGraphData {
+  nodes: { slug: string; title: string; tags: string[] }[];
+  edges: { source: string; target: string; kind: "wikilink" | "tag" | "doc" }[];
+}
+
+export interface CitedDoc {
+  id: string;
+  filename: string;
+}
+
+export interface CitedNote {
+  slug: string;
+  title: string;
+}
 
 export interface Message {
   id: string;
   role: "human" | "ai";
   text: string;
   timestamp: number;
+  citedDocs?: CitedDoc[];
+  citedNotes?: CitedNote[];
 }
 
 export interface Position {

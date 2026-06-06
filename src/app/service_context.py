@@ -56,6 +56,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # M_13: MeetingMinutesService 슬롯 + 임시파일 정리 스케줄러
         self.meeting_minutes_service: "MeetingMinutesService | None" = None
         self._temp_cleanup_scheduler: Any = None  # apscheduler.AsyncIOScheduler | None
+        # M_15: KnowledgeService 슬롯 (Phase 1 후 추가)
+        self.knowledge_service: Any = None  # KnowledgeService | None
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
         # D-13: 마지막으로 연결된 활성 WebSocket (단일 사용자 전제)
@@ -181,10 +183,29 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             f"(오늘 기준으로 '내일', '다음 주 수요일' 등 상대적 날짜를 정확히 계산해서 사용해.)"
         )
 
+        # M_15 Phase 2: 업무 노트 자동 저장 가이드
+        notes_block = (
+            "\n\n## 업무 노트 저장 지침 (save_knowledge_note 툴)\n"
+            "사용자가 자기가 처리한 업무 사례·절차·해결방법·노하우를 보고하는 흐름이면 "
+            "save_knowledge_note 툴을 자율 호출해 후임자 인계용 업무 지식으로 저장하세요. "
+            "사용자가 '저장해/기록해/노트로/메모해' 같은 명시 요청을 하면 반드시 호출하세요. "
+            "단순 질문·인사·잡담에는 호출하지 마세요.\n\n"
+            "호출 전 절차:\n"
+            "1) 관련 문서가 있다면 먼저 search_docs를 호출해 hit 중에서 `doc_id` 값을 모아 "
+            "save_knowledge_note의 `related_docs` 인자에 그대로 포함하세요.\n"
+            "2) `summary`는 한국어 markdown으로 작성하되 가능하면 `## 상황 / ## 절차 / ## 사용 자료 / ## 교훈` "
+            "섹션으로 구조화하세요. 사용자가 한 말을 그대로 옮기지 말고 핵심을 정리하세요.\n"
+            "3) `tags`는 1~3개의 분류 단어 (예: ['회계','출장']).\n\n"
+            "호출 후 응답:\n"
+            "사용자에게 자연어로 \"방금 ⟨제목⟩ 노트로 저장해 두었어요\"라고 한국어로 알리고, "
+            "답변 어딘가에 ToolResult payload의 `note_marker` (예: `[[note:생성된-슬러그]]`)를 "
+            "반드시 정확히 한 번 포함하세요. 사용자에게는 이것이 노트로 점프하는 칩으로 보입니다.\n"
+        )
+
         if self.live2d_model is None:
-            return persona_prompt + date_block
+            return persona_prompt + date_block + notes_block
         result = await super().construct_system_prompt(persona_prompt)
-        return result + date_block
+        return result + date_block + notes_block
 
     async def load_from_config(self, config: Any) -> None:
         """upstream Config를 받아 부모 load_from_config 호출.
@@ -403,6 +424,20 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             logger.warning(f"rag_service 초기화 실패 (search_docs 비활성화): {exc}")
             self.rag_service = None
 
+        # M_15: KnowledgeService 초기화 — RagService 직후. RAG가 없어도 노트 CRUD는 가능.
+        try:
+            from knowledge import KnowledgeService
+
+            saessagi_root = os.environ.get("SAESSAGI_ROOT", ".")
+            self.knowledge_service = KnowledgeService(
+                root=saessagi_root,
+                rag_service=self.rag_service,
+            )
+            logger.info("KnowledgeService 초기화 완료")
+        except Exception as exc:
+            logger.warning(f"knowledge_service 초기화 실패 (save_knowledge_note 비활성화): {exc}")
+            self.knowledge_service = None
+
         # CR-05: ToolRouter/Adapter 조립.
         # screenshot=None이면 take_screenshot만 service_unavailable, 나머지 툴은 정상 동작.
         self.tool_router = ToolRouter(
@@ -411,6 +446,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             screenshot=self.screenshot_service,  # None 허용 — 비-Windows 환경
             meeting_minutes=self.meeting_minutes_service,
             avatar_state=self.avatar_state,
+            knowledge=self.knowledge_service,
         )
         self.tool_router_adapter = ToolRouterAdapter(self.tool_router)
         logger.info(

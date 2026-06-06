@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from .screenshot import ScreenshotService
     from avatar_state import AvatarState
     from meeting_minutes.service import MeetingMinutesService
+    from knowledge.service import KnowledgeService
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,14 @@ class ToolRouter:
     """
 
     LOCAL_TOOL_NAMES: frozenset[str] = frozenset(
-        {"add_event", "get_events", "search_docs", "take_screenshot", "create_meeting_minutes"}
+        {
+            "add_event",
+            "get_events",
+            "search_docs",
+            "take_screenshot",
+            "create_meeting_minutes",
+            "save_knowledge_note",
+        }
     )
 
     def __init__(
@@ -50,6 +58,7 @@ class ToolRouter:
         screenshot: "ScreenshotService | None" = None,
         meeting_minutes: "MeetingMinutesService | None" = None,
         avatar_state: "AvatarState | None" = None,
+        knowledge: "KnowledgeService | None" = None,
     ) -> None:
         """
         Args:
@@ -58,6 +67,7 @@ class ToolRouter:
             screenshot: M_05b 내부 ScreenshotService 인스턴스. None이면 take_screenshot이 service_unavailable (비-Windows).
             meeting_minutes: M_13 MeetingMinutesService 인스턴스. None이면 create_meeting_minutes가 service_unavailable.
             avatar_state: M_08 AvatarState 인스턴스. None이면 아바타 상태 전환 스킵.
+            knowledge: M_15 KnowledgeService 인스턴스. None이면 save_knowledge_note가 service_unavailable.
         """
 
         self._calendar = calendar
@@ -65,6 +75,7 @@ class ToolRouter:
         self._screenshot = screenshot
         self._meeting_minutes = meeting_minutes
         self._avatar_state = avatar_state
+        self._knowledge = knowledge
 
         # JSON Schema Validator를 __init__ 시 4개 컴파일 후 재사용
         self._validators: dict[str, Draft202012Validator] = {}
@@ -143,8 +154,13 @@ class ToolRouter:
             elif name == "take_screenshot":
                 return await self._handle_take_screenshot(arguments)
 
-            else:  # create_meeting_minutes
+            elif name == "create_meeting_minutes":
                 return await self._handle_create_meeting_minutes(arguments)
+
+            else:  # save_knowledge_note
+                if self._knowledge is None:
+                    return _service_unavail("save_knowledge_note")
+                return await self._handle_save_knowledge_note(arguments)
 
         except asyncio.CancelledError:
             raise
@@ -247,6 +263,7 @@ class ToolRouter:
             citation = self._rag.format_citation(hit)
             hits_payload.append(
                 {
+                    "doc_id": getattr(hit, "doc_id", None),
                     "doc_name": getattr(hit, "doc_name", None),
                     "page": getattr(hit, "page", None),
                     "section": getattr(hit, "section", None),
@@ -336,6 +353,50 @@ class ToolRouter:
 
         return await handle_create_meeting_minutes(  # type: ignore[no-any-return]
             self._meeting_minutes, args, avatar_state=self._avatar_state
+        )
+
+    async def _handle_save_knowledge_note(self, args: dict[str, Any]) -> ToolResult:
+        """save_knowledge_note 핸들러 — 업무 지식 노트 저장."""
+        title: str = args["title"]
+        summary: str = args["summary"]
+        tags: list[str] = args.get("tags", []) or []
+        related_docs: list[str] = args.get("related_docs", []) or []
+
+        try:
+            note = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self._knowledge.create_note(  # type: ignore[union-attr]
+                    title=title,
+                    content=summary,
+                    tags=tags,
+                    related_docs=related_docs,
+                ),
+            )
+        except Exception as exc:
+            logger.exception("save_knowledge_note 저장 실패: %s", exc)
+            return ToolResult(
+                ok=False,
+                error=f"노트 저장 실패: {exc}",
+                error_code="handler_exception",
+            )
+
+        logger.info(
+            "save_knowledge_note 성공: slug=%s, title=%s, related_docs=%d",
+            note.slug, note.title, len(related_docs),
+        )
+        return ToolResult(
+            ok=True,
+            payload={
+                "slug": note.slug,
+                "title": note.title,
+                "tags": list(note.tags),
+                "related_docs": list(note.related_docs),
+                "note_marker": f"[[note:{note.slug}]]",
+                "alert": (
+                    f"업무 노트 '{note.title}'(으)로 저장했습니다. "
+                    f"답변 끝에 반드시 {{note_marker}} (={'[[note:' + note.slug + ']]'})를 한 번 포함하세요."
+                ),
+            },
         )
 
     async def _on_continuous_frame(self, data_url: str) -> None:
