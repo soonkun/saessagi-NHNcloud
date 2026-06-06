@@ -50,6 +50,12 @@ export interface MessageAttachment {
   filename: string;
 }
 
+export interface MessageImage {
+  /** data URL: data:image/png;base64,... */
+  dataUrl: string;
+  filename: string;
+}
+
 export interface Message {
   id: string;
   role: "human" | "ai";
@@ -58,6 +64,7 @@ export interface Message {
   citedDocs?: CitedDoc[];
   citedNotes?: CitedNote[];
   attachments?: MessageAttachment[];
+  images?: MessageImage[];
 }
 
 export interface Position {
@@ -119,6 +126,8 @@ export type WsIncomingMessage =
 export interface WsSendUserMessage {
   type: "text-input"; // upstream은 "text-input" 타입만 처리
   text: string;
+  /** 비전 LLM에 전달할 이미지 data URL 배열 (선택). 백엔드 _handle_conversation_trigger가 처리 */
+  images?: string[];
 }
 
 export interface WsSendNewHistory {

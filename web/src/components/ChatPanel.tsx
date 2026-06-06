@@ -20,7 +20,7 @@ import { useStore } from "../store";
 import { send } from "../services/websocket";
 import { invalidateDocsCache } from "../services/websocket";
 import { getDocumentDownloadUrl, uploadDocument } from "../services/api";
-import type { MessageAttachment } from "../types";
+import type { MessageAttachment, MessageImage } from "../types";
 
 // `[[note:slug]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
 function stripNoteMarkers(text: string): string {
@@ -103,6 +103,8 @@ export function ChatContent({
   const [uploadingItems, setUploadingItems] = useState<
     { key: string; filename: string; progress: number; error?: string }[]
   >([]);
+  // 첨부 이미지 (clipboard paste 또는 향후 드래그) — 비전 LLM에 직접 전달
+  const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
 
   function handleNewHistory(): void {
     send({ type: "create-new-history" });
@@ -119,24 +121,38 @@ export function ChatContent({
 
   function handleSend(): void {
     const text = input.trim();
-    if (!text && attachments.length === 0) return;
-    // 화면 표시는 사용자 원문 + attachments 칩으로
+    if (!text && attachments.length === 0 && pendingImages.length === 0) return;
+    // 화면 표시는 사용자 원문 + attachments + images 미리보기
     addMessage({
       role: "human",
-      text: text || "(첨부 자료를 정리해 주세요)",
+      text: text || (pendingImages.length > 0
+        ? "(첨부 이미지를 보고 업무 노트로 정리해 주세요)"
+        : "(첨부 자료를 정리해 주세요)"),
       attachments: attachments.length > 0 ? attachments : undefined,
+      images: pendingImages.length > 0 ? pendingImages : undefined,
     });
     // 백엔드에는 prefix로 doc_id 메타 자동 삽입 — LLM이 related_docs에 활용
-    let payload = text || "(이 첨부 자료를 검토해서 업무 노트로 정리해줘.)";
+    let payload = text || (pendingImages.length > 0
+      ? "(첨부 이미지를 분석해서 업무 노트로 정리해줘. 이미지에 보이는 정보는 summary에 정리하고 save_knowledge_note를 호출.)"
+      : "(이 첨부 자료를 검토해서 업무 노트로 정리해줘.)");
     if (attachments.length > 0) {
       const meta = attachments
         .map((a) => `${a.filename} (doc_id: ${a.id})`)
         .join("; ");
       payload = `[첨부 자료: ${meta}]\n${payload}`;
     }
-    send({ type: "text-input", text: payload });
+    if (pendingImages.length > 0) {
+      const imgMeta = pendingImages.map((i) => i.filename).join(", ");
+      payload = `[첨부 이미지: ${imgMeta}]\n${payload}`;
+    }
+    send({
+      type: "text-input",
+      text: payload,
+      images: pendingImages.length > 0 ? pendingImages.map((i) => i.dataUrl) : undefined,
+    });
     setInput("");
     setAttachments([]);
+    setPendingImages([]);
   }
 
   // 첨부 파일 업로드
@@ -148,27 +164,11 @@ export function ChatContent({
     if (!files || files.length === 0) return;
     window.electronAPI?.restoreFocus();
     for (const file of Array.from(files)) {
-      const key = `${Date.now()}_${file.name}`;
-      setUploadingItems((prev) => [...prev, { key, filename: file.name, progress: 0 }]);
-      try {
-        const doc = await uploadDocument(file, null, (pct) => {
-          setUploadingItems((prev) =>
-            prev.map((it) => (it.key === key ? { ...it, progress: pct } : it))
-          );
-        });
-        // 업로드 완료 → 첨부 목록에 추가하고 진행 목록에서 제거
-        setAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }]);
-        setUploadingItems((prev) => prev.filter((it) => it.key !== key));
-        invalidateDocsCache();
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "업로드 실패";
-        setUploadingItems((prev) =>
-          prev.map((it) => (it.key === key ? { ...it, error: msg, progress: -1 } : it))
-        );
-        // 5초 후 자동 제거
-        setTimeout(() => {
-          setUploadingItems((prev) => prev.filter((it) => it.key !== key));
-        }, 5000);
+      if (file.type.startsWith("image/")) {
+        const dataUrl = await fileToDataUrl(file);
+        setPendingImages((prev) => [...prev, { dataUrl, filename: file.name || "image.png" }]);
+      } else {
+        await uploadOneFile(file);
       }
     }
     // 같은 파일 재선택 가능하도록 reset
@@ -177,6 +177,69 @@ export function ChatContent({
 
   function removeAttachment(id: string): void {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }
+
+  function removeImage(idx: number): void {
+    setPendingImages((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  // 클립보드 paste — 이미지/파일 분기
+  async function handlePaste(e: React.ClipboardEvent<HTMLInputElement>): Promise<void> {
+    const cd = e.clipboardData;
+    if (!cd) return;
+    const items = Array.from(cd.items);
+    const fileItems = items.filter((it) => it.kind === "file");
+    if (fileItems.length === 0) return; // 일반 텍스트 paste는 기본 동작
+    e.preventDefault();
+    window.electronAPI?.restoreFocus();
+
+    for (const item of fileItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      if (item.type.startsWith("image/")) {
+        // 이미지: data URL로 변환해 비전 LLM에 직접 전달
+        const dataUrl = await fileToDataUrl(file);
+        const filename = file.name && file.name !== "image.png"
+          ? file.name
+          : `screenshot_${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
+        setPendingImages((prev) => [...prev, { dataUrl, filename }]);
+      } else {
+        // 일반 파일: 기존 업로드 흐름 (RAG 저장)
+        await uploadOneFile(file);
+      }
+    }
+  }
+
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function uploadOneFile(file: File): Promise<void> {
+    const key = `${Date.now()}_${file.name}`;
+    setUploadingItems((prev) => [...prev, { key, filename: file.name, progress: 0 }]);
+    try {
+      const doc = await uploadDocument(file, null, (pct) => {
+        setUploadingItems((prev) =>
+          prev.map((it) => (it.key === key ? { ...it, progress: pct } : it))
+        );
+      });
+      setAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }]);
+      setUploadingItems((prev) => prev.filter((it) => it.key !== key));
+      invalidateDocsCache();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "업로드 실패";
+      setUploadingItems((prev) =>
+        prev.map((it) => (it.key === key ? { ...it, error: msg, progress: -1 } : it))
+      );
+      setTimeout(() => {
+        setUploadingItems((prev) => prev.filter((it) => it.key !== key));
+      }, 5000);
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
@@ -337,6 +400,25 @@ export function ChatContent({
             >
               {msg.role === "human" ? (
                 <div>
+                  {msg.images && msg.images.length > 0 && (
+                    <div style={{ marginBottom: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {msg.images.map((img, i) => (
+                        <img
+                          key={`img-${i}`}
+                          src={img.dataUrl}
+                          alt={img.filename}
+                          title={img.filename}
+                          style={{
+                            maxWidth: 220,
+                            maxHeight: 220,
+                            objectFit: "contain",
+                            borderRadius: 8,
+                            border: "1px solid rgba(255,255,255,0.15)",
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                   <span style={{ whiteSpace: "pre-wrap" }}>{msg.text}</span>
                   {msg.attachments && msg.attachments.length > 0 && (
                     <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
@@ -506,7 +588,7 @@ export function ChatContent({
       </div>
 
       {/* 첨부 자료 / 업로드 진행 칩 */}
-      {(attachments.length > 0 || uploadingItems.length > 0) && (
+      {(attachments.length > 0 || uploadingItems.length > 0 || pendingImages.length > 0) && (
         <div
           style={{
             padding: "6px 12px 0",
@@ -595,6 +677,55 @@ export function ChatContent({
               </span>
             </span>
           ))}
+          {pendingImages.map((img, idx) => (
+            <span
+              key={`img-${idx}`}
+              title={`이미지 첨부: ${img.filename} (비전 LLM에 직접 전달)`}
+              style={{
+                position: "relative",
+                display: "inline-block",
+                border: "1px solid rgba(255,180,80,0.45)",
+                borderRadius: 8,
+                padding: 2,
+                background: "rgba(255,180,80,0.08)",
+              }}
+            >
+              <img
+                src={img.dataUrl}
+                alt={img.filename}
+                style={{
+                  display: "block",
+                  width: 56,
+                  height: 56,
+                  objectFit: "cover",
+                  borderRadius: 6,
+                }}
+              />
+              <button
+                onClick={() => removeImage(idx)}
+                title="이미지 제거"
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  background: "rgba(0,0,0,0.7)",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  cursor: "pointer",
+                  fontSize: 10,
+                  lineHeight: 1,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
         </div>
       )}
 
@@ -632,7 +763,7 @@ export function ChatContent({
           ref={fileInputRef}
           type="file"
           multiple
-          accept=".txt,.md,.pdf,.docx,.pptx,.hwpx,.markdown"
+          accept=".txt,.md,.pdf,.docx,.pptx,.hwpx,.markdown,image/*"
           style={{ display: "none" }}
           onChange={(e) => void handleFilesPicked(e.target.files)}
         />
@@ -659,8 +790,9 @@ export function ChatContent({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={(e) => void handlePaste(e)}
           onClick={() => window.electronAPI?.restoreFocus()}
-          placeholder="메시지를 입력하세요..."
+          placeholder="메시지 또는 파일/스크린샷 붙여넣기 (⌘V)"
           style={{
             flex: 1,
             background: "var(--color-bg)",
@@ -675,16 +807,16 @@ export function ChatContent({
 
         <button
           onClick={handleSend}
-          disabled={!input.trim() && attachments.length === 0}
+          disabled={!input.trim() && attachments.length === 0 && pendingImages.length === 0}
           title="전송"
           style={{
-            background: (input.trim() || attachments.length > 0)
+            background: (input.trim() || attachments.length > 0 || pendingImages.length > 0)
               ? "var(--color-accent)"
               : "var(--color-border)",
             border: "none",
             borderRadius: 8,
             color: "#fff",
-            cursor: (input.trim() || attachments.length > 0) ? "pointer" : "default",
+            cursor: (input.trim() || attachments.length > 0 || pendingImages.length > 0) ? "pointer" : "default",
             padding: "6px 10px",
             display: "flex",
             alignItems: "center",
