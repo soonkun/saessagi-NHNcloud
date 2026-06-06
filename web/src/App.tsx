@@ -9,6 +9,7 @@ import { showStartupGreeting } from "./services/startup";
 import { startReminderPoll } from "./services/reminder";
 import { CharacterWidget } from "./components/CharacterWidget";
 import { ChatPanel } from "./components/ChatPanel";
+import { DesktopView } from "./components/DesktopView";
 
 export function App(): React.ReactElement {
   const wsUrl = useStore((s) => s.wsUrl);
@@ -122,6 +123,16 @@ export function App(): React.ReactElement {
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [chatOpen, setChatOpen, windowMode]);
 
+  if (windowMode === "window") {
+    // 창 모드 — Gemini 스타일 전용 레이아웃. 펫 캐릭터·플로팅 패널은 숨김.
+    return (
+      <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
+        <DesktopView />
+      </div>
+    );
+  }
+
+  // 펫 모드 — 떠다니는 캐릭터 + 플로팅 채팅 패널
   return (
     <div style={{ width: "100vw", height: "100vh", position: "relative", pointerEvents: "none" }}>
       <CharacterWidget clickthroughHandle={clickthroughRef} />

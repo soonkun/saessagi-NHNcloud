@@ -90,8 +90,15 @@ async function apiSetLlmProvider(body: {
 
 const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부탁드려요!";
 
+// 자주 쓰는 OpenAI 모델 추천 목록 (datalist suggestion용).
+// 자유 입력이 허용되므로 OpenAI가 신규 모델을 출시하면 직접 입력하면 됨.
 const OPENAI_MODELS = [
-  // 최신 (2025)
+  // 5 시리즈 (있을 경우)
+  "gpt-5",
+  "gpt-5-mini",
+  "gpt-5-nano",
+  // 4.5 / 4.1 시리즈
+  "gpt-4.5-preview",
   "gpt-4.1",
   "gpt-4.1-mini",
   "gpt-4.1-nano",
@@ -352,17 +359,24 @@ export function SettingsView(): React.ReactElement {
               ref={(el) => { if (el) el.style.setProperty("-webkit-text-security", "disc"); }}
             />
             <label style={labelStyle}>GPT 모델</label>
-            <select
+            <input
+              type="text"
+              list="openai-model-suggestions"
               value={openaiModel}
               onChange={(e) => setOpenaiModel(e.target.value)}
-              style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
-            >
+              onClick={() => window.electronAPI?.restoreFocus()}
+              placeholder="gpt-5 또는 OpenAI 모델명 직접 입력"
+              autoComplete="off"
+              spellCheck={false}
+              style={inputStyle}
+            />
+            <datalist id="openai-model-suggestions">
               {OPENAI_MODELS.map((m) => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m} />
               ))}
-            </select>
+            </datalist>
             <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
-              OpenAI API를 통해 ChatGPT 모델을 사용합니다. API 키가 필요하며 인터넷 연결이 있어야 합니다.
+              OpenAI API 모델명을 직접 입력하거나 추천 목록에서 선택하세요. 신규 모델이 출시되면 그 이름을 그대로 입력하면 됩니다. API 키 필요.
             </p>
           </>
         )}

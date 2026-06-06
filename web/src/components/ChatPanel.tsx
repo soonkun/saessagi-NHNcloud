@@ -80,7 +80,11 @@ const TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
 // Chat content
 // ────────────────────────────────────────────────────────────
 
-function ChatContent(): React.ReactElement {
+export function ChatContent({
+  emptyHero,
+}: {
+  emptyHero?: React.ReactNode;
+} = {}): React.ReactElement {
   const messages = useStore((s) => s.messages);
   const aiStatus = useStore((s) => s.aiStatus);
   const addMessage = useStore((s) => s.addMessage);
@@ -290,16 +294,18 @@ function ChatContent(): React.ReactElement {
         }}
       >
         {messages.length === 0 && (
-          <div
-            style={{
-              color: "var(--color-text-muted)",
-              textAlign: "center",
-              marginTop: 40,
-              fontSize: 13,
-            }}
-          >
-            안녕하세요! 무엇을 도와드릴까요?
-          </div>
+          emptyHero ?? (
+            <div
+              style={{
+                color: "var(--color-text-muted)",
+                textAlign: "center",
+                marginTop: 40,
+                fontSize: 13,
+              }}
+            >
+              안녕하세요! 무엇을 도와드릴까요?
+            </div>
+          )
         )}
         {messages.map((msg) => (
           <div
