@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { useStore } from "../store";
 import {
   MessageCircle,
@@ -9,6 +10,10 @@ import {
   LayoutGrid,
   PanelLeftClose,
   Power,
+  Minus,
+  Square,
+  X as XIcon,
+  Copy as RestoreIcon,
 } from "lucide-react";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
@@ -42,17 +47,93 @@ export function DesktopView(): React.ReactElement {
 
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
 
+  // window 최대화 상태 추적 — 토글 아이콘 결정용
+  const [isMaximized, setIsMaximized] = useState(false);
+  useEffect(() => {
+    const ipc = (window as { electron?: { ipcRenderer?: { on: (c: string, h: (...a: unknown[]) => void) => void; removeListener: (c: string, h: (...a: unknown[]) => void) => void } } }).electron?.ipcRenderer;
+    if (!ipc) return;
+    const handler = (_e: unknown, val: boolean): void => setIsMaximized(!!val);
+    ipc.on("window-maximized-change", handler as (...a: unknown[]) => void);
+    return () => ipc.removeListener("window-maximized-change", handler as (...a: unknown[]) => void);
+  }, []);
+
+  function sendWindowAction(channel: string): void {
+    const ipc = (window as { electron?: { ipcRenderer?: { send: (c: string) => void } } }).electron?.ipcRenderer;
+    ipc?.send(channel);
+  }
+
   return (
     <div
       style={{
         position: "absolute",
         inset: 0,
         display: "flex",
+        flexDirection: "column",
         background: "var(--color-bg)",
         color: "var(--color-text)",
         pointerEvents: "auto",
       }}
     >
+      {/* 상단 타이틀 바 — 드래그 영역 + 창 제어 버튼 */}
+      <header
+        style={{
+          height: 36,
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          background: "var(--color-sidebar)",
+          borderBottom: "1px solid var(--color-border)",
+          // 전체를 드래그 가능 영역으로 — 아래에서 버튼만 no-drag
+          // @ts-ignore — Electron 전용 CSS
+          WebkitAppRegion: "drag",
+        }}
+      >
+        {/* 왼쪽: 빈 공간 (macOS native traffic light 영역 회피용 패딩) */}
+        <div style={{ width: 70, flexShrink: 0 }} />
+        {/* 중앙: 타이틀 — 드래그 영역 안에 텍스트만 */}
+        <div
+          style={{
+            flex: 1,
+            textAlign: "center",
+            fontSize: 12,
+            color: "var(--color-text-muted)",
+            userSelect: "none",
+          }}
+        >
+          새싹이 · AI 비서
+        </div>
+        {/* 오른쪽: 창 제어 버튼 */}
+        <div
+          style={{
+            display: "flex",
+            gap: 0,
+            flexShrink: 0,
+            // @ts-ignore
+            WebkitAppRegion: "no-drag",
+          }}
+        >
+          <TitleBarBtn onClick={() => sendWindowAction("window-minimize")} title="최소화">
+            <Minus size={13} />
+          </TitleBarBtn>
+          <TitleBarBtn
+            onClick={() => sendWindowAction("window-maximize")}
+            title={isMaximized ? "복원" : "최대화"}
+          >
+            {isMaximized ? <RestoreIcon size={11} /> : <Square size={11} />}
+          </TitleBarBtn>
+          <TitleBarBtn
+            onClick={() => sendWindowAction("window-close")}
+            title="창 닫기 (앱은 트레이에 남음)"
+            danger
+          >
+            <XIcon size={13} />
+          </TitleBarBtn>
+        </div>
+      </header>
+
+      {/* 본문: 사이드바 + 메인 영역 */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
       {/* 좌측 사이드바 */}
       <aside
         style={{
@@ -245,7 +326,52 @@ export function DesktopView(): React.ReactElement {
         </div>
         {chatTab === "settings" && <SettingsView />}
       </main>
+      </div>
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────
+// 타이틀바 버튼
+// ────────────────────────────────────────────────────────────
+
+function TitleBarBtn({
+  onClick,
+  title,
+  children,
+  danger = false,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+  danger?: boolean;
+}): React.ReactElement {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        width: 44,
+        height: 36,
+        background: hover
+          ? danger
+            ? "#e53935"
+            : "rgba(255,255,255,0.08)"
+          : "transparent",
+        border: "none",
+        cursor: "pointer",
+        color: hover && danger ? "#fff" : "var(--color-text)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        transition: "background 0.12s, color 0.12s",
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

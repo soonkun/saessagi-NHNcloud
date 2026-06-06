@@ -84,10 +84,29 @@ function setupIPC(): void {
     }
   });
 
-  // electronAPI.quit() — 캐릭터 X 버튼에서 호출
-  ipcMain.on("app-quit", () => {
-    isQuitting = true;
-    app.quit();
+  // electronAPI.quit() — 캐릭터 X 버튼 / 사이드바 종료 버튼에서 호출
+  // 실수 종료 방지: native dialog로 확인 후 종료
+  ipcMain.on("app-quit", async () => {
+    const win = windowManager.getWindow();
+    if (!win) {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+    const result = await dialog.showMessageBox(win, {
+      type: "question",
+      buttons: ["취소", "종료"],
+      defaultId: 0,
+      cancelId: 0,
+      title: "새싹이 종료",
+      message: "새싹이를 종료할까요?",
+      detail: "진행 중인 작업이 모두 닫히고, 다음 실행 시 다시 시작됩니다.",
+      noLink: true,
+    });
+    if (result.response === 1) {
+      isQuitting = true;
+      app.quit();
+    }
   });
 
   // electronAPI.getDisplay() — CharacterWidget 위치 클램핑용
