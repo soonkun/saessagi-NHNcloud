@@ -98,9 +98,12 @@ CREATE_MEETING_MINUTES_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "create_meeting_minutes",
         "description": (
-            "녹취록을 받아 한글(HWPX) 회의 결과 보고서를 자동 생성하고 다운로드 URL을 반환합니다."
-            " transcript는 회의 녹취록 전체 텍스트, pages는 보고서 분량(1 또는 2장)입니다."
-            " 사용자에게 페이지 수를 먼저 물어본 후 호출하세요."
+            "회의 녹취록(STT 출력)을 받아 한글(HWPX) 회의결과보고서 파일을 생성하고 다운로드 URL을 반환합니다."
+            " 호출 조건은 매우 좁습니다: (1) 사용자가 명시적으로 '회의록 만들어줘', '회의결과보고서 작성해줘'라고 요청하고,"
+            " (2) 회의 녹취록 텍스트(또는 회의록 탭에서 업로드한 오디오 STT 결과)를 함께 제공한 경우에만 호출하세요."
+            " 사용자가 단순히 '오늘 ~~ 처리했어', '~~ 했어' 같은 업무 보고를 한 경우에는 절대 이 도구를 호출하지 말고"
+            " save_knowledge_note 도구를 사용하세요. transcript는 50자 이상의 실제 회의 녹취록이어야 합니다."
+            " 호출 전에 사용자에게 페이지 수(1장 또는 2장)를 먼저 물어보세요."
         ),
         "parameters": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
