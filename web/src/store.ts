@@ -64,6 +64,12 @@ export interface LlmInfo {
   model: string;
 }
 
+export type ThemeMode = "dark" | "light";
+
+function loadTheme(): ThemeMode {
+  return localStorage.getItem("saessagi_theme") === "light" ? "light" : "dark";
+}
+
 function loadLlmInfo(): LlmInfo | null {
   try {
     const raw = localStorage.getItem("saessagi_llm_info");
@@ -120,6 +126,7 @@ interface UiSlice {
   windowMode: "pet" | "window";
   llmInfo: LlmInfo | null;
   selectedNoteSlug: string | null;
+  theme: ThemeMode;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
@@ -127,6 +134,7 @@ interface UiSlice {
   setWindowMode: (mode: "pet" | "window") => void;
   setLlmInfo: (info: LlmInfo | null) => void;
   setSelectedNoteSlug: (slug: string | null) => void;
+  setTheme: (theme: ThemeMode) => void;
   setWsUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string) => void;
@@ -212,6 +220,7 @@ export const useStore = create<AppStore>((set) => ({
   windowMode: "pet" as "pet" | "window",
   llmInfo: loadLlmInfo(),
   selectedNoteSlug: null as string | null,
+  theme: loadTheme(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
@@ -225,6 +234,10 @@ export const useStore = create<AppStore>((set) => ({
     set({ llmInfo: info });
   },
   setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
+  setTheme: (theme) => {
+    try { localStorage.setItem("saessagi_theme", theme); } catch { /* ignore */ }
+    set({ theme });
+  },
   setWsUrl: (url) => {
     try {
       localStorage.setItem("saessagi_ws_url", url);

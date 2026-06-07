@@ -14,6 +14,8 @@ import {
   Square,
   X as XIcon,
   Copy as RestoreIcon,
+  Sun,
+  Moon,
 } from "lucide-react";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
@@ -44,6 +46,8 @@ export function DesktopView(): React.ReactElement {
   const setChatTab = useStore((s) => s.setChatTab);
   const llmInfo = useStore((s) => s.llmInfo);
   const emotion = useStore((s) => s.emotion);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
 
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
 
@@ -258,6 +262,22 @@ export function DesktopView(): React.ReactElement {
           >
             <PanelLeftClose size={13} />
             펫 모드
+          </button>
+          <button
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: "var(--color-text-muted)",
+              cursor: "pointer",
+              padding: "8px 10px",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
           </button>
           <button
             onClick={() => window.electronAPI?.quit()}

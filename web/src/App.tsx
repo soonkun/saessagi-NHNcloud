@@ -20,6 +20,12 @@ export function App(): React.ReactElement {
   const setPositionSilent = useStore((s) => s.setPositionSilent);
   const setWindowMode = useStore((s) => s.setWindowMode);
   const windowMode = useStore((s) => s.windowMode);
+  const theme = useStore((s) => s.theme);
+
+  // 테마 → documentElement data-theme 속성 반영
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
   const clickthroughRef = useRef<ClickthroughHandle | null>(null);
   const charSizeRef = useRef(charSize);
   charSizeRef.current = charSize;

@@ -132,6 +132,8 @@ export function SettingsView(): React.ReactElement {
   const setTtsEngine = useStore((s) => s.setTtsEngine);
   const llmInfo = useStore((s) => s.llmInfo);
   const setLlmInfo = useStore((s) => s.setLlmInfo);
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
 
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
@@ -280,6 +282,38 @@ export function SettingsView(): React.ReactElement {
   return (
     <div style={{ padding: 24, maxWidth: 480, overflowY: "auto", height: "100%" }}>
       <h2 style={{ fontWeight: 700, fontSize: 18, marginBottom: 24 }}>설정</h2>
+
+      {/* ── 화면 테마 ── */}
+      <section style={{ marginTop: 0 }}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>화면 테마</h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          {([
+            { id: "dark" as const, label: "🌙 다크" },
+            { id: "light" as const, label: "☀️ 라이트" },
+          ]).map(({ id, label }) => (
+            <button
+              key={id}
+              onMouseDown={(e) => { e.stopPropagation(); setTheme(id); }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                fontSize: 13,
+                fontWeight: theme === id ? 700 : 400,
+                background: theme === id ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${theme === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: theme === id ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginTop: 6, lineHeight: 1.5 }}>
+          전체 UI 색상이 즉시 전환됩니다. 선택은 기기에 저장돼 다음 실행 시에도 유지됩니다.
+        </p>
+      </section>
 
       {/* ── LLM 공급자 선택 ── */}
       <section style={sectionStyle}>
