@@ -4,6 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 UPSTREAM="$ROOT/upstream/Open-LLM-VTuber"
 
+# conf.yaml 부트스트랩 — API 키를 포함하므로 git 미추적(.gitignore).
+# 없으면 템플릿(conf.example.yaml)에서 생성하고 키 입력을 안내한다.
+if [ ! -f "$ROOT/conf.yaml" ]; then
+    if [ -f "$ROOT/conf.example.yaml" ]; then
+        cp "$ROOT/conf.example.yaml" "$ROOT/conf.yaml"
+        echo "conf.yaml 생성됨(conf.example.yaml 복사). 'api_key'/'llm_api_key'에 OpenAI 키를 넣으세요."
+    else
+        echo "ERROR: conf.yaml / conf.example.yaml 둘 다 없음. 설정 파일을 준비하세요." >&2
+        exit 1
+    fi
+fi
+
 # Ensure frontend submodule is initialized
 if [ ! -f "$UPSTREAM/frontend/index.html" ]; then
     echo "Initializing frontend submodule..."

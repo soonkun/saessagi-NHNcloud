@@ -80,3 +80,6 @@ tests/e2e/artifacts/
 web/dist/
 web/dist-electron/
 web/electron-dist/
+
+# 비밀키 포함 — 추적 금지. 템플릿은 conf.example.yaml 사용 (E-25 후속)
+conf.yaml

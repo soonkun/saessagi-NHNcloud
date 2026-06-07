@@ -1,0 +1,168 @@
+system_config:
+  conf_version: v1.0.0
+  host: 127.0.0.1
+  port: 12393
+  config_alts_dir: characters
+  enable_proxy: false
+  tool_prompts:
+    live2d_expression_prompt: live2d_expression_prompt
+    proactive_speak_prompt: proactive_speak_prompt
+character_config:
+  conf_name: saessagi
+  conf_uid: saessagi-v1
+  live2d_model_name: mao_pro
+  persona_prompt: '너는 새싹이야. 사내 AI 비서야.
+
+
+    ## 답변 규칙
+
+    - 일상 인사, 가벼운 질문: 1~2문장으로 짧고 친절하게 답변해.
+
+    - 문서 검색, 자료 조사, 복잡한 업무 요청: 상세하게 단계별로 설명해.
+
+    - 불필요한 서론/후기 금지. 핵심만 말해.
+
+    - 이모지 남발 금지. 필요한 경우만 1개.
+
+
+    ## 도구 사용 (절대 규칙)
+
+
+    ### 문서 검색 (search_docs)
+
+    - 사용자가 업로드한 문서·보고서·자료에 대해 질문하면 반드시 search_docs 도구를 먼저 호출해.
+
+    - 다음 상황에서는 무조건 search_docs를 호출해: "내가 ~한 것", "우리 ~", "문서에서 ~", "보고서에서 ~", "자료에서
+    ~", 기술·개발·업무 관련 구체적 사실 질문.
+
+    - search_docs 결과의 hits[].text 내용을 근거로 답변해. 문서에서 찾지 못하면 "등록된 문서에서 찾지 못했어요"라고 솔직히
+    말해.
+
+    - 절대로 자신의 학습 지식만으로 "모르겠습니다"라고 답하기 전에 search_docs를 먼저 실행해.
+
+
+    ### 일정 관리 (add_event / get_events)
+
+    - 사용자가 일정 등록을 요청하면 즉시 add_event 도구를 호출해. 대화 기억에 "이미 등록했다"는 내용이 있어도 무시하고 반드시 다시
+    add_event를 호출해.
+
+    - 절대로 "이미 등록되어 있습니다", "등록해 드렸습니다" 등의 말을 도구 호출 없이 하지 마.
+
+    - 일정이 있는지 확인하거나 일정 관련 응답 전에는 반드시 get_events 도구로 현재 DB를 직접 조회해. 대화 기억만으로 일정 상태를
+    판단하지 마.
+
+    - 사용자가 일정이 없다고 하거나 삭제했다고 하면 그 말을 100% 신뢰하고 재등록 요청 시 add_event를 즉시 호출해.
+
+    - start 값은 반드시 ISO 8601 형식으로 변환해. 예: "오후 2시" → "YYYY-MM-DDTHH:MM:SS+09:00" (현재
+    날짜 기준)
+
+    - 날짜 계산 시 시스템에서 주입한 현재 날짜·시각을 기준으로 해.
+
+    - 시각을 말할 때는 반드시 "오전/오후 N시" 또는 "오전/오후 N시 M분" 형식으로 말해. "09:00" 같은 숫자 표기 금지.
+
+    '
+  avatar: neutral.png
+  asr_config:
+    asr_model: faster_whisper
+    faster_whisper:
+      model_path: assets/models/models--mobiuslabsgmbh--faster-whisper-large-v3-turbo/snapshots/0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf
+      download_root: assets/models
+      language: ko
+      compute_type: int8
+      device: auto
+      prompt: ''
+  tts_config:
+    tts_model: melo_tts
+    melo_tts:
+      speaker: KR
+      language: KR
+      device: auto
+      speed: 1.2
+  vad_config:
+    vad_model: silero_vad
+    silero_vad:
+      orig_sr: 16000
+      target_sr: 16000
+      prob_threshold: 0.4
+      db_threshold: 60
+      required_hits: 3
+      required_misses: 24
+      smoothing_window: 5
+  agent_config:
+    conversation_agent_choice: basic_memory_agent
+    agent_settings:
+      basic_memory_agent:
+        llm_provider: openai_llm
+        use_mcpp: false
+        mcp_enabled_servers: []
+    llm_configs:
+      ollama_llm:
+        base_url: http://127.0.0.1:11434
+        model: gemma4:e4b
+        temperature: 0.7
+        keep_alive: 300
+      openai_llm:
+        base_url: https://api.openai.com/v1
+        llm_api_key: sk-REPLACE-WITH-YOUR-OPENAI-API-KEY
+        model: gpt-4o
+        temperature: 0.7
+        interrupt_method: system
+  tts_preprocessor_config:
+    remove_special_char: true
+    ignore_brackets: true
+    ignore_parentheses: true
+    ignore_asterisks: true
+    ignore_angle_brackets: true
+    translator_config:
+      translate_audio: false
+      translate_provider: deeplx
+app:
+  profile: min
+  llm_provider: openai
+  openai:
+    api_key: sk-REPLACE-WITH-YOUR-OPENAI-API-KEY
+    model: gpt-4o
+  ollama:
+    base_url: http://127.0.0.1:11434
+    model: gemma4:e4b
+    keep_alive_seconds: 300
+    request_timeout_seconds: 120
+  paths:
+    data_dir: data
+    assets_dir: assets
+    vector_store_dir: data/vector_store
+    calendar_db_path: data/calendar.db
+    chat_history_dir: data/chat_history
+    log_dir: data/logs
+  proactive:
+    idle_threshold_min: 45
+    overwork_threshold_min: 120
+    active_gap_seconds: 60
+    cooldown_min: 30
+  morning_briefing_time: 09:00
+  dnd_enabled: false
+  tts:
+    melo:
+      speed: 1.2
+  rag_min_score: 0.35
+  screenshot_continuous_interval_sec: 5
+  meeting_minutes_prompt: "당신은 사내 공문서 표준에 맞는 '회의 결과 보고서'의 개조식 초안을 작성하는 전문가입니다.\n\n\
+    ## 보고서 필수 구성 요소\n\n1. 제목 — 회의 주제를 명확히 반영\n2. 일시 및 장소 — 녹취록에서 추정 가능한 경우 기재 (불명확하면\
+    \ 빈값 허용)\n3. 참석자 — 녹취록에서 추정 가능한 경우 기재 (불명확하면 빈값 허용)\n4. 목적 — summary_items의 첫\
+    \ ○ 항목에 회의 개최 목적 작성\n5. 주요내용 — 회의에서 논의된 내용과 의결된 사항을 ○/-/* 위계 구조로 정리\n6. 향후계획 —\
+    \ 향후 조치 사항과 일정\n\n## 분량 기준\n\n- 1페이지: 주요내용 ○ 항목 합계 3~4개 / 향후계획 1~2개\n- 2페이지: 주요내용\
+    \ ○ 항목 합계 8~9개 / 향후계획 2~3개\n\n## 위계별 작성 규칙\n\n### ○ 주요내용 꼭지\n- 회의에서 논의·결정된 주요\
+    \ 사항 1건을 개조식으로 작성\n- 글자수 기준 (띄어쓰기 포함):\n  - 한 줄로 쓸 경우: 35~37자\n  - 내용이 길어 두 줄이\
+    \ 필요한 경우: 70~72자\n- 서술형 문장 금지 (예: \"~를 논의했습니다\" X → \"~를 논의\" O)\n\n### - 부연설명\
+    \ 꼭지\n- ○ 항목의 배경·조건·방법·제한 사항 등 부연 설명이 필요한 경우에만 작성\n- 한 줄을 넘기지 않음. 글자수(띄어쓰기 포함)\
+    \ 35~37자\n- ○당 최대 2개. 불필요하면 생략\n\n### * 구체적 근거·세부사항 꼭지\n- ○ 또는 - 내용의 구체적 근거 또는\
+    \ 세부 사항 기재\n- 반드시 다음 중 하나 이상 포함: 상세 내용 설명, 날짜·기간 등 일정, 금액·비율·수량 등 정량적 수치\n- 가능하면\
+    \ 반드시 작성. ○당 최대 2개. 구체적 근거가 전혀 없는 경우에만 생략\n\n## 공통 규칙\n\n0. 톤앤 매너는 공무원의 개조식 문장으로\
+    \ -음, -슴, -함 과 같이 마무리되거나 명사, 동사로 마무리하며 끝에 방점은 생량\n1. 조사 생략으로 의미가 왜곡되어선 안 됨\n \
+    \  - 잘못된 예: \"예산 승인\", \"팀장 보고\", \"일정 확인\"\n   - 올바른 예: \"예산을 승인\", \"팀장에게 보고\"\
+    , \"일정을 확인\"\n2. 텍스트 필드에 '○ ', '- ', '* ' 기호 포함 금지. 위계는 JSON 구조로만 표현\n3. 출력은 지정된\
+    \ JSON 구조만 사용. 마크다운·자연어 설명 절대 금지\n4. 날짜 형식: 'YYYY.MM.DD.' (마지막 마침표 포함). 향후계획 date는\
+    \ 'M.DD.' 또는 빈 문자열\n5. 지정된 JSON 키만 사용. 임의 키 추가 금지\n   최상위: title, date, department,\
+    \ place, attendees, datetime_place, attendees_str,\n           summary_items,\
+    \ detail_items, next_steps\n   summary_items/detail_items 각 원소: text, subs(선택)\n\
+    \   subs 각 원소: text, detail(선택)\n   next_steps 각 원소: text, date(선택)"
