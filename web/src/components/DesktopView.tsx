@@ -76,9 +76,10 @@ export function DesktopView(): React.ReactElement {
         background: "var(--color-bg)",
         color: "var(--color-text)",
         pointerEvents: "auto",
-        // 데스크탑 전체 1.5배 확대 — 가독성. Electron(Chromium)에서 안전
-        // @ts-ignore
-        zoom: 1.5,
+        // 데스크탑 가독성 향상 — base font-size 키움.
+        // 자식 컴포넌트에서 em 단위를 쓰면 비례 확대, px 단위는 그대로.
+        // (이전엔 zoom:1.5 사용했으나 ForceGraph2D 등 canvas hit testing과 충돌해 변경)
+        fontSize: 16,
       }}
     >
       {/* 상단 타이틀 바 — 드래그 영역 + 창 제어 버튼 */}

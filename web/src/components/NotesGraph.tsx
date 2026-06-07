@@ -162,24 +162,6 @@ export default function NotesGraph({ data, onNodeClick }: Props): React.ReactEle
     [hoveredNodeId]
   );
 
-  // 부모 컨테이너의 CSS zoom factor를 측정해 canvas 좌표 어긋남 보정
-  // (DesktopView가 zoom: 1.5를 걸어두면 ForceGraph2D 마우스 좌표가 맞지 않음)
-  const [parentZoom, setParentZoom] = useState(1);
-  useEffect(() => {
-    if (!wrapRef.current) return;
-    // documentElement까지 거슬러 올라가며 누적 zoom 계산
-    let z = 1;
-    let el: HTMLElement | null = wrapRef.current.parentElement;
-    while (el && el !== document.documentElement) {
-      const cs = window.getComputedStyle(el);
-      const zoomStr = (cs as unknown as { zoom?: string }).zoom;
-      const parsed = zoomStr ? parseFloat(zoomStr) : NaN;
-      if (Number.isFinite(parsed) && parsed > 0 && parsed !== 1) z *= parsed;
-      el = el.parentElement;
-    }
-    setParentZoom(z);
-  }, [size.w, size.h]);
-
   return (
     <div
       ref={wrapRef}
@@ -188,9 +170,6 @@ export default function NotesGraph({ data, onNodeClick }: Props): React.ReactEle
         position: "relative",
         overflow: "hidden",
         background: palette.bg,
-        // 부모 zoom 보정 — canvas의 마우스 좌표가 어긋나지 않게 zoom: 1 강제
-        // 결과적으로 그래프는 원본 크기로 그려지고, 부모 zoom에 의해 시각적으로만 확대됨
-        ...(parentZoom !== 1 ? ({ zoom: 1 / parentZoom } as React.CSSProperties) : {}),
       }}
     >
       {graphData.nodes.length === 0 ? (
