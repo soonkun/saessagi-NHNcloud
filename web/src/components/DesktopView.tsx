@@ -76,6 +76,9 @@ export function DesktopView(): React.ReactElement {
         background: "var(--color-bg)",
         color: "var(--color-text)",
         pointerEvents: "auto",
+        // 데스크탑 전체 1.5배 확대 — 가독성. Electron(Chromium)에서 안전
+        // @ts-ignore
+        zoom: 1.5,
       }}
     >
       {/* 상단 타이틀 바 — 드래그 영역 + 창 제어 버튼 */}

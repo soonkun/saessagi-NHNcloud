@@ -248,18 +248,61 @@ class ToolRouter:
         return ToolResult(ok=True, payload={"count": len(serialized), "events": serialized})
 
     async def _handle_search_docs(self, args: dict[str, Any]) -> ToolResult:
-        """search_docs 핸들러."""
+        """search_docs 핸들러 — 문서 + 업무 노트 hybrid 검색.
+
+        문서가 압도적으로 많을 때 업무 노트(__knowledge__)가 top_k에서 밀려나는 문제를
+        방지하기 위해, category 미지정 시 두 풀에서 각각 검색해 결과를 머지한다:
+          - 일반 문서 검색 (모든 카테고리, 단 __knowledge__ 제외)
+          - 노트 검색 (__knowledge__ 카테고리만)
+        둘 다 받아서 score 내림차순 정렬 후 top_k 반환.
+
+        category가 명시되면 그대로 단일 검색.
+        """
         query: str = args["query"]
-        top_k: int = args.get("top_k", 8)  # JSON Schema default는 자동 주입 안 됨
+        top_k: int = args.get("top_k", 8)
         category: str | None = args.get("category")
 
-        retrieval = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self._rag.retrieve(query, top_k, category),
-        )
+        loop = asyncio.get_running_loop()
+
+        async def _retrieve(cat: str | None, k: int) -> Any:
+            return await loop.run_in_executor(
+                None, lambda: self._rag.retrieve(query, k, cat)
+            )
+
+        if category is not None:
+            # 명시 카테고리 — 단일 검색
+            primary = await _retrieve(category, top_k)
+            note_hits: list[Any] = []
+            doc_hits: list[Any] = list(primary.hits)
+        else:
+            # 미지정 — hybrid: 노트 풀 + 일반 문서 풀 각각 검색
+            note_retrieval, doc_retrieval = await asyncio.gather(
+                _retrieve("__knowledge__", max(3, top_k // 2)),
+                _retrieve(None, top_k),
+            )
+            note_hits = [h for h in note_retrieval.hits]
+            # 일반 문서 풀에서 __knowledge__ 카테고리 hit은 제외 (중복 방지)
+            doc_hits = [
+                h for h in doc_retrieval.hits
+                if getattr(h, "category", None) != "__knowledge__"
+            ]
+            primary = doc_retrieval
+
+        # 머지: 노트 우선 보장 + score 내림차순 정렬
+        all_hits = note_hits + doc_hits
+        all_hits.sort(key=lambda h: float(getattr(h, "score", 0.0)), reverse=True)
+
+        # 노트가 hit이 있으면 최소 1개는 top_k 안에 보장 (밀려나도 강제 포함)
+        if note_hits:
+            best_note = max(note_hits, key=lambda h: float(getattr(h, "score", 0.0)))
+            top_slice = all_hits[:top_k]
+            if best_note not in top_slice:
+                all_hits = [best_note] + [h for h in all_hits if h is not best_note]
+
+        all_hits = all_hits[:top_k]
 
         hits_payload = []
-        for hit in retrieval.hits:
+        for hit in all_hits:
             citation = self._rag.format_citation(hit)
             hits_payload.append(
                 {
@@ -271,23 +314,29 @@ class ToolRouter:
                     "text": getattr(hit, "text", ""),
                     "score": float(getattr(hit, "score", 0.0)),
                     "citation": citation,
+                    "is_note": getattr(hit, "category", None) == "__knowledge__",
                 }
             )
 
+        found = bool(hits_payload)
         no_match_reason: str | None = None
-        if not retrieval.found:
+        if not found:
             no_match_reason = (
-                getattr(retrieval, "no_match_reason", None)
-                or "등록된 문서에서 답을 찾지 못했습니다"
+                getattr(primary, "no_match_reason", None)
+                or "등록된 문서/노트에서 답을 찾지 못했습니다"
             )
             logger.info("search_docs: 결과 없음. query=%r", query)
         else:
-            logger.info("search_docs 성공: %d건 반환", len(hits_payload))
+            note_count = sum(1 for h in hits_payload if h["is_note"])
+            logger.info(
+                "search_docs 성공: %d건 반환 (노트=%d, 문서=%d, query=%r)",
+                len(hits_payload), note_count, len(hits_payload) - note_count, query[:50],
+            )
 
         return ToolResult(
             ok=True,
             payload={
-                "found": retrieval.found,
+                "found": found,
                 "no_match_reason": no_match_reason,
                 "hits": hits_payload,
             },

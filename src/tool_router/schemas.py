@@ -84,8 +84,11 @@ SEARCH_DOCS_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "search_docs",
         "description": (
-            "사내 등록 문서에서 관련 구절을 검색하고 인용 문자열과 함께 반환합니다."
-            " 관련 문서가 없으면 found=false로 표시됩니다."
+            "사내 등록 문서와 업무 노트에서 관련 구절을 hybrid로 검색합니다."
+            " 사용자가 자기가 처리한 업무를 회상하는 질문('최근에 한 ...', '내가 ... 어떻게 했었지', '지난번 ...')에도 호출하세요 — "
+            "노트(__knowledge__)와 일반 문서를 동시에 검색해 결과에 둘 다 포함합니다."
+            " 각 hit의 is_note=true 이면 그것이 사용자가 저장한 업무 노트입니다."
+            " 관련 결과 없으면 found=false."
         ),
         "parameters": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",

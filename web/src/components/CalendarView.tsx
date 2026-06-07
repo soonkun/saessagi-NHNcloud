@@ -7,6 +7,7 @@ import {
   deleteCalendarEvent,
 } from "../services/api";
 import type { CalendarEvent } from "../types";
+import { useStore } from "../store";
 
 // ────────────────────────────────────────────────────────────
 // 유틸
@@ -373,6 +374,8 @@ const saveBtnStyle: React.CSSProperties = {
 // ────────────────────────────────────────────────────────────
 
 export function CalendarView(): React.ReactElement {
+  const windowMode = useStore((s) => s.windowMode);
+  const isDesktop = windowMode === "window";
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
@@ -502,7 +505,7 @@ export function CalendarView(): React.ReactElement {
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(7, 1fr)",
-            gap: 2,
+            gap: isDesktop ? 6 : 2,
           }}
         >
           {/* 빈 셀 */}
@@ -515,7 +518,90 @@ export function CalendarView(): React.ReactElement {
             const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
             const isToday = dateStr === isoDate(today);
             const isSelected = dateStr === selectedDate;
-            const hasEvent = events.some((e) => e.start.startsWith(dateStr));
+            const dayEvents = events
+              .filter((e) => e.start.startsWith(dateStr))
+              .sort((a, b) => a.start.localeCompare(b.start));
+            const hasEvent = dayEvents.length > 0;
+            const colIdx = (firstDay + i) % 7;
+            const dayColor =
+              isSelected ? "#fff"
+              : colIdx === 0 ? "#e05050"
+              : colIdx === 6 ? "#5080e0"
+              : "var(--color-text)";
+
+            if (isDesktop) {
+              // 데스크탑: 큰 박스 + 셀 안에 이벤트 인라인 (시간순)
+              return (
+                <div
+                  key={day}
+                  onClick={() => setSelectedDate(dateStr)}
+                  style={{
+                    minHeight: 92,
+                    padding: "6px 8px",
+                    borderRadius: 8,
+                    border: `1px solid ${
+                      isSelected ? "var(--color-accent)" : "var(--color-border)"
+                    }`,
+                    background: isSelected
+                      ? "rgba(201,100,66,0.12)"
+                      : isToday
+                      ? "rgba(201,100,66,0.06)"
+                      : "var(--color-panel)",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 3,
+                    transition: "background 0.1s, border-color 0.1s",
+                    overflow: "hidden",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: isToday ? 800 : 600,
+                      color: isToday && !isSelected ? "var(--color-accent)" : dayColor,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    {day}
+                    {isToday && (
+                      <span style={{ fontSize: 9, color: "var(--color-accent)", fontWeight: 700 }}>오늘</span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
+                    {dayEvents.slice(0, 3).map((ev) => (
+                      <div
+                        key={ev.id}
+                        title={`${ev.start.slice(11, 16)} · ${ev.title}`}
+                        style={{
+                          fontSize: 10.5,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          background: "rgba(100,140,220,0.18)",
+                          borderLeft: "2px solid var(--color-accent)",
+                          color: "var(--color-text)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <span style={{ color: "var(--color-text-muted)", marginRight: 4 }}>
+                          {ev.start.slice(11, 16)}
+                        </span>
+                        {ev.title}
+                      </div>
+                    ))}
+                    {dayEvents.length > 3 && (
+                      <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginLeft: 4 }}>
+                        +{dayEvents.length - 3}건
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
 
             return (
               <button
@@ -530,13 +616,7 @@ export function CalendarView(): React.ReactElement {
                     : isToday
                     ? "rgba(201,100,66,0.2)"
                     : "transparent",
-                  color: isSelected
-                    ? "#fff"
-                    : (firstDay + i) % 7 === 0 // 일요일
-                    ? "#e05050"
-                    : (firstDay + i) % 7 === 6 // 토요일
-                    ? "#5080e0"
-                    : "var(--color-text)",
+                  color: dayColor,
                   cursor: "pointer",
                   position: "relative",
                   fontSize: 13,
@@ -574,9 +654,9 @@ export function CalendarView(): React.ReactElement {
       {/* 이벤트 패널 */}
       <div
         style={{
-          width: 280,
+          width: isDesktop ? 340 : 280,
           borderLeft: "1px solid var(--color-border)",
-          padding: 20,
+          padding: isDesktop ? 24 : 20,
           overflowY: "auto",
           flexShrink: 0,
         }}
@@ -615,27 +695,29 @@ export function CalendarView(): React.ReactElement {
             이벤트 없음
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {selectedEvents.map((event) => (
+          <div style={{ display: "flex", flexDirection: "column", gap: isDesktop ? 10 : 8 }}>
+            {/* 시간순 정렬해서 표시 */}
+            {[...selectedEvents].sort((a, b) => a.start.localeCompare(b.start)).map((event) => (
               <div
                 key={event.id}
                 style={{
                   background: "var(--color-bg)",
                   border: "1px solid var(--color-border)",
-                  borderRadius: 8,
-                  padding: "10px 12px",
+                  borderRadius: isDesktop ? 10 : 8,
+                  borderLeft: `4px solid var(--color-accent)`,
+                  padding: isDesktop ? "14px 16px" : "10px 12px",
                   position: "relative",
                 }}
               >
-                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>
+                <div style={{ fontWeight: 600, fontSize: isDesktop ? 15 : 13, marginBottom: 4 }}>
                   {event.title}
                 </div>
-                <div style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
-                  {event.start.slice(11, 16)}
-                  {event.duration_minutes ? ` (${event.duration_minutes}분)` : ""}
+                <div style={{ color: "var(--color-text-muted)", fontSize: isDesktop ? 13 : 12 }}>
+                  🕐 {event.start.slice(11, 16)}
+                  {event.duration_minutes ? ` · ${event.duration_minutes}분` : ""}
                 </div>
                 {event.description && (
-                  <div style={{ fontSize: 12, marginTop: 4, color: "var(--color-text-muted)" }}>
+                  <div style={{ fontSize: isDesktop ? 13 : 12, marginTop: 6, color: "var(--color-text-muted)" }}>
                     {event.description}
                   </div>
                 )}
