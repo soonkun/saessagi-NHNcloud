@@ -47,13 +47,25 @@ async def build_chat_agent(
         is_external = False
         logger.info(f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, use_mcpp={use_mcpp}")
 
+    # 모델별 안전한 temperature — gpt-5/o-series는 1.0만 허용 (OpenAI 400 회피)
+    effective_temperature = agent_cfg.temperature
+    if app_config.llm_provider == LlmProviderKind.OPENAI:
+        m = (model or "").lower()
+        if m.startswith("gpt-5") or m.startswith("o1") or m.startswith("o3") or m.startswith("o4"):
+            if effective_temperature != 1.0:
+                logger.info(
+                    f"build_chat_agent: {model}는 temperature=1.0만 허용 — "
+                    f"{effective_temperature} → 1.0 자동 조정"
+                )
+                effective_temperature = 1.0
+
     return await GemmaChatAgent.create(
         base_url=base_url,
         model=model,
         system_prompt=system_prompt,
         tool_manager=tool_manager,
         tool_executor=tool_executor,
-        temperature=agent_cfg.temperature,
+        temperature=effective_temperature,
         max_context_tokens=agent_cfg.max_context_tokens,
         faster_first_response=agent_cfg.faster_first_response,
         interrupt_method=agent_cfg.interrupt_method,
