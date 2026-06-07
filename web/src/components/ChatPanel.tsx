@@ -22,11 +22,12 @@ import { invalidateDocsCache } from "../services/websocket";
 import { getDocumentDownloadUrl, uploadDocument } from "../services/api";
 import type { MessageAttachment, MessageImage } from "../types";
 
-// `[[note:slug]]` / `[[doc:doc_id]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
+// `[[note:slug]]` / `[[doc:doc_id]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거.
+// 닫는 괄호가 0~2개인 깨진 부분 마커(`[[doc:xxx`, `[[doc:xxx]`)도 함께 제거해
+// 본문에 stray `]`가 남지 않도록 한다.
 function stripNoteMarkers(text: string): string {
   return text
-    .replace(/\[\[note:[^\]]+\]\]/g, "")
-    .replace(/\[\[doc:[^\]]+\]\]/g, "")
+    .replace(/\[\[(?:note|doc):[^[\]]*\]{0,2}/g, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }

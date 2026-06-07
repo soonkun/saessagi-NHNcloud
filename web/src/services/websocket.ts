@@ -232,13 +232,17 @@ function parseEmotion(raw: string): Emotion | null {
   return EMOTION_MAP[key] ?? null;
 }
 
-// display_text에서 [emotion] 태그를 제거하고 emotion을 추출
+// display_text에서 [emotion] 태그를 제거하고 emotion을 추출.
+// 주의: `[[doc:...]]` / `[[note:...]]` 이중괄호 마커는 절대 건드리면 안 된다.
+// (이중괄호를 먹으면 마커가 깨져 다운로드 칩이 사라지고 본문에 stray `]`가 남는다.)
+// → 앞뒤가 `[`/`]`가 아닌 '단일 대괄호'이고 내부에 대괄호가 없는 태그만 매치.
 function stripEmotionTags(text: string): { text: string; emotion: Emotion | null } {
   let detected: Emotion | null = null;
-  const cleaned = text.replace(/\[([^\]]+)\]/g, (_, tag: string) => {
+  const cleaned = text.replace(/(?<!\[)\[([^[\]]+)\](?!\])/g, (whole, tag: string) => {
     const e = parseEmotion(tag);
     if (e && !detected) detected = e;
-    return "";
+    // 감정 태그가 아니면 원문 보존 (임의의 [대괄호] 표현을 삼키지 않도록)
+    return e ? "" : whole;
   }).trim();
   return { text: cleaned, emotion: detected };
 }

@@ -285,3 +285,18 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **원인**: macOS pet 모드에서 `continueSetWindowModePet()`이 `setFocusable(false)`를 설정한다. `setFocusable(false)`는 `canBecomeKeyWindow = NO`를 의미하므로, 네이티브 파일 피커(NSOpenPanel)가 닫힐 때 Electron 창이 key window 지위를 회복하지 못함. 결과적으로 키보드 이벤트가 Electron 창에 전달되지 않아 입력창이 시각적으로는 정상이지만 타이핑이 불가능해 보임.  
 **수정**: `window-manager.ts`에 `restoreFocus()` 메서드 추가. `setFocusable(true)` + `win.focus()`로 일시적으로 key window 지위를 회복한 뒤 300ms 후 `setFocusable(false)` 복원. `DocumentsView.tsx`의 `onFileInputChange`(파일 선택 직후)와 `handleFiles finally`(업로드 완료 후) 두 시점에 호출.  
 **교훈**: macOS pet 모드에서 네이티브 다이얼로그(file picker, save dialog 등)를 사용한 직후에는 반드시 `restoreFocus()`를 호출해야 한다. `setFocusable(false)` 상태에서는 다이얼로그 종료 후 창이 자동으로 key window 지위를 회복하지 못한다. `restoreFocus()`는 pet 모드에서만 동작하므로 window 모드에서의 회귀 없음.
+
+---
+
+## E-25: RAG 다운로드 칩 미표시 — stripEmotionTags가 `[[doc:...]]` 마커를 먹어버림
+
+**날짜**: 2026-06-07  
+**증상**: RAG 근거로 답변할 때 인용 문서 다운로드 칩이 안 보이고, 답변 본문 끝에 stray `]` 한 글자가 남음 (예: "…에 있어요. ]"). LLM은 `[[doc:doc_id]]` 마커를 정상적으로 출력하고 있었음에도 칩이 생성되지 않음.  
+**원인**: 답변은 `audio` 메시지의 `display_text`로 도착하는데, `websocket.ts`의 `stripEmotionTags`가 감정 태그 `[joy]`를 제거하려고 **단일 대괄호** 정규식 `/\[([^\]]+)\]/g`을 사용했다. 이게 `attachCitationsToMessage`보다 **먼저** 실행되면서 `[[doc:doc_id]]`에 적용 → 첫 `[`부터 첫 `]`까지인 `[[doc:doc_id]`를 매치해 제거 → 뒤에 `]` 하나가 남음(stray `]`의 정체). 마커가 이미 파괴된 텍스트로 인용 추출이 돌아가니 `[[doc:...]]` 매칭 0건 → 칩 생성 실패. (`message` 경로는 stripEmotionTags를 안 거쳐 마커가 살지만, 실제 TTS 흐름은 audio 경로라 항상 깨졌다.)  
+추가 취약점: doc_id가 `회의결과보고서_1.hwpx_5b1cea6e`, `1. 농촌지원정책과 업무편람(2025).hwpx_8f9e28c0`처럼 공백·괄호·점이 섞인 긴 문자열이라, LLM이 대괄호 안에 정확히 복사하지 못해 마커가 깨질 위험이 구조적으로 존재.  
+**수정**:  
+1. (핵심) `stripEmotionTags` 정규식을 `/(?<!\[)\[([^[\]]+)\](?!\])/g`로 변경 — 앞뒤가 `[`/`]`가 아닌 단일 대괄호 + 내부 무대괄호 태그만 매치해 `[[...]]` 이중괄호 마커를 절대 건드리지 않음. 감정 태그가 아닌 임의 `[표현]`은 원문 보존.  
+2. (견고화) 백엔드 `upstream_adapter.py`가 실제 주입한 RAG 문서의 doc_id로 **권위 있는 마커를 직접** `display_text`에 부착(`_last_cited_markers`), LLM이 낸 마커는 `_strip_llm_markers`로 제거. 이로써 LLM의 마커 출력 정확도에 의존하지 않음. doc_id 바이트가 그대로 전달되므로 macOS NFC/NFD 정규화 드리프트도 없음. 마커는 `display_text`에만 붙이고 `tts_text`에선 제외(음성에서 안 읽힘).  
+3. (방어) `ChatPanel.tsx`의 `stripNoteMarkers`를 `/\[\[(?:note|doc):[^[\]]*\]{0,2}/g`로 강화 — 닫는 괄호 0~2개의 깨진 부분 마커 잔재도 제거.  
+**검증**: 가짜 agent/rag 결정적 테스트로 백엔드 마커 부착·LLM 마커 제거·tts 분리 확인 → 프론트 정규식 파이프라인(node)으로 칩 2개 생성·본문 깨끗 확인 → 실제 백엔드로 인용 doc_id가 문서목록에 존재하고 `/download`가 153KB hwpx(PK 시그니처) 반환함을 확인.  
+**교훈**: **정규식으로 텍스트 일부를 제거할 때는 더 구체적인 패턴(`[[...]]`)이 더 일반적인 패턴(`[...]`)의 부분집합으로 잡혀 깨지지 않는지 반드시 확인할 것.** 단일 대괄호 매처는 이중 대괄호 마커를 망가뜨린다. 그리고 **LLM이 긴 opaque ID를 정확히 echo하길 기대하는 설계는 취약**하다 — 백엔드가 이미 알고 있는 권위 데이터(주입한 doc_id)로 마커를 직접 생성하는 편이 견고하다. 마지막으로 **여러 변환 단계(감정태그 제거 → 인용 추출 → 본문 렌더)가 같은 텍스트를 순차 처리할 때는 앞 단계가 뒤 단계가 의존하는 토큰을 파괴하지 않는지 순서를 추적할 것.**

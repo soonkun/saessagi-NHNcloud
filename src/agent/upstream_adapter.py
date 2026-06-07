@@ -72,6 +72,31 @@ def _format_rag_context(hits: list[dict[str, Any]]) -> str:
     return "\n\n".join(lines)
 
 
+def _marker_for_hit(h: dict[str, Any]) -> str | None:
+    """RAG hit → 프론트가 칩으로 렌더할 `[[doc:...]]` / `[[note:...]]` 마커."""
+    doc_id = h.get("doc_id") or ""
+    is_note = h.get("is_note", False)
+    if is_note and doc_id.startswith("__knowledge__:"):
+        slug = doc_id.split(":", 1)[1]
+        return f"[[note:{slug}]]"
+    if doc_id:
+        return f"[[doc:{doc_id}]]"
+    return None
+
+
+# LLM이 직접 만든 (정상이든 깨졌든) doc/note 마커. doc_id에는 공백·괄호·점이
+# 들어가므로 LLM이 정확히 복사하지 못해 `[[doc:xxx]`처럼 깨지기 쉽다 →
+# 백엔드가 권위 있는 마커를 따로 붙이므로, LLM이 낸 마커는 표시 전에 모두 제거.
+_LLM_MARKER_RE = re.compile(r"\[\[(?:doc|note):[^\[\]]*\]{0,2}")
+
+
+def _strip_llm_markers(text: str) -> str:
+    cleaned = _LLM_MARKER_RE.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    cleaned = re.sub(r" +\n", "\n", cleaned)
+    return cleaned.strip()
+
+
 def _make_adapter_class() -> type:
     """동적으로 BasicMemoryAgentAdapter 클래스를 생성해 mypy Any 서브클래싱 에러 우회."""
     from open_llm_vtuber.agent.agents.agent_interface import AgentInterface
@@ -91,6 +116,8 @@ def _make_adapter_class() -> type:
             self._agent = agent
             self._rag_service = rag_service  # vector_search.RagService | None
             self._pending_tasks: set[asyncio.Task[None]] = set()
+            # 직전 턴에서 실제 주입한 RAG 문서의 권위 마커 (chat에서 display_text에 부착)
+            self._last_cited_markers: list[str] = []
 
         @staticmethod
         def _should_trigger_rag(text: str) -> bool:
@@ -150,14 +177,14 @@ def _make_adapter_class() -> type:
             - 첨부 doc_id가 있으면 그 청크를 무조건 컨텍스트로 prepend.
             - 추가로 트리거 키워드가 있으면 일반 RAG 검색도 함께 주입.
             """
+            # 이번 턴 인용 마커 초기화 (RAG 미주입 시 빈 채로 유지)
+            self._last_cited_markers = []
             if self._rag_service is None:
                 return input_data
 
             # 사용자 메시지 텍스트 추출
             user_text = " ".join(
-                t.content
-                for t in (input_data.texts or [])
-                if t.source == TextSource.INPUT
+                t.content for t in (input_data.texts or []) if t.source == TextSource.INPUT
             ).strip()
             if not user_text:
                 return input_data
@@ -223,9 +250,22 @@ def _make_adapter_class() -> type:
                     return input_data
 
                 context_text = _format_rag_context(merged)
+
+                # 실제 주입한 문서의 권위 마커를 기록 → chat()이 display_text에 부착.
+                # LLM이 마커를 빠뜨리거나 깨뜨려도 다운로드 칩이 정확히 렌더된다.
+                markers: list[str] = []
+                for h in merged:
+                    mk = _marker_for_hit(h)
+                    if mk and mk not in markers:
+                        markers.append(mk)
+                self._last_cited_markers = markers
+
                 logger.info(
-                    "RAG 컨텍스트 주입: 첨부 청크=%d, 검색 hits=%d (query=%r)",
-                    len(attached_chunks), len(search_hits), user_text[:50],
+                    "RAG 컨텍스트 주입: 첨부 청크=%d, 검색 hits=%d, 인용 마커=%d (query=%r)",
+                    len(attached_chunks),
+                    len(search_hits),
+                    len(markers),
+                    user_text[:50],
                 )
 
                 # 컨텍스트를 사용자 메시지 앞에 TextSource.INPUT으로 삽입
@@ -290,9 +330,18 @@ def _make_adapter_class() -> type:
 
             full_text = "".join(text_parts)
             if full_text:
+                # LLM이 낸 (깨졌을 수 있는) 마커 제거 후, 백엔드가 기록한
+                # 권위 마커를 display_text에만 부착 (tts_text는 마커 없이 깨끗하게).
+                clean_text = _strip_llm_markers(full_text)
+                markers = getattr(self, "_last_cited_markers", []) or []
+                if markers:
+                    marker_str = "".join(markers)
+                    display = f"{clean_text} {marker_str}".strip() if clean_text else marker_str
+                else:
+                    display = clean_text
                 yield SentenceOutput(
-                    display_text=DisplayText(text=full_text, name="AI"),
-                    tts_text=full_text,
+                    display_text=DisplayText(text=display, name="AI"),
+                    tts_text=clean_text,
                     actions=Actions(),
                 )
 
