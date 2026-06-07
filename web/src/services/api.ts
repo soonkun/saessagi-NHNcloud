@@ -121,7 +121,8 @@ export async function fetchDocuments(): Promise<RagDocument[]> {
 export async function uploadDocument(
   file: File,
   folderId?: string | null,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  options?: { folderName?: string }
 ): Promise<RagDocument> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -158,6 +159,7 @@ export async function uploadDocument(
     const formData = new FormData();
     formData.append("file", file);
     if (folderId) formData.append("folder_id", folderId);
+    if (options?.folderName) formData.append("folder_name", options.folderName);
     xhr.send(formData);
   });
 }

@@ -101,12 +101,54 @@ def _make_adapter_class() -> type:
             """
             return bool(_RAG_TRIGGER_RE.search(text))
 
+        @staticmethod
+        def _extract_attached_doc_ids(text: str) -> list[str]:
+            """사용자 메시지 prefix `[첨부 자료: filename (doc_id: xxx); ...]`에서 doc_id 추출."""
+            ids: list[str] = []
+            import re as _re
+
+            for m in _re.finditer(r"doc_id:\s*([^\s\)\];,]+)", text):
+                doc_id = m.group(1).strip().rstrip(")]")
+                if doc_id and doc_id not in ids:
+                    ids.append(doc_id)
+            return ids
+
+        def _fetch_attached_chunks(
+            self, doc_ids: list[str], per_doc_limit: int = 5
+        ) -> list[dict[str, Any]]:
+            """첨부 doc_id들의 청크를 처음 N개씩 가져와 LLM 컨텍스트로 합친다."""
+            if not doc_ids:
+                return []
+            store = getattr(self._rag_service, "_store", None) or getattr(
+                self._rag_service, "store", None
+            )
+            if store is None or not hasattr(store, "get_chunks_by_doc_id"):
+                return []
+            chunks: list[dict[str, Any]] = []
+            for doc_id in doc_ids:
+                try:
+                    rows = store.get_chunks_by_doc_id(doc_id, limit=per_doc_limit)
+                except Exception as exc:
+                    logger.warning("첨부 청크 조회 실패 (doc_id=%s): %s", doc_id, exc)
+                    continue
+                for row in rows:
+                    chunks.append(
+                        {
+                            "doc_id": row.get("doc_id"),
+                            "doc_name": row.get("doc_name"),
+                            "page": row.get("page"),
+                            "text": row.get("text", ""),
+                            "score": 1.0,  # 첨부는 직접 지정이라 최고 점수 부여
+                            "is_note": row.get("category") == "__knowledge__",
+                        }
+                    )
+            return chunks
+
         async def _augment_with_rag(self, input_data: BatchInput) -> BatchInput:
             """사용자 메시지를 RAG 결과로 증강.
 
-            - rag_service가 없거나 트리거 키워드 없으면 즉시 반환(벡터 검색 생략).
-            - 유사도 _MIN_INJECTION_SCORE 미만인 hits는 주입하지 않음.
-            - 실제 rag.retrieve() 결과만 사용 — 하드코딩 없음.
+            - 첨부 doc_id가 있으면 그 청크를 무조건 컨텍스트로 prepend.
+            - 추가로 트리거 키워드가 있으면 일반 RAG 검색도 함께 주입.
             """
             if self._rag_service is None:
                 return input_data
@@ -120,47 +162,70 @@ def _make_adapter_class() -> type:
             if not user_text:
                 return input_data
 
-            # 트리거 키워드 없으면 RAG 생략 (벡터 검색 비용 절감)
-            if not self._should_trigger_rag(user_text):
-                logger.debug("RAG 스킵: 트리거 키워드 없음 (query=%r)", user_text[:50])
+            # 첨부 doc_id 추출 (트리거 키워드 무관 — 첨부 있으면 무조건 내용 주입)
+            attached_doc_ids = self._extract_attached_doc_ids(user_text)
+            attached_chunks: list[dict[str, Any]] = []
+            if attached_doc_ids:
+                attached_chunks = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: self._fetch_attached_chunks(attached_doc_ids, per_doc_limit=5),
+                )
+                logger.info(
+                    "첨부 청크 자동 주입: doc_ids=%s, chunks=%d",
+                    attached_doc_ids,
+                    len(attached_chunks),
+                )
+
+            # 트리거 키워드 + 첨부 둘 다 없으면 RAG 생략
+            should_search = self._should_trigger_rag(user_text)
+            if not should_search and not attached_chunks:
+                logger.debug("RAG 스킵: 트리거 키워드·첨부 없음 (query=%r)", user_text[:50])
                 return input_data
 
             try:
-                # 블로킹 IO를 executor로 분리
-                retrieval = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: self._rag_service.retrieve(user_text, 5)
-                )
-                if not retrieval.found or not retrieval.hits:
-                    logger.debug("RAG 스킵: 관련 문서 없음 (query=%r)", user_text[:50])
-                    return input_data
-
-                # _MIN_INJECTION_SCORE 이상인 hits만 주입 (낮은 유사도 문서 배제)
-                hits = [
-                    {
-                        "doc_id": getattr(h, "doc_id", None),
-                        "doc_name": getattr(h, "doc_name", None),
-                        "page": getattr(h, "page", None),
-                        "text": getattr(h, "text", ""),
-                        "score": float(getattr(h, "score", 0.0)),
-                        "is_note": getattr(h, "category", None) == "__knowledge__",
-                    }
-                    for h in retrieval.hits
-                    if float(getattr(h, "score", 0.0)) >= _MIN_INJECTION_SCORE
-                ]
-                if not hits:
-                    logger.debug(
-                        "RAG 스킵: 임계값(%.2f) 이상 hits 없음 (top_score=%.3f)",
-                        _MIN_INJECTION_SCORE,
-                        float(getattr(retrieval.hits[0], "score", 0.0)) if retrieval.hits else 0.0,
+                # 첨부 있어도 검색은 트리거 키워드 있을 때만
+                retrieval = None
+                if should_search:
+                    retrieval = await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self._rag_service.retrieve(user_text, 5)
                     )
+
+                # 일반 검색 hits (score 임계값 통과한 것만)
+                search_hits: list[dict[str, Any]] = []
+                if retrieval is not None and retrieval.found and retrieval.hits:
+                    search_hits = [
+                        {
+                            "doc_id": getattr(h, "doc_id", None),
+                            "doc_name": getattr(h, "doc_name", None),
+                            "page": getattr(h, "page", None),
+                            "text": getattr(h, "text", ""),
+                            "score": float(getattr(h, "score", 0.0)),
+                            "is_note": getattr(h, "category", None) == "__knowledge__",
+                        }
+                        for h in retrieval.hits
+                        if float(getattr(h, "score", 0.0)) >= _MIN_INJECTION_SCORE
+                    ]
+
+                # 첨부 청크 + 검색 hits 머지 (첨부가 앞 — 우선순위)
+                # 중복 제거: 같은 (doc_id, text)는 한 번만
+                seen: set[tuple[Any, str]] = set()
+                merged: list[dict[str, Any]] = []
+                for src in (attached_chunks, search_hits):
+                    for h in src:
+                        key = (h.get("doc_id"), (h.get("text") or "")[:80])
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        merged.append(h)
+
+                if not merged:
+                    logger.debug("RAG 스킵: 첨부·검색 결과 모두 없음 (query=%r)", user_text[:50])
                     return input_data
 
-                context_text = _format_rag_context(hits)
+                context_text = _format_rag_context(merged)
                 logger.info(
-                    "Proactive RAG: %d건 주입 (query=%r, top_score=%.3f)",
-                    len(hits),
-                    user_text[:50],
-                    hits[0]["score"],
+                    "RAG 컨텍스트 주입: 첨부 청크=%d, 검색 hits=%d (query=%r)",
+                    len(attached_chunks), len(search_hits), user_text[:50],
                 )
 
                 # 컨텍스트를 사용자 메시지 앞에 TextSource.INPUT으로 삽입

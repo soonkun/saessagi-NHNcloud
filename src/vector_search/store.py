@@ -261,6 +261,25 @@ class VectorStore:
         logger.debug("search 완료: top_k=%d, category=%s, 결과=%d건", top_k, category, len(hits))
         return hits
 
+    def get_chunks_by_doc_id(self, doc_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """특정 문서의 청크를 처음 N개까지 가져온다.
+
+        벡터 검색 없이 doc_id 정확 매칭. 첨부 파일 내용을 LLM 컨텍스트로
+        자동 주입할 때 사용 — 사용자가 첨부한 파일의 내용을 LLM이 자연스럽게 본다.
+        """
+        try:
+            escaped = doc_id.replace("'", "''")
+            rows = (
+                self._tbl.search()
+                .where(f"doc_id = '{escaped}'")
+                .limit(limit)
+                .to_list()
+            )
+            return rows
+        except Exception as exc:
+            logger.warning("get_chunks_by_doc_id 실패 (doc_id=%s): %s", doc_id, exc)
+            return []
+
     def delete_by_doc_id(self, doc_id: str) -> int:
         """특정 문서의 모든 청크 삭제 (스펙 §4.6).
 

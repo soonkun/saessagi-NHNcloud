@@ -376,6 +376,11 @@ async def upload_document(request: Request) -> UploadResponse:
     folder_id_raw = form.get("folder_id")
     folder_id: str | None = folder_id_raw if isinstance(folder_id_raw, str) else None
 
+    # folder_name 지원 — 폴더 ID 대신 이름으로 분류 가능 (없으면 자동 생성).
+    # 채팅 첨부 흐름에서 "업무노트" 폴더로 자동 분류용.
+    folder_name_raw = form.get("folder_name")
+    folder_name: str | None = folder_name_raw.strip() if isinstance(folder_name_raw, str) else None
+
     ctx = _get_context(request)
     rag = _require_rag(ctx)
 
@@ -386,6 +391,21 @@ async def upload_document(request: Request) -> UploadResponse:
             status_code=422,
             detail=f"허용되지 않은 파일 형식: {suffix}. 허용: {', '.join(sorted(_ALLOWED_SUFFIXES))}",
         )
+
+    # folder_name이 있으면 해당 이름의 폴더로 분류 (없으면 자동 생성)
+    if folder_name and not folder_id:
+        folders = _load_folders()
+        existing = next((f for f in folders if f["name"] == folder_name), None)
+        if existing is not None:
+            folder_id = existing["folder_id"]
+        else:
+            new_folder_id = uuid.uuid4().hex[:12]
+            new_folder = {"folder_id": new_folder_id, "name": folder_name}
+            folders.append(new_folder)
+            _save_folders(folders)
+            _ensure_folder_dir(new_folder_id)
+            folder_id = new_folder_id
+            logger.info("upload_document: '%s' 폴더 자동 생성 (id=%s)", folder_name, new_folder_id)
 
     # folder_id 유효성 확인
     if folder_id is not None:

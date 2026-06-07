@@ -234,11 +234,12 @@ export function ChatContent({
     const key = `${Date.now()}_${file.name}`;
     setUploadingItems((prev) => [...prev, { key, filename: file.name, progress: 0 }]);
     try {
+      // 채팅에서 첨부한 파일은 "업무노트" 폴더로 자동 분류 (백엔드가 폴더 없으면 생성)
       const doc = await uploadDocument(file, null, (pct) => {
         setUploadingItems((prev) =>
           prev.map((it) => (it.key === key ? { ...it, progress: pct } : it))
         );
-      });
+      }, { folderName: "업무노트" });
       setAttachments((prev) => [...prev, { id: doc.id, filename: doc.filename }]);
       setUploadingItems((prev) => prev.filter((it) => it.key !== key));
       invalidateDocsCache();
