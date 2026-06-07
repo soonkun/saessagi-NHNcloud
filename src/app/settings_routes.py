@@ -134,11 +134,15 @@ async def get_llm_provider(request: Request) -> dict[str, Any]:
     ctx = getattr(request.app.state, "service_context", None)
     app_cfg = ctx.app_config if ctx else None
     provider = app_cfg.llm_provider if app_cfg else "ollama"
+    # LlmProviderKind는 (str, Enum)이라 str(provider)가 "LlmProviderKind.OPENAI"를
+    # 반환한다(값 "openai"가 아님). 프론트는 provider==="openai"로 비교하므로
+    # 반드시 enum의 .value를 내보내야 한다. (E-26)
+    provider_str = getattr(provider, "value", provider)
     openai_key = app_cfg.openai.api_key if app_cfg else ""
     openai_model = app_cfg.openai.model if app_cfg else "gpt-4o-mini"
     ollama_model = app_cfg.ollama.model if app_cfg else "gemma4:e4b"
     return {
-        "provider": str(provider),
+        "provider": str(provider_str),
         "openai_api_key_set": bool(openai_key),
         "openai_model": openai_model,
         "ollama_model": ollama_model,

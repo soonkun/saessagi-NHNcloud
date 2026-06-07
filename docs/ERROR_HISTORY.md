@@ -300,3 +300,14 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 3. (방어) `ChatPanel.tsx`의 `stripNoteMarkers`를 `/\[\[(?:note|doc):[^[\]]*\]{0,2}/g`로 강화 — 닫는 괄호 0~2개의 깨진 부분 마커 잔재도 제거.  
 **검증**: 가짜 agent/rag 결정적 테스트로 백엔드 마커 부착·LLM 마커 제거·tts 분리 확인 → 프론트 정규식 파이프라인(node)으로 칩 2개 생성·본문 깨끗 확인 → 실제 백엔드로 인용 doc_id가 문서목록에 존재하고 `/download`가 153KB hwpx(PK 시그니처) 반환함을 확인.  
 **교훈**: **정규식으로 텍스트 일부를 제거할 때는 더 구체적인 패턴(`[[...]]`)이 더 일반적인 패턴(`[...]`)의 부분집합으로 잡혀 깨지지 않는지 반드시 확인할 것.** 단일 대괄호 매처는 이중 대괄호 마커를 망가뜨린다. 그리고 **LLM이 긴 opaque ID를 정확히 echo하길 기대하는 설계는 취약**하다 — 백엔드가 이미 알고 있는 권위 데이터(주입한 doc_id)로 마커를 직접 생성하는 편이 견고하다. 마지막으로 **여러 변환 단계(감정태그 제거 → 인용 추출 → 본문 렌더)가 같은 텍스트를 순차 처리할 때는 앞 단계가 뒤 단계가 의존하는 토큰을 파괴하지 않는지 순서를 추적할 것.**
+
+---
+
+## E-26: LLM 공급자(ChatGPT) 설정이 설정탭 재진입 시 Ollama로 표시됨 — (str, Enum) 직렬화 함정
+
+**날짜**: 2026-06-07  
+**증상**: 설정에서 LLM을 ChatGPT(openai)로 바꿔 저장하고 대화창에 갔다가 다시 설정으로 돌아오면 공급자가 Ollama gemma4로 표시됨. 채팅 헤더 모델 칩도 Ollama로 보임. 실제 백엔드는 openai로 정상 동작 중이었으나 **화면만** 뒤집힘.  
+**원인**: `GET /api/settings/llm-provider`가 `{"provider": str(provider)}`를 반환하는데, `provider`는 `LlmProviderKind(str, Enum)` 멤버다. Python에서 `class X(str, Enum)`의 `str(member)`는 값(`"openai"`)이 아니라 **`"LlmProviderKind.OPENAI"`**를 반환한다(잘 알려진 함정). 프론트(`SettingsView.tsx`)는 `s.provider === "openai" ? "openai" : "ollama"`로 비교하므로 `"LlmProviderKind.OPENAI" !== "openai"` → 무조건 `"ollama"`로 강등. SettingsView는 마운트될 때마다 이 GET을 다시 불러 store(localStorage 포함)를 덮어쓰므로, 설정탭에 재진입하면 사용자가 저장했던 openai 선택이 화면에서 ollama로 되돌아간다. 백엔드 POST·agent 재초기화는 정상 동작하고 있었다(모델은 실제로 openai였음).  
+**수정**: `settings_routes.py` GET 핸들러에서 `provider_str = getattr(provider, "value", provider)`로 enum의 `.value`("openai"/"ollama")를 내보내도록 변경. `app_config`가 없을 때의 문자열 fallback("ollama")도 그대로 통과.  
+**검증**: 라이브 백엔드로 수정 전 GET이 `"provider":"LlmProviderKind.OPENAI"` 반환을 재현 → 수정 후 `"provider":"openai"` 확인 → POST ollama↔openai 양방향 전환 후 GET 반영 확인 → conf.yaml에 키·provider·meeting_minutes_prompt 온전함 확인.  
+**교훈**: **`(str, Enum)` 멤버를 JSON·API로 내보낼 때는 절대 `str(member)`를 쓰지 말 것 — 반드시 `.value`를 쓴다.** (`str(member)`는 "Class.MEMBER"가 됨. Python 3.11+ `enum.StrEnum`은 이 문제가 없지만 본 프로젝트는 `(str, Enum)` 사용.) 그리고 **프론트에서 `x === "openai" ? A : B` 식의 엄격 동등 비교는 백엔드 직렬화가 조금만 달라져도 조용히 잘못된 기본값으로 빠진다** — enum/문자열 경계에서는 정확한 값 계약을 양쪽에서 확인할 것.
