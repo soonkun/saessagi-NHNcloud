@@ -75,6 +75,9 @@ export function App(): React.ReactElement {
       } else {
         // pet 모드 복귀: click-through 재활성화 + localStorage 저장 위치 복원
         clickthroughRef.current?.setEnabled(true);
+        // 채팅 패널 닫기 — 데스크탑 모드에서 열려있던 패널이 그대로 유지되면
+        // 작은 화면을 덮어 캐릭터를 가림. 사용자가 캐릭터 클릭으로 다시 열게.
+        setChatOpen(false);
         const saved = (() => {
           try { return JSON.parse(localStorage.getItem("saessagi_char_pos") ?? "null"); }
           catch { return null; }

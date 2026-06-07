@@ -162,7 +162,9 @@ export class WindowManager {
     this.window.setFocusable(true);
     this.window.setAlwaysOnTop(false);
 
-    this.window.setBackgroundColor('#ffffff');
+    // setBackgroundColor('#ffffff') 호출 금지 — 한 번 opaque로 설정하면 macOS에서
+    // native window backing이 굳어 다시 #00000000로 되돌려도 흰 화면이 잔존.
+    // 색상은 CSS(DesktopView outer의 background)로만 처리 — transparent backing 유지.
     this.window.webContents.send('pre-mode-changed', 'window');
   }
 
