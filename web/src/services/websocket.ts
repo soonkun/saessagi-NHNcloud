@@ -64,14 +64,41 @@ function findDocCitations(text: string, docs: RagDocument[]): CitedDoc[] {
   return [...matched.values()];
 }
 
+// 정확한 마커 [[doc:xxx]] 추출 — LLM이 명시적으로 지정한 인용
+const _DOC_MARKER_RE = /\[\[doc:([^\]]+)\]\]/g;
+
+function findDocCitationsByMarker(text: string, docs: RagDocument[]): CitedDoc[] {
+  const ids = new Set<string>();
+  for (const m of text.matchAll(_DOC_MARKER_RE)) {
+    ids.add(m[1].trim());
+  }
+  if (ids.size === 0) return [];
+  const byId = new Map(docs.map((d) => [d.id, d] as const));
+  const out: CitedDoc[] = [];
+  for (const id of ids) {
+    const d = byId.get(id);
+    out.push({ id, filename: d?.filename ?? id });
+  }
+  return out;
+}
+
 async function attachCitationsToMessage(
   messageId: string,
   text: string
 ): Promise<void> {
   const docs = await getDocsCached();
-  const cited = findDocCitations(text, docs);
-  if (cited.length > 0) {
-    useStore.getState().attachCitations(messageId, cited);
+  // 1) 정확한 마커 매칭 (시스템 프롬프트로 LLM에 의무화)
+  const markerHits = findDocCitationsByMarker(text, docs);
+  // 2) 폴백: substring 매칭 (LLM이 마커를 잊고 파일명만 언급한 경우)
+  const substringHits = findDocCitations(text, docs);
+  // 머지 — id 기준 중복 제거
+  const merged = new Map<string, CitedDoc>();
+  for (const c of markerHits) merged.set(c.id, c);
+  for (const c of substringHits) {
+    if (!merged.has(c.id)) merged.set(c.id, c);
+  }
+  if (merged.size > 0) {
+    useStore.getState().attachCitations(messageId, [...merged.values()]);
   }
 }
 

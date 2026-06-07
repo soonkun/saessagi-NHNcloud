@@ -41,17 +41,34 @@ _MIN_INJECTION_SCORE = 0.50
 def _format_rag_context(hits: list[dict[str, Any]]) -> str:
     """RAG 검색 결과를 LLM 주입용 텍스트로 포맷.
 
-    각 청크 텍스트에는 이미 [출처: 파일명, N페이지] 접두어가 포함되어 있으므로
-    LLM에게 파일명을 언급하도록 간단히 지시하기만 한다.
+    각 hit에 doc_id를 명시 → LLM이 답변에 [[doc:doc_id]] 마커를 포함하면
+    프론트가 정확한 다운로드 칩을 자동 렌더한다.
     """
     lines = [
-        "[관련 문서 검색 결과]\n"
-        "아래 내용을 바탕으로 답변하고, 대괄호 안의 파일명을 반드시 언급하세요."
+        "[관련 문서 검색 결과]",
+        "아래 내용을 바탕으로 답변하세요. 답변에 인용한 자료는 반드시 답변 안에 "
+        "`[[doc:<doc_id>]]` 마커를 한 번 포함해야 합니다 — 사용자에게는 그것이 "
+        "다운로드 칩으로 보입니다. 노트(is_note=true)는 `[[note:<slug>]]` 마커를 사용하세요. "
+        "마커 자체는 본문에 보이지 않습니다.",
+        "",
     ]
     for h in hits:
         text = (h.get("text") or "").strip()
-        if text:
-            lines.append(text)
+        if not text:
+            continue
+        doc_id = h.get("doc_id") or ""
+        is_note = h.get("is_note", False)
+        if is_note and doc_id.startswith("__knowledge__:"):
+            slug = doc_id.split(":", 1)[1]
+            marker_hint = f"[[note:{slug}]]"
+            label = f"노트 marker={marker_hint}"
+        elif doc_id:
+            marker_hint = f"[[doc:{doc_id}]]"
+            label = f"문서 doc_id={doc_id} marker={marker_hint}"
+        else:
+            label = ""
+        block = f"--- {label} ---\n{text}" if label else text
+        lines.append(block)
     return "\n\n".join(lines)
 
 
@@ -120,10 +137,12 @@ def _make_adapter_class() -> type:
                 # _MIN_INJECTION_SCORE 이상인 hits만 주입 (낮은 유사도 문서 배제)
                 hits = [
                     {
+                        "doc_id": getattr(h, "doc_id", None),
                         "doc_name": getattr(h, "doc_name", None),
                         "page": getattr(h, "page", None),
                         "text": getattr(h, "text", ""),
                         "score": float(getattr(h, "score", 0.0)),
+                        "is_note": getattr(h, "category", None) == "__knowledge__",
                     }
                     for h in retrieval.hits
                     if float(getattr(h, "score", 0.0)) >= _MIN_INJECTION_SCORE

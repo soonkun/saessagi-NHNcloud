@@ -22,9 +22,13 @@ import { invalidateDocsCache } from "../services/websocket";
 import { getDocumentDownloadUrl, uploadDocument } from "../services/api";
 import type { MessageAttachment, MessageImage } from "../types";
 
-// `[[note:slug]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
+// `[[note:slug]]` / `[[doc:doc_id]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거
 function stripNoteMarkers(text: string): string {
-  return text.replace(/\[\[note:[^\]]+\]\]/g, "").replace(/\s{2,}/g, " ").trim();
+  return text
+    .replace(/\[\[note:[^\]]+\]\]/g, "")
+    .replace(/\[\[doc:[^\]]+\]\]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 import { startVoice, stopVoice } from "../services/voice";
 import { CalendarView } from "./CalendarView";
