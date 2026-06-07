@@ -22,7 +22,12 @@ function firstDayOfMonth(year: number, month: number): number {
 }
 
 function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  // 로컬 시간대 기준 YYYY-MM-DD.
+  // toISOString()을 쓰면 UTC 기준이라 KST 자정~09:00 사이에 어제 날짜로 잘못 표시됨.
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 // ────────────────────────────────────────────────────────────

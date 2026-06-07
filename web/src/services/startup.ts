@@ -47,10 +47,14 @@ export async function showStartupGreeting(): Promise<void> {
   if (_greeted) return;
   _greeted = true;
 
-  // KST 기준 오늘 날짜 (UTC로 계산하면 자정~09:00 사이에 날짜가 다를 수 있음)
-  const kstOffset = 9 * 60;
-  const kstNow = new Date(Date.now() + kstOffset * 60 * 1000);
-  const today = kstNow.toISOString().slice(0, 10);
+  // 로컬 시간대 기준 오늘 날짜.
+  // OS 시간대가 KST(또는 사용자 거주지)이므로 getFullYear/Month/Date를 사용하면 정확.
+  // toISOString()은 UTC라 자정~09:00 사이에 어제 날짜가 됨.
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  const today = `${y}-${m}-${d}`;
 
   let todayEvents: CalendarEvent[] = [];
   try {
