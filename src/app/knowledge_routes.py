@@ -45,8 +45,14 @@ class NoteMetaResp(BaseModel):
     updated: str
 
 
+class RelatedDocInfo(BaseModel):
+    id: str
+    filename: str | None = None
+
+
 class NoteResp(NoteMetaResp):
     content: str
+    related_docs_info: list[RelatedDocInfo] = []
 
 
 class CreateNoteRequest(BaseModel):
@@ -83,13 +89,22 @@ async def list_notes(request: Request) -> list[NoteMetaResp]:
     return [NoteMetaResp(**asdict(m)) for m in svc.list_notes()]
 
 
+def _note_resp_with_info(svc: KnowledgeService, note: Any) -> NoteResp:
+    """NoteResp에 related_docs_info(첨부 파일 filename) 추가."""
+    info = svc.resolve_related_docs(list(note.related_docs))
+    return NoteResp(
+        **asdict(note),
+        related_docs_info=[RelatedDocInfo(**i) for i in info],
+    )
+
+
 @router.get("/notes/{slug}", response_model=NoteResp)
 async def get_note(request: Request, slug: str) -> NoteResp:
     svc = _get_service(request)
     note = svc.get_note(slug)
     if note is None:
         raise HTTPException(status_code=404, detail=f"note not found: {slug}")
-    return NoteResp(**asdict(note))
+    return _note_resp_with_info(svc, note)
 
 
 @router.post("/notes", response_model=NoteResp, status_code=201)
@@ -104,7 +119,7 @@ async def create_note(request: Request, body: CreateNoteRequest) -> NoteResp:
         tags=body.tags,
         related_docs=body.related_docs,
     )
-    return NoteResp(**asdict(note))
+    return _note_resp_with_info(svc, note)
 
 
 @router.patch("/notes/{slug}", response_model=NoteResp)
@@ -119,7 +134,7 @@ async def update_note(request: Request, slug: str, body: UpdateNoteRequest) -> N
     )
     if note is None:
         raise HTTPException(status_code=404, detail=f"note not found: {slug}")
-    return NoteResp(**asdict(note))
+    return _note_resp_with_info(svc, note)
 
 
 @router.delete("/notes/{slug}")

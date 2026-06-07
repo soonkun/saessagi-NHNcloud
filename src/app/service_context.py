@@ -211,6 +211,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             "사용자에게 자연어로 \"방금 ⟨제목⟩ 노트로 저장해 두었어요\"라고 한국어로 알리고, "
             "답변 끝에 ToolResult payload의 `note_marker` (예: `[[note:생성된-슬러그]]`)를 "
             "반드시 정확히 한 번 포함하세요. 사용자에게는 이것이 노트로 점프하는 칩으로 보입니다.\n"
+            "ToolResult payload에 `related_docs_info`가 있으면 그 안의 각 `filename`을 "
+            "답변에 그대로 한 번씩 자연어로 언급하세요 — 예: \"관련 자료는 ⟨회의보고서.hwpx⟩에 있어요.\" "
+            "프론트가 파일명을 인식해 다운로드 칩으로 렌더하므로, 사용자가 그 자리에서 바로 파일을 받을 수 있습니다.\n\n"
+            "## 검색 결과(search_docs)에 노트가 등장한 경우\n"
+            "각 hit의 `is_note=true` 이면 사용자가 저장한 업무 노트입니다. "
+            "그 hit에 `note_related_docs`가 있으면 그 안의 각 `filename`도 답변에 그대로 한 번 언급하세요. "
+            "그러면 사용자가 노트 칩 + 자료 다운로드 칩을 함께 받게 됩니다.\n"
         )
 
         if self.live2d_model is None:

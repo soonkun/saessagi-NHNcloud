@@ -10,6 +10,8 @@ import {
   Eye,
   Network,
   Search,
+  Paperclip,
+  Download,
 } from "lucide-react";
 import type {
   KnowledgeNote,
@@ -23,6 +25,7 @@ import {
   updateNote,
   deleteNote,
   fetchKnowledgeGraph,
+  getDocumentDownloadUrl,
 } from "../services/api";
 import { useStore } from "../store";
 import { invalidateNotesCache } from "../services/websocket";
@@ -494,6 +497,7 @@ export function NotesView(): React.ReactElement {
                   minHeight: 250,
                 }}
               />
+              <RelatedDocsSection note={current} />
               <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
                 slug: <code>{current.slug}</code> · 작성 {current.created?.slice(0, 10)} · 수정 {current.updated?.slice(0, 10)}
               </div>
@@ -505,6 +509,8 @@ export function NotesView(): React.ReactElement {
               <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 14 }}>
                 {current.tags.join(" · ") || "태그 없음"}
               </div>
+              <RelatedDocsSection note={current} />
+
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -600,6 +606,94 @@ function EmptyHint({ isEmptyAtAll }: { isEmptyAtAll: boolean }): React.ReactElem
 }
 
 // `[[slug]]` 위키링크를 ReactMarkdown이 처리할 수 있도록 마크다운 링크로 변환.
+// 관련 자료(첨부 파일) 섹션 — 노트와 연결된 doc_id를 다운로드 가능한 칩으로 표시
+function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactElement | null {
+  const docs = note.related_docs_info ?? [];
+  if (docs.length === 0) return null;
+  return (
+    <div
+      style={{
+        marginBottom: 14,
+        padding: "10px 12px",
+        borderRadius: 8,
+        border: "1px solid var(--color-border)",
+        background: "var(--color-bg)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: "var(--color-text-muted)",
+          marginBottom: 6,
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
+        }}
+      >
+        <Paperclip size={11} />
+        관련 자료 · {docs.length}건
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {docs.map((d) => {
+          const label = d.filename ?? d.id;
+          const href = d.filename ? getDocumentDownloadUrl(d.id) : undefined;
+          if (!href) {
+            return (
+              <span
+                key={d.id}
+                title={`원본 없음: ${d.id}`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "3px 8px",
+                  fontSize: 11,
+                  borderRadius: 8,
+                  background: "transparent",
+                  border: "1px dashed var(--color-border)",
+                  color: "var(--color-text-muted)",
+                }}
+              >
+                <Paperclip size={11} />
+                {label} (원본 없음)
+              </span>
+            );
+          }
+          return (
+            <a
+              key={d.id}
+              href={href}
+              download={d.filename ?? undefined}
+              title={`원본 다운로드: ${label}`}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "3px 8px",
+                fontSize: 11,
+                borderRadius: 8,
+                background: "rgba(100,140,220,0.18)",
+                border: "1px solid rgba(100,140,220,0.4)",
+                color: "#7aa8ff",
+                textDecoration: "none",
+                maxWidth: 240,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <Download size={11} />
+              {label}
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // `doc:xxx`는 다운로드 안내 텍스트로만 표시 (실제 doc id로 다운로드 처리는 추후 Phase에).
 function renderWikilinks(text: string): string {
   return text.replace(/\[\[([^\]\|#]+)(?:\|([^\]]*))?\]\]/g, (_, target: string, label?: string) => {

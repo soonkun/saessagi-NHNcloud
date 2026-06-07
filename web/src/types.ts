@@ -26,8 +26,14 @@ export interface KnowledgeNoteMeta {
   updated: string;
 }
 
+export interface RelatedDocInfo {
+  id: string;
+  filename?: string | null;
+}
+
 export interface KnowledgeNote extends KnowledgeNoteMeta {
   content: string;
+  related_docs_info?: RelatedDocInfo[];
 }
 
 export interface KnowledgeGraphData {

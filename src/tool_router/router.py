@@ -304,19 +304,29 @@ class ToolRouter:
         hits_payload = []
         for hit in all_hits:
             citation = self._rag.format_citation(hit)
-            hits_payload.append(
-                {
-                    "doc_id": getattr(hit, "doc_id", None),
-                    "doc_name": getattr(hit, "doc_name", None),
-                    "page": getattr(hit, "page", None),
-                    "section": getattr(hit, "section", None),
-                    "chunk_id": getattr(hit, "chunk_id", None),
-                    "text": getattr(hit, "text", ""),
-                    "score": float(getattr(hit, "score", 0.0)),
-                    "citation": citation,
-                    "is_note": getattr(hit, "category", None) == "__knowledge__",
-                }
-            )
+            is_note = getattr(hit, "category", None) == "__knowledge__"
+            entry: dict[str, Any] = {
+                "doc_id": getattr(hit, "doc_id", None),
+                "doc_name": getattr(hit, "doc_name", None),
+                "page": getattr(hit, "page", None),
+                "section": getattr(hit, "section", None),
+                "chunk_id": getattr(hit, "chunk_id", None),
+                "text": getattr(hit, "text", ""),
+                "score": float(getattr(hit, "score", 0.0)),
+                "citation": citation,
+                "is_note": is_note,
+            }
+            # 노트 hit이면 그 노트의 첨부 파일도 함께 노출 — LLM이 답변에 안내 가능
+            if is_note and self._knowledge is not None:
+                doc_id = getattr(hit, "doc_id", "")
+                if doc_id and doc_id.startswith("__knowledge__:"):
+                    slug = doc_id.split(":", 1)[1]
+                    note = self._knowledge.get_note(slug)
+                    if note is not None and note.related_docs:
+                        entry["note_related_docs"] = (
+                            self._knowledge.resolve_related_docs(note.related_docs)
+                        )
+            hits_payload.append(entry)
 
         found = bool(hits_payload)
         no_match_reason: str | None = None
@@ -429,10 +439,31 @@ class ToolRouter:
                 error_code="handler_exception",
             )
 
-        logger.info(
-            "save_knowledge_note 성공: slug=%s, title=%s, related_docs=%d",
-            note.slug, note.title, len(related_docs),
+        # 첨부 파일명 resolve — 답변에 자연어로 안내할 때 활용
+        related_docs_info = self._knowledge.resolve_related_docs(  # type: ignore[union-attr]
+            list(note.related_docs)
         )
+        filenames = [
+            d["filename"] for d in related_docs_info if d.get("filename")
+        ]
+        filenames_text = ", ".join(filenames) if filenames else ""
+
+        logger.info(
+            "save_knowledge_note 성공: slug=%s, title=%s, related_docs=%d, filenames=%s",
+            note.slug, note.title, len(related_docs), filenames_text,
+        )
+
+        alert_lines = [
+            f"업무 노트 '{note.title}'(으)로 저장했습니다.",
+            f"답변 끝에 반드시 [[note:{note.slug}]] 마커를 한 번 포함하세요 "
+            "(노트로 점프하는 칩으로 렌더됩니다).",
+        ]
+        if filenames_text:
+            alert_lines.append(
+                f"이 노트에는 첨부 파일이 연결돼 있습니다: {filenames_text}. "
+                "사용자 답변에 자연스럽게 '관련 자료 ⟨파일명⟩'을 한 번 그대로 언급하세요. "
+                "그러면 사용자가 채팅에서 바로 다운로드 받을 수 있습니다."
+            )
         return ToolResult(
             ok=True,
             payload={
@@ -440,11 +471,9 @@ class ToolRouter:
                 "title": note.title,
                 "tags": list(note.tags),
                 "related_docs": list(note.related_docs),
+                "related_docs_info": related_docs_info,
                 "note_marker": f"[[note:{note.slug}]]",
-                "alert": (
-                    f"업무 노트 '{note.title}'(으)로 저장했습니다. "
-                    f"답변 끝에 반드시 {{note_marker}} (={'[[note:' + note.slug + ']]'})를 한 번 포함하세요."
-                ),
+                "alert": " ".join(alert_lines),
             },
         )
 

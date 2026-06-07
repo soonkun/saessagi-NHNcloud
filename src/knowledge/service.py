@@ -78,9 +78,40 @@ class KnowledgeService:
     """노트 CRUD + RAG 임베딩 + 그래프 빌드."""
 
     def __init__(self, root: Path | str, rag_service: Any | None = None) -> None:
+        self._root_base = Path(root)
         self._root = Path(root) / "data" / "knowledge"
         self._root.mkdir(parents=True, exist_ok=True)
+        self._originals_dir = Path(root) / "data" / "rag_originals"
         self._rag = rag_service
+
+    # ── related_docs filename 조회 ──
+
+    def resolve_related_docs(self, related_docs: list[str]) -> list[dict[str, str | None]]:
+        """doc_id 목록 → [{id, filename}] 매핑.
+
+        rag_originals/<bucket>/<doc_id>/<filename> 디렉토리를 글로빙해 filename 조회.
+        파일이 없으면 filename=None으로 반환 (UI에서 doc_id로 표시).
+        """
+        if not related_docs:
+            return []
+        result: list[dict[str, str | None]] = []
+        for doc_id in related_docs:
+            filename = self._find_filename(doc_id)
+            result.append({"id": doc_id, "filename": filename})
+        return result
+
+    def _find_filename(self, doc_id: str) -> str | None:
+        if not self._originals_dir.is_dir():
+            return None
+        for bucket in self._originals_dir.iterdir():
+            if not bucket.is_dir():
+                continue
+            candidate = bucket / doc_id
+            if candidate.is_dir():
+                files = [p for p in candidate.iterdir() if p.is_file()]
+                if files:
+                    return files[0].name
+        return None
 
     # ── 경로 ──
 

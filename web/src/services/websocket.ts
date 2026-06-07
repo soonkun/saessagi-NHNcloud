@@ -9,7 +9,7 @@ import type {
 } from "../types";
 import { useStore } from "../store";
 import { speakLocalQueued, cancelLocalSpeech } from "./speech";
-import { fetchDocuments, fetchNotes } from "./api";
+import { fetchDocuments, fetchNotes, fetchNote } from "./api";
 
 // ────────────────────────────────────────────────────────────
 // 인용 문서 매칭 — AI 답변 텍스트에 documents의 파일명이 substring으로
@@ -142,8 +142,37 @@ async function attachNoteCitationsToMessage(
   invalidateNotesCache();
   const notes = await getNotesCached();
   const cited = findNoteCitations(text, notes);
-  if (cited.length > 0) {
-    useStore.getState().attachNoteCitations(messageId, cited);
+  if (cited.length === 0) return;
+  useStore.getState().attachNoteCitations(messageId, cited);
+
+  // 각 노트의 related_docs(첨부 파일)도 자동으로 다운로드 칩에 추가
+  // LLM이 답변에 파일명을 명시 안 해도 사용자가 바로 받을 수 있게.
+  try {
+    const docMap = new Map<string, { id: string; filename: string }>();
+    await Promise.all(
+      cited.map(async (c) => {
+        try {
+          const note = await fetchNote(c.slug);
+          for (const r of note.related_docs_info ?? []) {
+            if (r.id && r.filename) {
+              docMap.set(r.id, { id: r.id, filename: r.filename });
+            }
+          }
+        } catch {
+          /* fetch 실패 무시 — 칩만 못 붙음 */
+        }
+      })
+    );
+    if (docMap.size === 0) return;
+    // 기존 citedDocs와 머지 (substring 매칭으로 이미 잡힌 doc은 보존)
+    const state = useStore.getState();
+    const existing = state.messages.find((m) => m.id === messageId)?.citedDocs ?? [];
+    const merged = new Map<string, { id: string; filename: string }>();
+    for (const d of existing) merged.set(d.id, d);
+    for (const [id, d] of docMap) merged.set(id, d);
+    state.attachCitations(messageId, [...merged.values()]);
+  } catch {
+    /* ignore */
   }
 }
 
