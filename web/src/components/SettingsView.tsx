@@ -164,10 +164,19 @@ const inputStyle: React.CSSProperties = {
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 12,
+  fontSize: 13,
   color: "var(--color-text-muted)",
   marginBottom: 6,
   display: "block",
+};
+
+// 펫 모드 섹션 카드 — 시각적 그룹핑으로 가독성 향상
+const petCardStyle: React.CSSProperties = {
+  background: "var(--color-bg-elevated, var(--color-bg))",
+  border: "1px solid var(--color-border)",
+  borderRadius: 14,
+  padding: 18,
+  marginTop: 14,
 };
 
 // ── 데스크톱 마스터-디테일 카테고리 ─────────────────────────────────────────
@@ -849,7 +858,7 @@ export function SettingsView({
       if (key === "intent_classify") return 14;
       return 8;
     };
-    const taFontSize = isDesktop ? 13 : 11;
+    const taFontSize = isDesktop ? 14 : 13;
 
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
@@ -1324,22 +1333,22 @@ export function SettingsView({
 
   return (
     <div
-      style={{ padding: 24, maxWidth: 480, overflowY: "auto", height: "100%" }}
+      style={{ padding: 20, maxWidth: 560, overflowY: "auto", height: "100%" }}
     >
-      <h2 style={{ fontWeight: 700, fontSize: 18, marginBottom: 24 }}>설정</h2>
+      <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 18 }}>설정</h2>
 
-      <section style={{ marginTop: 0 }}>{renderTheme()}</section>
+      <section style={petCardStyle}>{renderTheme()}</section>
 
-      <section style={{ marginTop: 28 }}>{renderLlm()}</section>
+      <section style={petCardStyle}>{renderLlm()}</section>
 
-      <section style={{ marginTop: 28 }}>{renderIntent()}</section>
+      <section style={petCardStyle}>{renderIntent()}</section>
 
-      <section style={{ marginTop: 28 }}>{renderVoice()}</section>
+      <section style={petCardStyle}>{renderVoice()}</section>
 
-      <section style={{ marginTop: 28 }}>{renderConnection()}</section>
+      <section style={petCardStyle}>{renderConnection()}</section>
 
       {/* 지침 관리 — 펫 모드에서만 접이식 */}
-      <section style={{ marginTop: 28 }}>
+      <section style={petCardStyle}>
         <button
           onMouseDown={(e) => {
             e.stopPropagation();
@@ -1354,20 +1363,20 @@ export function SettingsView({
             border: "none",
             padding: 0,
             cursor: "pointer",
-            marginBottom: promptsOpen ? 12 : 0,
+            marginBottom: promptsOpen ? 14 : 0,
           }}
         >
-          <h3 style={{ fontWeight: 600, fontSize: 14, margin: 0 }}>
+          <h3 style={{ fontWeight: 600, fontSize: 15, margin: 0 }}>
             지침 관리 (에이전트별)
           </h3>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+          <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
             {promptsOpen ? "▲ 접기" : "▼ 펼치기"}
           </span>
         </button>
         {promptsOpen && renderPromptsContent(false)}
       </section>
 
-      <section style={{ marginTop: 28, marginBottom: 24 }}>
+      <section style={{ ...petCardStyle, marginBottom: 20 }}>
         {renderAbout()}
       </section>
     </div>
