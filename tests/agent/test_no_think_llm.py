@@ -4,6 +4,7 @@
 패치가 세 경로(stream, non-stream, complete_json) 모두에서
 실제로 Ollama에 think=False를 보내는지 확인한다.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -18,11 +19,14 @@ from src.agent.no_think_llm import NoThinkLLM
 # 헬퍼: NoThinkLLM 인스턴스 빌더
 # ────────────────────────────────────────────────────────────
 
+
 def _make_llm() -> tuple[NoThinkLLM, AsyncMock]:
     """NoThinkLLM을 생성하고 내부 create mock을 반환한다."""
     captured: list[dict[str, Any]] = []
 
-    async def _fake_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def _fake_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body, "kwargs": kwargs})
         # 빈 스트림 mock 반환
         mock_resp = MagicMock()
@@ -50,13 +54,16 @@ def _make_llm() -> tuple[NoThinkLLM, AsyncMock]:
 # 정상 케이스
 # ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_think_false_injected_when_no_extra_body() -> None:
     """extra_body 없이 호출해도 think=False가 주입된다."""
     captured: list[dict[str, Any]] = []
     original_create = AsyncMock()
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -84,7 +91,9 @@ async def test_think_false_forced_even_when_caller_passes_think_true() -> None:
     """caller가 think=True를 명시해도 think=False로 강제된다."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -110,7 +119,9 @@ async def test_existing_extra_body_fields_preserved() -> None:
     """think 외의 extra_body 필드는 보존된다."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -140,7 +151,9 @@ async def test_original_extra_body_not_mutated() -> None:
     """패치가 caller의 extra_body dict를 제자리 변경하지 않는다."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -168,12 +181,15 @@ async def test_original_extra_body_not_mutated() -> None:
 # 엣지 케이스
 # ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_none_extra_body_becomes_think_false() -> None:
     """extra_body=None → {"think": False} 로 변환."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -203,6 +219,7 @@ async def test_patch_applied_only_to_instance_not_class() -> None:
         async def recording_create(*args: Any, extra_body: Any = None, **kwargs: Any) -> Any:
             calls.append(extra_body)
             return AsyncMock()
+
         return recording_create
 
     with patch(
@@ -229,7 +246,9 @@ async def test_multiple_calls_all_injected() -> None:
     """연속 호출 모두에서 think=False가 주입된다."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 
@@ -256,12 +275,15 @@ async def test_multiple_calls_all_injected() -> None:
 # 적대적 케이스
 # ────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_think_false_not_overridden_by_empty_extra_body() -> None:
     """빈 dict extra_body={}도 think=False를 포함해야 한다."""
     captured: list[dict[str, Any]] = []
 
-    async def recording_create(*args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any) -> Any:
+    async def recording_create(
+        *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         captured.append({"extra_body": extra_body})
         return AsyncMock()
 

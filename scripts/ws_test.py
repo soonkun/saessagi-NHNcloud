@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """WebSocket 텍스트 대화 테스트 스크립트."""
+
 import asyncio
 import json
 import sys

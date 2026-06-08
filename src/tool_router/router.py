@@ -265,9 +265,7 @@ class ToolRouter:
         loop = asyncio.get_running_loop()
 
         async def _retrieve(cat: str | None, k: int) -> Any:
-            return await loop.run_in_executor(
-                None, lambda: self._rag.retrieve(query, k, cat)
-            )
+            return await loop.run_in_executor(None, lambda: self._rag.retrieve(query, k, cat))
 
         if category is not None:
             # 명시 카테고리 — 단일 검색
@@ -283,8 +281,7 @@ class ToolRouter:
             note_hits = [h for h in note_retrieval.hits]
             # 일반 문서 풀에서 __knowledge__ 카테고리 hit은 제외 (중복 방지)
             doc_hits = [
-                h for h in doc_retrieval.hits
-                if getattr(h, "category", None) != "__knowledge__"
+                h for h in doc_retrieval.hits if getattr(h, "category", None) != "__knowledge__"
             ]
             primary = doc_retrieval
 
@@ -323,8 +320,8 @@ class ToolRouter:
                     slug = doc_id.split(":", 1)[1]
                     note = self._knowledge.get_note(slug)
                     if note is not None and note.related_docs:
-                        entry["note_related_docs"] = (
-                            self._knowledge.resolve_related_docs(note.related_docs)
+                        entry["note_related_docs"] = self._knowledge.resolve_related_docs(
+                            note.related_docs
                         )
             hits_payload.append(entry)
 
@@ -340,7 +337,10 @@ class ToolRouter:
             note_count = sum(1 for h in hits_payload if h["is_note"])
             logger.info(
                 "search_docs 성공: %d건 반환 (노트=%d, 문서=%d, query=%r)",
-                len(hits_payload), note_count, len(hits_payload) - note_count, query[:50],
+                len(hits_payload),
+                note_count,
+                len(hits_payload) - note_count,
+                query[:50],
             )
 
         return ToolResult(
@@ -443,14 +443,15 @@ class ToolRouter:
         related_docs_info = self._knowledge.resolve_related_docs(  # type: ignore[union-attr]
             list(note.related_docs)
         )
-        filenames = [
-            d["filename"] for d in related_docs_info if d.get("filename")
-        ]
+        filenames = [d["filename"] for d in related_docs_info if d.get("filename")]
         filenames_text = ", ".join(filenames) if filenames else ""
 
         logger.info(
             "save_knowledge_note 성공: slug=%s, title=%s, related_docs=%d, filenames=%s",
-            note.slug, note.title, len(related_docs), filenames_text,
+            note.slug,
+            note.title,
+            len(related_docs),
+            filenames_text,
         )
 
         alert_lines = [

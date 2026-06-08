@@ -43,6 +43,7 @@ def _korean_time(text: str) -> str:
     14:00 → 오후 2시
     13:45 → 오후 1시 45분
     """
+
     def _replace(m: re.Match[str]) -> str:
         h, mi = int(m.group(1)), int(m.group(2))
         period = "오전" if h < 12 else "오후"

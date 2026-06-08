@@ -242,7 +242,9 @@ class MeetingDraftGenerator:
         chunks = _split_into_chunks(transcript, _CHUNK_SIZE_CHARS)
         logger.info(f"녹취록 청크 분할: {len(transcript)}자 → {len(chunks)}개 청크")
         if progress_cb:
-            await progress_cb("chunk_start", f"녹취록이 깁니다. {len(chunks)}개 구간으로 나눠 요약합니다...")
+            await progress_cb(
+                "chunk_start", f"녹취록이 깁니다. {len(chunks)}개 구간으로 나눠 요약합니다..."
+            )
         summaries: list[str] = []
         for i, chunk in enumerate(chunks):
             if progress_cb:
@@ -287,7 +289,9 @@ class MeetingDraftGenerator:
         if len(transcript) > _TRANSCRIPT_DIRECT_MAX_CHARS:
             chunks = _split_into_chunks(transcript, _CHUNK_SIZE_CHARS)
             if progress_cb:
-                await progress_cb("chunk_start", f"녹취록을 {len(chunks)}개 구간으로 나눠 요약합니다...")
+                await progress_cb(
+                    "chunk_start", f"녹취록을 {len(chunks)}개 구간으로 나눠 요약합니다..."
+                )
             summaries: list[str] = []
             for i, chunk in enumerate(chunks):
                 if progress_cb:
@@ -351,6 +355,7 @@ class MeetingDraftGenerator:
             await progress_cb("generate", "회의록 초안 작성 중...")
 
         import datetime
+
         today = datetime.date.today().strftime("%Y.%m.%d.")
         volume_guide = VOLUME_GUIDE_1PAGE if pages == 1 else VOLUME_GUIDE_2PAGE
         user_prompt = USER_PROMPT_TEMPLATE.format(

@@ -137,9 +137,7 @@ def apply_to_config(upstream_config: Any, hw: HardwareProfile) -> None:
         # conf.yaml에 로컬 경로(슬래시 포함)가 있으면 model_path를 건드리지 않는다.
         existing = asr.model_path or ""
         if existing and ("/" in existing or "\\" in existing):
-            logger.info(
-                f"HW adapt ASR: model_path는 로컬 경로이므로 유지 ({existing[:60]}…)"
-            )
+            logger.info(f"HW adapt ASR: model_path는 로컬 경로이므로 유지 ({existing[:60]}…)")
         else:
             asr.model_path = hw.whisper_model
             logger.info(f"HW adapt ASR: model_path={hw.whisper_model}")

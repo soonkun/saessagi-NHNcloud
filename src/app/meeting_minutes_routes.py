@@ -50,6 +50,7 @@ def _decode_audio(audio_bytes: bytes, suffix: str) -> np.ndarray:
     # 리샘플링 (필요 시)
     if sr != _TARGET_SR:
         import librosa
+
         data = librosa.resample(data, orig_sr=sr, target_sr=_TARGET_SR)
 
     return data
@@ -221,14 +222,24 @@ async def transcribe_stream(
     async def run():
         asr_engine = getattr(ctx, "asr_engine", None)
         if asr_engine is None:
-            yield _sse({"stage": "error", "message": "STT 엔진이 초기화되지 않았습니다. conf.yaml의 asr_config를 확인하세요."})
+            yield _sse(
+                {
+                    "stage": "error",
+                    "message": "STT 엔진이 초기화되지 않았습니다. conf.yaml의 asr_config를 확인하세요.",
+                }
+            )
             return
         try:
             yield _sse({"stage": "transcribing", "message": "음성 인식 중..."})
             arr = await asyncio.to_thread(_decode_audio, audio_bytes, suffix)
             transcript = await asr_engine.async_transcribe_np(arr)
             if not transcript.strip():
-                yield _sse({"stage": "error", "message": "음성이 인식되지 않았습니다. 오디오 품질을 확인하거나 텍스트를 직접 입력하세요."})
+                yield _sse(
+                    {
+                        "stage": "error",
+                        "message": "음성이 인식되지 않았습니다. 오디오 품질을 확인하거나 텍스트를 직접 입력하세요.",
+                    }
+                )
                 return
             yield _sse({"stage": "done", "transcript": transcript.strip()})
         except Exception as exc:
@@ -260,8 +271,10 @@ async def summarize_stream(
     ctx = request.app.state.service_context
     service = getattr(ctx, "meeting_minutes_service", None)
     if service is None:
+
         async def _err():
             yield _sse({"stage": "error", "message": "회의록 서비스가 준비되지 않았습니다."})
+
         return StreamingResponse(_err(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
     queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -275,14 +288,23 @@ async def summarize_stream(
                 await queue.put({"stage": "error", "message": "녹취 텍스트가 비어 있습니다."})
                 return
             notes = await service._generator.summarize_to_text(
-                transcript.strip(), progress_cb, pages=pages  # type: ignore[arg-type]
+                transcript.strip(),
+                progress_cb,
+                pages=pages,  # type: ignore[arg-type]
             )
             await queue.put({"stage": "done", "meeting_notes": notes})
         except TimeoutError:
-            await queue.put({"stage": "error", "message": "LLM 응답 시간 초과. 텍스트가 너무 길면 일부만 붙여넣어 시도하세요."})
+            await queue.put(
+                {
+                    "stage": "error",
+                    "message": "LLM 응답 시간 초과. 텍스트가 너무 길면 일부만 붙여넣어 시도하세요.",
+                }
+            )
         except Exception as exc:
             logger.error(f"summarize-stream 실패: {exc}")
-            await queue.put({"stage": "error", "message": str(exc) or "회의록 작성 중 오류가 발생했습니다."})
+            await queue.put(
+                {"stage": "error", "message": str(exc) or "회의록 작성 중 오류가 발생했습니다."}
+            )
 
     task = asyncio.create_task(run())
 
@@ -317,15 +339,19 @@ async def generate_meeting_minutes_stream(
       data: {"stage": "error",        "message": "오류 내용"}
     """
     if pages not in (1, 2):
+
         async def _err():
             yield _sse({"stage": "error", "message": "pages는 1 또는 2여야 합니다."})
+
         return StreamingResponse(_err(), media_type="text/event-stream")
 
     ctx = request.app.state.service_context
     service = getattr(ctx, "meeting_minutes_service", None)
     if service is None:
+
         async def _err():
             yield _sse({"stage": "error", "message": "회의록 서비스가 준비되지 않았습니다."})
+
         return StreamingResponse(_err(), media_type="text/event-stream")
 
     # 오디오·텍스트 수집
@@ -361,7 +387,12 @@ async def generate_meeting_minutes_stream(
                 final = final_transcript
 
             if not final:
-                await queue.put({"stage": "error", "message": "녹취 텍스트가 없습니다. 텍스트를 직접 입력하거나 오디오 파일을 첨부하세요."})
+                await queue.put(
+                    {
+                        "stage": "error",
+                        "message": "녹취 텍스트가 없습니다. 텍스트를 직접 입력하거나 오디오 파일을 첨부하세요.",
+                    }
+                )
                 return
 
             result = await service.generate(final, pages, progress_cb=progress_cb)  # type: ignore[arg-type]

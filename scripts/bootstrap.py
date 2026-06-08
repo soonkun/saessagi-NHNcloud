@@ -67,6 +67,7 @@ def which(name: str) -> bool:
 
 # ── entrypoint ─────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     # Always run from project root
     root = Path(__file__).resolve().parent.parent
@@ -89,8 +90,13 @@ def main() -> None:
     else:
         warn("Installing uv...")
         if IS_WIN:
-            run("powershell", "-ExecutionPolicy", "ByPass",
-                "-c", "irm https://astral.sh/uv/install.ps1 | iex")
+            run(
+                "powershell",
+                "-ExecutionPolicy",
+                "ByPass",
+                "-c",
+                "irm https://astral.sh/uv/install.ps1 | iex",
+            )
         else:
             run("sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh")
         if not which("uv"):
@@ -106,9 +112,7 @@ def main() -> None:
     else:
         if upstream.exists():
             shutil.rmtree(upstream)
-        run("git", "clone",
-            "https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git",
-            str(upstream))
+        run("git", "clone", "https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git", str(upstream))
         ok(f"cloned to {upstream}")
 
     # frontend is a git submodule -- initialize if missing
@@ -161,10 +165,23 @@ def main() -> None:
         # then install melotts without its strict old tokenizers/transformers pins.
         warn("Installing MeloTTS (TTS engine, may take a while)...")
         try:
-            run("uv", "pip", "install", "--quiet",
-                "tokenizers>=0.14.0", "transformers>=4.35.0", "pypinyin==0.50.0")
-            run("uv", "pip", "install", "--quiet", "--no-deps",
-                "melotts @ git+https://github.com/myshell-ai/MeloTTS.git")
+            run(
+                "uv",
+                "pip",
+                "install",
+                "--quiet",
+                "tokenizers>=0.14.0",
+                "transformers>=4.35.0",
+                "pypinyin==0.50.0",
+            )
+            run(
+                "uv",
+                "pip",
+                "install",
+                "--quiet",
+                "--no-deps",
+                "melotts @ git+https://github.com/myshell-ai/MeloTTS.git",
+            )
             ok("MeloTTS installed")
         except Exception:
             warn("MeloTTS installation failed (likely missing Rust compiler).")
@@ -209,11 +226,24 @@ def main() -> None:
         skip(".git already exists")
     else:
         run("git", "init")
-        run("git", "add",
-            "README.md", "REQUIREMENTS.md", "CLAUDE.md", "PROJECT_PLAN.md",
-            ".gitignore", ".claude/", "prompts/", "docs/", "scripts/",
-            "specs/.gitkeep", "reviews/.gitkeep", "upstream/.gitkeep",
-            "assets/", "pyproject.toml")
+        run(
+            "git",
+            "add",
+            "README.md",
+            "REQUIREMENTS.md",
+            "CLAUDE.md",
+            "PROJECT_PLAN.md",
+            ".gitignore",
+            ".claude/",
+            "prompts/",
+            "docs/",
+            "scripts/",
+            "specs/.gitkeep",
+            "reviews/.gitkeep",
+            "upstream/.gitkeep",
+            "assets/",
+            "pyproject.toml",
+        )
         run("git", "commit", "-m", "chore: initial starter kit")
         ok("git repository initialized")
 
@@ -226,7 +256,7 @@ def main() -> None:
     if (root / "src" / "app" / "main.py").exists():
         print("To start the server:")
         sep = ";" if IS_WIN else ":"
-        print(f'  set PYTHONPATH=src{sep}upstream/Open-LLM-VTuber/src{sep}upstream/Open-LLM-VTuber')
+        print(f"  set PYTHONPATH=src{sep}upstream/Open-LLM-VTuber/src{sep}upstream/Open-LLM-VTuber")
         print('  uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393')
         print()
         print("Open http://127.0.0.1:12393 in your browser.")

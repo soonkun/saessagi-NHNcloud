@@ -13,7 +13,9 @@ from .service_context import AppServiceContext
 from .ws_handler import AppWebSocketHandler
 
 
-def _make_locked_send(websocket: WebSocket) -> Callable[[str], "asyncio.Coroutine[None, None, None]"]:
+def _make_locked_send(
+    websocket: WebSocket,
+) -> Callable[[str], "asyncio.Coroutine[None, None, None]"]:
     """websockets.legacy의 동시 쓰기 AssertionError 방지를 위한 직렬화 래퍼.
 
     websockets.legacy는 _drain_helper에서 동시 두 코루틴이 write 시도 시

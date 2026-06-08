@@ -45,7 +45,9 @@ async def build_chat_agent(
         model = ollama_config.model
         api_key = "z"
         is_external = False
-        logger.info(f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, use_mcpp={use_mcpp}")
+        logger.info(
+            f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, use_mcpp={use_mcpp}"
+        )
 
     # 모델별 안전한 temperature — gpt-5/o-series는 1.0만 허용 (OpenAI 400 회피)
     effective_temperature = agent_cfg.temperature

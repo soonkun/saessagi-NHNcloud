@@ -129,9 +129,7 @@ def _load_folders() -> list[dict[str, str]]:
 
 def _save_folders(folders: list[dict[str, str]]) -> None:
     _FOLDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _FOLDERS_FILE.write_text(
-        json.dumps(folders, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _FOLDERS_FILE.write_text(json.dumps(folders, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _get_folder_or_404(folder_id: str) -> dict[str, str]:
@@ -175,9 +173,7 @@ def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLA
     return [c for c in chunks if c.strip()]
 
 
-def _parse_to_meta_segments(
-    filename: str, data: bytes
-) -> list[tuple[str, int | None]]:
+def _parse_to_meta_segments(filename: str, data: bytes) -> list[tuple[str, int | None]]:
     """파서를 호출해 (text, page) 튜플 목록을 반환한다.
 
     - PDF/PPTX : page = 실제 페이지/슬라이드 번호(1-based).
@@ -213,11 +209,7 @@ def _parse_to_meta_segments(
             raw = data.decode("utf-8", errors="replace").strip()
             return [(raw, None)] if raw else []
 
-        return [
-            (seg.text.strip(), seg.page)
-            for seg in parser(tmp_path)
-            if seg.text.strip()
-        ]
+        return [(seg.text.strip(), seg.page) for seg in parser(tmp_path) if seg.text.strip()]
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -334,9 +326,7 @@ async def delete_folder(
                 doc_ids_col = arrow_tbl.column("doc_id").to_pylist()
                 categories_col = arrow_tbl.column("category").to_pylist()
                 target_doc_ids = {
-                    doc_id
-                    for doc_id, cat in zip(doc_ids_col, categories_col)
-                    if cat == folder_id
+                    doc_id for doc_id, cat in zip(doc_ids_col, categories_col) if cat == folder_id
                 }
                 for did in target_doc_ids:
                     deleted_chunks += store.delete_by_doc_id(did)
@@ -349,7 +339,9 @@ async def delete_folder(
         _delete_folder_dir(folder_id)
     logger.info(
         "delete_folder: %s, deleted_chunks=%d, delete_docs=%s",
-        folder_id, deleted_chunks, delete_docs,
+        folder_id,
+        deleted_chunks,
+        delete_docs,
     )
     return {"ok": True, "folder_id": folder_id, "deleted_chunks": deleted_chunks}
 
@@ -471,8 +463,12 @@ async def upload_document(request: Request) -> UploadResponse:
         # 원본 저장 실패는 업로드를 실패로 처리하지 않는다(이미 임베딩은 성공).
         # 대신 다음 다운로드 요청 시 404로 응답된다.
 
-    logger.info("upload_document: doc_id=%s, chunks=%d, folder_id=%s", doc_id, len(chunk_metas), folder_id)
-    return UploadResponse(doc_id=doc_id, filename=filename, chunk_count=len(chunk_metas), folder_id=folder_id)
+    logger.info(
+        "upload_document: doc_id=%s, chunks=%d, folder_id=%s", doc_id, len(chunk_metas), folder_id
+    )
+    return UploadResponse(
+        doc_id=doc_id, filename=filename, chunk_count=len(chunk_metas), folder_id=folder_id
+    )
 
 
 @router.get("/documents", response_model=list[DocumentInfo])

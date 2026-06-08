@@ -12,7 +12,13 @@ def test_tool_specs_length_and_names(router: ToolRouter) -> None:
     specs = router.tool_specs()
     assert len(specs) == 5
     names = {s["function"]["name"] for s in specs}
-    assert names == {"add_event", "get_events", "search_docs", "take_screenshot", "create_meeting_minutes"}
+    assert names == {
+        "add_event",
+        "get_events",
+        "search_docs",
+        "take_screenshot",
+        "create_meeting_minutes",
+    }
 
 
 def test_tool_specs_function_key_exists(router: ToolRouter) -> None:
