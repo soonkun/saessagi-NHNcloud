@@ -445,6 +445,7 @@ def _make_adapter_class() -> type:
             input_data = await self._augment_with_rag(input_data)
 
             text_parts: list[str] = []
+            note_saved = False  # 이번 턴에 업무 노트 저장이 일어났는가
 
             async for event in self._agent.chat(input_data):
                 if isinstance(event, TextChunk):
@@ -457,6 +458,18 @@ def _make_adapter_class() -> type:
                         "name": event.name,
                         "arguments": event.arguments,
                     }
+                    # 업무 노트 저장은 생성+RAG 임베딩으로 시간이 걸리므로 시작 시
+                    # "작성 중" 안내를 먼저 보낸다(완료 메시지는 임베딩 후). display_text의
+                    # [note_writing] 태그 → 프론트가 작성 중 캐릭터로 전환(대화 채널로 확실히
+                    # 전달; tts에는 태그 미포함). 완료 메시지에 [neutral]로 복귀.
+                    if event.name == "save_knowledge_note":
+                        note_saved = True
+                        _msg = "📝 업무 노트를 작성하고 있어요. 잠시만요…"
+                        yield SentenceOutput(
+                            display_text=DisplayText(text=f"[note_writing] {_msg}", name="AI"),
+                            tts_text=_msg,
+                            actions=Actions(),
+                        )
                 elif isinstance(event, ToolCallResult):
                     yield {
                         "type": "tool_call_status",
@@ -482,6 +495,9 @@ def _make_adapter_class() -> type:
                     display = f"{clean_text} {marker_str}".strip() if clean_text else marker_str
                 else:
                     display = clean_text
+                # 노트 저장 완료 메시지엔 [neutral] 태그를 붙여 작성 중 캐릭터를 복귀시킨다.
+                if note_saved:
+                    display = f"[neutral] {display}"
                 yield SentenceOutput(
                     display_text=DisplayText(text=display, name="AI"),
                     tts_text=clean_text,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 # ---------------------------------------------------------------------------
-# Emotion Literal — 8종 (유효 전체 집합)
+# Emotion Literal — 유효 전체 집합 (note_writing: 업무노트 작성 중 전용, M_15 후속)
 # ---------------------------------------------------------------------------
 
 Emotion = Literal[
@@ -27,6 +27,7 @@ Emotion = Literal[
     "sleepy",
     "study",
     "writing",
+    "note_writing",
 ]
 
 # (1) 유효 Emotion 집합 — push_event/AvatarEvent 경로(9종, study/writing 포함)

@@ -354,3 +354,14 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 3. `tests/app/upstream_baseline.json`을 **패치 적용 후 상태**로 재생성. 무결성 테스트는 이제 "관리되는 패치 외의 추가 변조"를 잡는 의미로 동작(docstring 갱신).  
 **검증**: 패치 파일이 현재 upstream과 정확히 일치함을 `git apply --reverse --check`로 확인. baseline 재생성 후 무결성 테스트 통과. 패치는 되돌리지 않고 보존(기능 회귀 방지).  
 **교훈**: **upstream을 부득이 수정해야 하면(외부 후크 부재 등) 반드시 patches/로 관리하고 bootstrap에 적용 단계를 넣을 것.** 직접 수정은 재clone·재설치 때 조용히 사라져 "내 머신에선 되는데" 버그를 만든다. 무결성 테스트의 baseline은 "관리되는 패치 적용 후 상태"를 기준으로 두어, 정식 패치는 통과시키되 비관리 변조는 계속 차단한다.
+
+---
+
+## E-30: tool 핸들러의 avatar_state.push_emotion이 클라이언트에 도달하지 않음 — 대화 채널 emotion 태그로 우회
+
+**날짜**: 2026-06-09  
+**증상**: 업무 노트 저장 시 "작성 중" 캐릭터(note_writing 스프라이트)를 띄우려고 `ToolRouter._handle_save_knowledge_note`에서 `avatar_state.push_emotion("note_writing")`을 호출했으나, raw WS 캡처로 확인 시 해당 avatar-state 프레임이 **클라이언트에 전혀 도달하지 않음**(neutral·audio 메시지는 정상 도달). `_send_text=SET`이고 send_json 호출도 예외 없이 완료되는데도 수신 안 됨.  
+**원인(정황)**: 회의록의 "writing" 캐릭터는 사실 `avatar_state.push_emotion`이 아니라 프론트 스토어 플래그 `isMeetingGenerating`(CharacterWidget.tsx)으로 구동된다. 즉 tool 실행 컨텍스트에서의 avatar_state WS push는 신뢰성 있게 클라이언트에 닿지 않는다(대화 처리 task와 별개 송신 경로/타이밍 문제로 추정). 반면 대화 채널로 가는 audio 메시지(display_text)는 항상 도달한다.  
+**수정**: 노트 작성 중/완료 캐릭터 전환을 **대화 채널(audio display_text)의 emotion 태그**로 구동. 어댑터가 시작 안내 메시지에 `[note_writing]`, 완료 메시지에 `[neutral]` 태그를 붙여 보내면, 프론트 `stripEmotionTags`가 이를 파싱해 `setEmotion` + 태그 제거한다(이미 존재하는 메커니즘 재사용). avatar_state.push는 무해한 belt-and-suspenders로 유지.  
+**검증**: raw WS 캡처로 display_text에 `[note_writing]`/`[neutral]` 태그가 그대로 전달됨을 확인, node로 stripEmotionTags가 해당 태그를 emotion으로 파싱하고 본문은 깨끗하게 남김을 확인. note_writing은 EMOTION_MAP·Emotion 타입(프론트/백엔드)·스프라이트 파일 모두 추가.  
+**교훈**: **캐릭터 감정/상태 전환을 클라이언트에 확실히 전달하려면 tool 핸들러의 avatar_state.push가 아니라 대화 채널(메시지 emotion 태그) 또는 프론트 스토어 플래그를 쓸 것.** avatar_state.push는 tool 실행 컨텍스트에서 신뢰성이 낮다(회의록도 실제로는 isMeetingGenerating 플래그로 동작).

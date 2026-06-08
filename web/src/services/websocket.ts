@@ -224,6 +224,8 @@ const EMOTION_MAP: Record<string, Emotion> = {
   study: "study",
   worried: "worried",
   worried_v2: "worried",
+  writing: "writing",
+  note_writing: "note_writing",
   neutral: "neutral",
 };
 

@@ -414,6 +414,17 @@ class ToolRouter:
             self._meeting_minutes, args, avatar_state=self._avatar_state
         )
 
+    async def _push_avatar(self, emotion: str) -> None:
+        """아바타 감정 전환. avatar_state 없거나 전송 실패 시 안전하게 무시."""
+        if self._avatar_state is None:
+            logger.info("아바타 전환 스킵 (avatar_state=None): emotion=%s", emotion)
+            return
+        try:
+            await self._avatar_state.push_emotion(emotion)
+            logger.info("노트 아바타 전환: emotion=%s", emotion)
+        except Exception as exc:
+            logger.warning("아바타 전환 실패 (무시): emotion=%s err=%s", emotion, exc)
+
     async def _handle_save_knowledge_note(self, args: dict[str, Any]) -> ToolResult:
         """save_knowledge_note 핸들러 — 업무 지식 노트 저장."""
         title: str = args["title"]
@@ -421,6 +432,10 @@ class ToolRouter:
         tags: list[str] = args.get("tags", []) or []
         related_docs: list[str] = args.get("related_docs", []) or []
 
+        # 작성 중 아바타 전환 (note_writing). create_note는 RAG 임베딩까지 동기로
+        # 수행하므로 이 구간이 실제 저장·인덱싱 시간이다. finally에서 neutral 복귀 →
+        # 완료 신호가 실제 완료 후에만 발생(조기 "다 됐다" 문제 해소).
+        await self._push_avatar("note_writing")
         try:
             note = await asyncio.get_running_loop().run_in_executor(
                 None,
@@ -438,6 +453,8 @@ class ToolRouter:
                 error=f"노트 저장 실패: {exc}",
                 error_code="handler_exception",
             )
+        finally:
+            await self._push_avatar("neutral")
 
         # 첨부 파일명 resolve — 답변에 자연어로 안내할 때 활용
         related_docs_info = self._knowledge.resolve_related_docs(  # type: ignore[union-attr]
