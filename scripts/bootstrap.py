@@ -65,6 +65,35 @@ def which(name: str) -> bool:
     return shutil.which(name) is not None
 
 
+# upstream을 고정할 알려진 정상 커밋. patches/ 는 이 커밋 기준으로 적용된다.
+UPSTREAM_PINNED_COMMIT = "19b58b1"
+
+
+def apply_upstream_patches(root: Path, upstream: Path) -> None:
+    """patches/*.patch 를 upstream clone에 적용 (멱등).
+
+    upstream은 참조용 외부 의존성이라 직접 수정하지 않는 게 원칙이지만,
+    대화 루프 내부처럼 외부 후크가 없어 EXTEND(상속·래핑)로 풀 수 없는
+    소수의 수정은 여기 patch로 관리한다. 이렇게 하면 clone/재clone 후에도
+    패치가 보존되고(재설치 시 조용히 유실되지 않음), 무결성 테스트의
+    baseline과도 일치한다. 자세한 사유는 patches/README.md 참조.
+    """
+    patch_dir = root / "patches"
+    if not patch_dir.is_dir():
+        return
+    for patch in sorted(patch_dir.glob("*.patch")):
+        # 이미 적용됐으면(reverse-check 성공) 건너뜀 — 멱등
+        already = run(
+            "git", "-C", str(upstream), "apply", "--reverse", "--check", str(patch),
+            check=False, capture=True,
+        )
+        if already.returncode == 0:
+            skip(f"upstream patch already applied: {patch.name}")
+            continue
+        run("git", "-C", str(upstream), "apply", str(patch))
+        ok(f"applied upstream patch: {patch.name}")
+
+
 # ── entrypoint ─────────────────────────────────────────────────────────────
 
 
@@ -113,7 +142,12 @@ def main() -> None:
         if upstream.exists():
             shutil.rmtree(upstream)
         run("git", "clone", "https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git", str(upstream))
-        ok(f"cloned to {upstream}")
+        # 재현성: 알려진 정상 커밋에 고정 (patches/ 가 이 커밋 기준)
+        run("git", "-C", str(upstream), "checkout", "--quiet", UPSTREAM_PINNED_COMMIT)
+        ok(f"cloned to {upstream} @ {UPSTREAM_PINNED_COMMIT}")
+
+    # 사내 필수 upstream 패치 적용 (멱등 — 기존 clone에도 안전)
+    apply_upstream_patches(root, upstream)
 
     # frontend is a git submodule -- initialize if missing
     if not (upstream / "frontend" / "index.html").exists():

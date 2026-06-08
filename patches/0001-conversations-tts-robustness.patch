@@ -1,0 +1,57 @@
+diff --git a/src/open_llm_vtuber/conversations/conversation_utils.py b/src/open_llm_vtuber/conversations/conversation_utils.py
+index 02286e9..cbd57b9 100644
+--- a/src/open_llm_vtuber/conversations/conversation_utils.py
++++ b/src/open_llm_vtuber/conversations/conversation_utils.py
+@@ -168,10 +168,11 @@ async def finalize_conversation_turn(
+     """Finalize a conversation turn"""
+     if tts_manager.task_list:
+         await asyncio.gather(*tts_manager.task_list)
++        await tts_manager.wait_until_drained()
+         await websocket_send(json.dumps({"type": "backend-synth-complete"}))
+ 
+         response = await message_handler.wait_for_response(
+-            client_uid, "frontend-playback-complete"
++            client_uid, "frontend-playback-complete", timeout=30.0
+         )
+ 
+         if not response:
+diff --git a/src/open_llm_vtuber/conversations/single_conversation.py b/src/open_llm_vtuber/conversations/single_conversation.py
+index 493fa9c..11b8428 100644
+--- a/src/open_llm_vtuber/conversations/single_conversation.py
++++ b/src/open_llm_vtuber/conversations/single_conversation.py
+@@ -137,11 +137,6 @@ async def process_single_conversation(
+             # full_response will contain partial response before error
+         # --- End processing agent response ---
+ 
+-        # Wait for any pending TTS tasks
+-        if tts_manager.task_list:
+-            await asyncio.gather(*tts_manager.task_list)
+-            await websocket_send(json.dumps({"type": "backend-synth-complete"}))
+-
+         await finalize_conversation_turn(
+             tts_manager=tts_manager,
+             websocket_send=websocket_send,
+@@ -165,7 +160,7 @@ async def process_single_conversation(
+         logger.info(f"🤡👍 Conversation {session_emoji} cancelled because interrupted.")
+         raise
+     except Exception as e:
+-        logger.error(f"Error in conversation chain: {e}")
++        logger.error(f"Error in conversation chain [{type(e).__name__}]: {e!r}")
+         await websocket_send(
+             json.dumps({"type": "error", "message": f"Conversation error: {str(e)}"})
+         )
+diff --git a/src/open_llm_vtuber/conversations/tts_manager.py b/src/open_llm_vtuber/conversations/tts_manager.py
+index 59c36b7..e0e430c 100644
+--- a/src/open_llm_vtuber/conversations/tts_manager.py
++++ b/src/open_llm_vtuber/conversations/tts_manager.py
+@@ -171,6 +171,10 @@ class TTSTaskManager:
+             file_name_no_ext=f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{str(uuid.uuid4())[:8]}",
+         )
+ 
++    async def wait_until_drained(self) -> None:
++        """Wait until _sender_task has flushed all payloads to the WebSocket."""
++        await self._payload_queue.join()
++
+     def clear(self) -> None:
+         """Clear all pending tasks and reset state"""
+         self.task_list.clear()

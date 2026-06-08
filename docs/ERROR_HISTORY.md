@@ -322,3 +322,17 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **수정**: `app/logging.py`에 표준 `InterceptHandler`를 추가하고 `logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)`로 루트 로거를 loguru에 연결. loguru 권장 통합 패턴. 이후 어댑터의 RAG·IntentGate 로그가 파일에 정상 기록됨.  
 **검증**: 브리지 추가 후 백엔드 재기동 → 실제 WS 대화에서 `IntentGate: intent=calendar_add conf=0.97 inject_rag=False`, `IntentGate: intent=doc_query ... rag_source=docs`, `RAG 컨텍스트 주입: ... hits=5` 등이 로그 파일에 찍히는 것을 직접 확인.  
 **교훈**: **loguru를 쓰는 앱에서 일부 모듈이 표준 logging을 쓰면 반드시 InterceptHandler 브리지를 설치할 것.** 안 그러면 그 모듈 로그가 조용히 유실되어 "로그로 검증"이라는 원칙 자체가 무력화된다. 로깅 초기화 시 "모든 로거가 같은 싱크로 모이는가"를 확인할 것.
+
+---
+
+## E-28: 문서화되지 않은 upstream 직접 수정 3건 — 패치 관리 체계로 전환
+
+**날짜**: 2026-06-08  
+**증상**: `tests/app/test_upstream_integrity.py`가 `conversations/{conversation_utils,single_conversation,tts_manager}.py` 3개가 baseline 해시와 불일치한다며 실패. CLAUDE.md/ARCHITECTURE의 "upstream 참조 전용·직접 수정 금지" 위반.  
+**원인**: 이전 작업에서 대화 종료 시 TTS 동기화 버그(프론트 재생완료 신호 무응답 시 무한 대기, 오디오 순서)를 고치려고 upstream 대화 루프 함수를 **직접 수정**했음. 해당 코드가 모듈 레벨 함수라 외부 override 후크가 없어 EXTEND로 풀기 어려웠던 것으로 보이며, 문서화 없이 남았다. 게다가 `scripts/bootstrap.py`가 설치 시 upstream을 `git clone`으로 새로 받으므로, 이 패치들은 **재clone 시 조용히 유실**되어 버그가 재발할 수 있는 상태였다(USB 배포는 rsync라 보존).  
+**수정**: 직접 수정을 **정식 패치 관리 체계**로 전환.  
+1. 3개 변경을 `patches/0001-conversations-tts-robustness.patch`로 추출, `patches/README.md`에 파일별 변경·사유·revert 위험 문서화.  
+2. `scripts/bootstrap.py`: upstream clone을 `UPSTREAM_PINNED_COMMIT`(19b58b1)에 고정 + `apply_upstream_patches()`로 `patches/*.patch`를 멱등 적용(이미 적용 시 skip). 재clone 후에도 패치 보존.  
+3. `tests/app/upstream_baseline.json`을 **패치 적용 후 상태**로 재생성. 무결성 테스트는 이제 "관리되는 패치 외의 추가 변조"를 잡는 의미로 동작(docstring 갱신).  
+**검증**: 패치 파일이 현재 upstream과 정확히 일치함을 `git apply --reverse --check`로 확인. baseline 재생성 후 무결성 테스트 통과. 패치는 되돌리지 않고 보존(기능 회귀 방지).  
+**교훈**: **upstream을 부득이 수정해야 하면(외부 후크 부재 등) 반드시 patches/로 관리하고 bootstrap에 적용 단계를 넣을 것.** 직접 수정은 재clone·재설치 때 조용히 사라져 "내 머신에선 되는데" 버그를 만든다. 무결성 테스트의 baseline은 "관리되는 패치 적용 후 상태"를 기준으로 두어, 정식 패치는 통과시키되 비관리 변조는 계속 차단한다.

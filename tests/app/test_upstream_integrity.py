@@ -1,10 +1,15 @@
 # tests/app/test_upstream_integrity.py
-"""upstream 파일 무수정 검증 테스트 — 스펙 DoD.
+"""upstream 무결성 검증 테스트 — 스펙 DoD.
 
 .gitignore에 upstream/이 제외돼 git diff는 항상 빈 결과이므로,
 SHA-256 해시 기반 매니페스트로 무결성을 검증한다.
 
-기준 해시: tests/app/upstream_baseline.json (최초 실행 시 생성됨)
+기준 해시: tests/app/upstream_baseline.json.
+baseline은 **정식 관리되는 patches/ 적용 후 상태**를 기준으로 한다 — 즉
+patches/*.patch로 관리되는 소수의 의도적 수정(예: conversations TTS 안정화)은
+baseline에 반영돼 있고, 그 외 **관리되지 않는 추가 변조**가 생기면 본 테스트가
+잡아낸다. 새 패치를 추가하면 patches/에 .patch + README 항목을 넣고
+baseline을 재생성해야 한다. (patches/README.md 참조)
 """
 
 from __future__ import annotations
