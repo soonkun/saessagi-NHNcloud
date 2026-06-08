@@ -167,6 +167,8 @@ async function attachNoteCitationsToMessage(
   if (!text.includes("[[note:")) return;
   // 새로 만든 노트가 캐시에 없을 수 있으니 즉시 무효화 후 fetch
   invalidateNotesCache();
+  // NotesView 목록도 자동 새로고침 (채팅으로 생성된 노트가 목록에 즉시 반영되도록)
+  useStore.getState().bumpNotesRevision();
   const notes = await getNotesCached();
   const cited = findNoteCitations(text, notes);
   if (cited.length === 0) return;
@@ -428,8 +430,12 @@ function dispatch(msg: WsIncomingMessage): void {
       }
       break;
 
-    case "tool-call-status":
-      // tool 상태는 현재 UI에 별도 표시 없음 — 무시
+    case "tool_call_status":
+      // 노트 저장 도구 완료 시 목록 자동 새로고침 — 항상 도달하는 신뢰 신호.
+      // (완료 메시지에 [[note:slug]] 마커가 없을 수도 있으므로 이 경로가 주력)
+      if (msg.tool_name === "save_knowledge_note") {
+        useStore.getState().bumpNotesRevision();
+      }
       break;
 
     case "new-history-created":

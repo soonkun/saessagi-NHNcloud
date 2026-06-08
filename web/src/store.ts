@@ -126,6 +126,7 @@ interface UiSlice {
   windowMode: "pet" | "window";
   llmInfo: LlmInfo | null;
   selectedNoteSlug: string | null;
+  notesRevision: number;
   theme: ThemeMode;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
@@ -134,6 +135,7 @@ interface UiSlice {
   setWindowMode: (mode: "pet" | "window") => void;
   setLlmInfo: (info: LlmInfo | null) => void;
   setSelectedNoteSlug: (slug: string | null) => void;
+  bumpNotesRevision: () => void;
   setTheme: (theme: ThemeMode) => void;
   setWsUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
@@ -220,6 +222,7 @@ export const useStore = create<AppStore>((set) => ({
   windowMode: "pet" as "pet" | "window",
   llmInfo: loadLlmInfo(),
   selectedNoteSlug: null as string | null,
+  notesRevision: 0,
   theme: loadTheme(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
@@ -234,6 +237,7 @@ export const useStore = create<AppStore>((set) => ({
     set({ llmInfo: info });
   },
   setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
+  bumpNotesRevision: () => set((state) => ({ notesRevision: state.notesRevision + 1 })),
   setTheme: (theme) => {
     try { localStorage.setItem("saessagi_theme", theme); } catch { /* ignore */ }
     set({ theme });

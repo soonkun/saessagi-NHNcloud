@@ -105,7 +105,7 @@ export interface WsAvatarStateMessage {
 }
 
 export interface WsToolCallStatusMessage {
-  type: "tool-call-status";
+  type: "tool_call_status"; // 백엔드 실제 전송값 (언더스코어)
   tool_id: string;
   tool_name: string;
   status: "running" | "completed" | "error";

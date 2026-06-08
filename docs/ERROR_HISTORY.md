@@ -365,3 +365,14 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **수정**: 노트 작성 중/완료 캐릭터 전환을 **대화 채널(audio display_text)의 emotion 태그**로 구동. 어댑터가 시작 안내 메시지에 `[note_writing]`, 완료 메시지에 `[neutral]` 태그를 붙여 보내면, 프론트 `stripEmotionTags`가 이를 파싱해 `setEmotion` + 태그 제거한다(이미 존재하는 메커니즘 재사용). avatar_state.push는 무해한 belt-and-suspenders로 유지.  
 **검증**: raw WS 캡처로 display_text에 `[note_writing]`/`[neutral]` 태그가 그대로 전달됨을 확인, node로 stripEmotionTags가 해당 태그를 emotion으로 파싱하고 본문은 깨끗하게 남김을 확인. note_writing은 EMOTION_MAP·Emotion 타입(프론트/백엔드)·스프라이트 파일 모두 추가.  
 **교훈**: **캐릭터 감정/상태 전환을 클라이언트에 확실히 전달하려면 tool 핸들러의 avatar_state.push가 아니라 대화 채널(메시지 emotion 태그) 또는 프론트 스토어 플래그를 쓸 것.** avatar_state.push는 tool 실행 컨텍스트에서 신뢰성이 낮다(회의록도 실제로는 isMeetingGenerating 플래그로 동작).
+
+---
+
+## E-31: 채팅으로 생성한 업무 노트가 노트 목록에 즉시 안 보임 (모드 전환 시에만 표시)
+
+**날짜**: 2026-06-09  
+**증상**: 채팅 비서가 save_knowledge_note로 노트를 생성하면 지식 그래프에는 반영되는데 노트 목록(NotesView)에는 안 보임. 펫↔데스크톱 모드를 전환하면 컴포넌트가 remount되며 그제서야 목록에 나타남.  
+**원인**: (1) NotesView가 목록을 마운트 시 1회만 `fetchNotes()`하고, 채팅으로 노트가 생성돼도 refetch 트리거가 없었다. `invalidateNotesCache()`는 채팅 인용 칩용 websocket 캐시만 비울 뿐 NotesView state와 무관. (2) 도구 완료 신호 `tool_call_status`(언더스코어)가 클라이언트에 도달하는데, 프론트 타입·switch는 `tool-call-status`(하이픈)로 정의돼 있어 **매치되지 않는 dead code**였다(타입 정의가 백엔드 실제 전송값과 불일치). (3) 완료 메시지에 `[[note:slug]]` 마커가 항상 포함되는 것도 아니라(LLM이 생략 가능) 마커 기반 갱신도 불안정.  
+**수정**: store에 `notesRevision` 카운터 추가 → NotesView가 구독해 `useEffect([refreshList, notesRevision])`로 자동 refetch. 노트 저장 신호에서 bump: 주력은 `tool_call_status`(타입을 실제값 언더스코어로 정정) + name==="save_knowledge_note"일 때 bump(항상 도달), 보조로 `attachNoteCitationsToMessage`(노트 마커 존재 시)에서도 bump.  
+**검증**: raw WS 캡처로 `tool_call_status`(name=save_knowledge_note, status=completed)가 실제로 클라이언트에 도달함을 확인(완료 메시지엔 [[note:]] 마커 없었음 → 마커 경로만으론 실패했을 것). 타입 정정 후 tsc 빌드 통과.  
+**교훈**: **WS 메시지 타입 문자열은 백엔드 실제 전송값과 1:1로 맞는지 raw 캡처로 확인할 것.** 하이픈/언더스코어 한 글자 차이로 case가 영영 dead code가 된다. 그리고 **목록형 뷰는 생성/변경 신호에 반응하는 갱신 트리거(store revision 등)를 둘 것** — 마운트 시 1회 fetch만으론 외부 생성(채팅 등)을 반영 못 한다.

@@ -38,6 +38,8 @@ type SubTab = "edit" | "preview" | "graph";
 export function NotesView(): React.ReactElement {
   const externalSelectedSlug = useStore((s) => s.selectedNoteSlug);
   const setExternalSelectedSlug = useStore((s) => s.setSelectedNoteSlug);
+  // 채팅으로 노트가 생성되면 bump됨 → 목록 자동 새로고침 트리거
+  const notesRevision = useStore((s) => s.notesRevision);
 
   const [notes, setNotes] = useState<KnowledgeNoteMeta[]>([]);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
@@ -77,7 +79,7 @@ export function NotesView(): React.ReactElement {
 
   useEffect(() => {
     void refreshList();
-  }, [refreshList]);
+  }, [refreshList, notesRevision]);
 
   // 선택된 노트 로드
   useEffect(() => {
