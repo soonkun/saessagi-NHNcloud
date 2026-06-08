@@ -104,7 +104,7 @@ export function DesktopView(): React.ReactElement {
           style={{
             flex: 1,
             textAlign: "center",
-            fontSize: 12,
+            fontSize: 13,
             color: "var(--color-text-muted)",
             userSelect: "none",
           }}
@@ -188,11 +188,11 @@ export function DesktopView(): React.ReactElement {
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>새싹이</div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>새싹이</div>
             {llmInfo && (
               <div
                 style={{
-                  fontSize: 10,
+                  fontSize: 12,
                   color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -225,7 +225,7 @@ export function DesktopView(): React.ReactElement {
                 borderRadius: 8,
                 color: chatTab === id ? "var(--color-accent)" : "var(--color-text)",
                 cursor: "pointer",
-                fontSize: 13,
+                fontSize: 15,
                 fontWeight: chatTab === id ? 600 : 400,
                 textAlign: "left",
                 transition: "background 0.12s",
@@ -261,10 +261,10 @@ export function DesktopView(): React.ReactElement {
               color: "var(--color-text-muted)",
               cursor: "pointer",
               padding: "8px 10px",
-              fontSize: 12,
+              fontSize: 13,
             }}
           >
-            <PanelLeftClose size={13} />
+            <PanelLeftClose size={14} />
             펫 모드
           </button>
           <button
@@ -348,7 +348,7 @@ export function DesktopView(): React.ReactElement {
         >
           <NotesView />
         </div>
-        {chatTab === "settings" && <SettingsView />}
+        {chatTab === "settings" && <SettingsView desktop />}
       </main>
       </div>
     </div>
