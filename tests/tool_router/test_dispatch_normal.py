@@ -69,7 +69,22 @@ async def test_n2_get_events_success(
 async def test_n3_search_docs_success_with_citation(
     router: ToolRouter, mock_rag: MagicMock
 ) -> None:
-    """N-3: search_docs 성공 - 인용 포함."""
+    """N-3: search_docs 성공 - 인용 포함.
+
+    하이브리드 검색은 노트 풀(__knowledge__)·문서 풀(None)을 각각 retrieve한다.
+    실데이터에선 category로 분리돼 중복이 없으므로, mock도 노트 풀은 비우고
+    문서 풀만 해당 문서 hit를 반환하도록 구성한다.
+    """
+    full = mock_rag.retrieve.return_value
+    empty = MagicMock()
+    empty.hits = []
+    empty.found = False
+
+    def _retrieve(_query: str, _k: int, category: str | None = None):  # type: ignore[no-untyped-def]
+        return empty if category == "__knowledge__" else full
+
+    mock_rag.retrieve.side_effect = _retrieve
+
     result = await router.dispatch(
         "search_docs",
         {"query": "예산 승인 절차"},

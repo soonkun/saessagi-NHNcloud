@@ -59,7 +59,6 @@ def _make_llm() -> tuple[NoThinkLLM, AsyncMock]:
 async def test_think_false_injected_when_no_extra_body() -> None:
     """extra_body 없이 호출해도 think=False가 주입된다."""
     captured: list[dict[str, Any]] = []
-    original_create = AsyncMock()
 
     async def recording_create(
         *args: Any, extra_body: dict[str, Any] | None = None, **kwargs: Any

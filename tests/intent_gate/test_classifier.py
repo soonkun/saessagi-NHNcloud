@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from intent_gate.classifier import IntentClassifier
-from intent_gate.types import IntentResult
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────

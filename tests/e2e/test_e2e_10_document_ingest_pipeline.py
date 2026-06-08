@@ -142,6 +142,6 @@ async def test_e2e_10_document_ingest_pipeline(tmp_path: Path) -> None:
         f"첫 ingest 청크 수={chunk_count_first}, 재-ingest 청크 수={chunk_count_second}."
     )
     assert chunk_count_second > 0, (
-        f"AC-10-3 FAIL: 재-ingest 시 chunk_count가 0입니다 "
-        f"(DocumentIngest가 새 청크를 생성하지 않음)."
+        "AC-10-3 FAIL: 재-ingest 시 chunk_count가 0입니다 "
+        "(DocumentIngest가 새 청크를 생성하지 않음)."
     )

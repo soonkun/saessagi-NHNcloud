@@ -43,19 +43,28 @@ async def test_e2_rag_none_search_docs(router_no_rag: ToolRouter) -> None:
 
 
 async def test_e3_search_docs_default_top_k(router: ToolRouter, mock_rag: MagicMock) -> None:
-    """E-3: search_docs top_k 미지정 → 기본값 8로 호출."""
+    """E-3: search_docs top_k 미지정 → 문서 풀 검색이 기본값 8로 호출.
+
+    하이브리드 검색(노트+문서 이중 retrieve)이므로 retrieve가 2회 호출된다:
+    노트 풀(category='__knowledge__', top_k//2)·문서 풀(category=None, top_k).
+    여기서는 문서 풀 호출이 top_k=8인지 확인한다.
+    """
     await router.dispatch(
         "search_docs",
         {"query": "q"},
     )
-    # retrieve 호출 인자에 top_k=8 확인
-    mock_rag.retrieve.assert_called_once()
-    call_args = mock_rag.retrieve.call_args
-    # positional or keyword
-    if call_args.args:
-        assert call_args.args[1] == 8
-    else:
-        assert call_args.kwargs.get("top_k") == 8 or call_args.args[1] == 8
+    # 노트 풀 + 문서 풀 = 2회 호출
+    assert mock_rag.retrieve.call_count == 2
+    # 문서 풀 호출(category=None)의 top_k가 8인지 확인
+    doc_calls = [
+        c
+        for c in mock_rag.retrieve.call_args_list
+        if (c.args[2] if len(c.args) > 2 else c.kwargs.get("category")) is None
+    ]
+    assert doc_calls, "문서 풀 호출(category=None)이 없음"
+    doc_call = doc_calls[0]
+    top_k = doc_call.args[1] if len(doc_call.args) > 1 else doc_call.kwargs.get("top_k")
+    assert top_k == 8
 
 
 async def test_e4_continuous_mode_privacy_warning_fields(

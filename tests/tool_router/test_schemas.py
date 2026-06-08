@@ -8,9 +8,9 @@ from src.tool_router.router import ToolRouter
 
 
 def test_tool_specs_length_and_names(router: ToolRouter) -> None:
-    """N-5: 리스트 길이 5, 이름 집합 검증."""
+    """N-5: 리스트 길이 6, 이름 집합 검증 (M_15에서 save_knowledge_note 추가)."""
     specs = router.tool_specs()
-    assert len(specs) == 5
+    assert len(specs) == 6
     names = {s["function"]["name"] for s in specs}
     assert names == {
         "add_event",
@@ -18,6 +18,7 @@ def test_tool_specs_length_and_names(router: ToolRouter) -> None:
         "search_docs",
         "take_screenshot",
         "create_meeting_minutes",
+        "save_knowledge_note",
     }
 
 

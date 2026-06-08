@@ -84,8 +84,15 @@ def apply_upstream_patches(root: Path, upstream: Path) -> None:
     for patch in sorted(patch_dir.glob("*.patch")):
         # 이미 적용됐으면(reverse-check 성공) 건너뜀 — 멱등
         already = run(
-            "git", "-C", str(upstream), "apply", "--reverse", "--check", str(patch),
-            check=False, capture=True,
+            "git",
+            "-C",
+            str(upstream),
+            "apply",
+            "--reverse",
+            "--check",
+            str(patch),
+            check=False,
+            capture=True,
         )
         if already.returncode == 0:
             skip(f"upstream patch already applied: {patch.name}")

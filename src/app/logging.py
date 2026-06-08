@@ -27,9 +27,8 @@ class _InterceptHandler(_stdlib_logging.Handler):
         while frame is not None and frame.f_code.co_filename == _stdlib_logging.__file__:
             frame = frame.f_back
             depth += 1
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
+
 
 # PII 패턴 (정규식 3종)
 _PHONE_RE = re.compile(r"01[0-9]-?\d{3,4}-?\d{4}")
