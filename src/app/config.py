@@ -193,6 +193,33 @@ class ProactiveConfig(BaseModel):
     )
 
 
+class AgentPromptsConfig(BaseModel):
+    """M_17 AgentInstructions — 에이전트별 지침 커스텀 값 저장.
+
+    빈 문자열 = 기본값(코드 상수) 사용. persona 빈값 저장은 API 레이어에서 422 차단.
+    """
+
+    persona: str = Field(
+        default="",
+        description="대화 페르소나 교체본. 빈값이면 character_config.persona_prompt 사용.",
+    )
+    knowledge_note: str = Field(
+        default="", description="업무노트 작성 지침. 빈값이면 기본값 사용(미주입)."
+    )
+    doc_query_answer: str = Field(
+        default="", description="자료질의 답변 지침. 빈값이면 기본값 사용(미주입)."
+    )
+    work_query_answer: str = Field(
+        default="", description="업무질의 답변 지침. 빈값이면 기본값 사용(미주입)."
+    )
+    intent_classify: str = Field(
+        default="", description="의도 분류 기준 SYSTEM 텍스트. 빈값이면 SYSTEM_PROMPT 사용."
+    )
+    meeting_minutes: str = Field(
+        default="", description="회의록 작성 지침. 빈값이면 SYSTEM_PROMPT 사용."
+    )
+
+
 class AppConfig(BaseModel):
     """본 프로젝트 고유 설정.
 
@@ -227,8 +254,13 @@ class AppConfig(BaseModel):
     )
     meeting_minutes_prompt: str = Field(
         default="",
-        description="회의록 생성 시스템 프롬프트. 빈 문자열이면 기본값(prompts.py SYSTEM_PROMPT) 사용.",
+        description=(
+            "회의록 생성 시스템 프롬프트. 빈 문자열이면 기본값(prompts.py SYSTEM_PROMPT) 사용. "
+            "[DEPRECATED: M_17] agent_prompts.meeting_minutes로 이전됨. 하위 호환용으로 유지."
+        ),
     )
+    # M_17: 에이전트별 지침 커스텀 값 (6키)
+    agent_prompts: AgentPromptsConfig = Field(default_factory=AgentPromptsConfig)
 
     @field_validator("morning_briefing_time", mode="before")
     @classmethod
@@ -307,7 +339,30 @@ def load_full_config(config_path: str) -> FullConfig:
     if env_profile:
         app_config = app_config.model_copy(update={"profile": HardwareProfile(env_profile)})
 
+    # M_17: meeting_minutes_prompt → agent_prompts.meeting_minutes 1회 마이그레이션
+    _migrate_meeting_minutes_prompt(app_config)
+
     return FullConfig(upstream=upstream_config, app=app_config)
+
+
+def _migrate_meeting_minutes_prompt(app_config: "AppConfig") -> None:
+    """M_17: meeting_minutes_prompt → agent_prompts.meeting_minutes 1회 마이그레이션.
+
+    기존 app.meeting_minutes_prompt(구 필드)가 있고
+    app.agent_prompts.meeting_minutes가 비어 있으면 후자로 in-memory 복사.
+    파일은 다음 저장 시 정규화됨.
+    두 필드 모두 채워진 경우 agent_prompts.meeting_minutes 우선.
+    """
+    old_val = (app_config.meeting_minutes_prompt or "").strip()
+    new_val = (app_config.agent_prompts.meeting_minutes or "").strip()
+
+    if old_val and not new_val:
+        # in-memory만 갱신
+        app_config.agent_prompts.meeting_minutes = old_val
+        logger.info(
+            "M_17 마이그레이션: meeting_minutes_prompt → agent_prompts.meeting_minutes (길이=%d)",
+            len(old_val),
+        )
 
 
 def _override_upstream_ollama_url(upstream_config: Any, url: str) -> None:

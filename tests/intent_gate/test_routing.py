@@ -157,3 +157,78 @@ def test_RoutingDecision_is_frozen():
     dec = RoutingDecision(inject_rag=True, rag_source="docs", tool_hint="hint", autonomous=False)
     with pytest.raises((AttributeError, TypeError)):
         dec.inject_rag = False  # type: ignore[misc]
+
+
+# ── M_17 확장: answer_guide 필드 + prompt_overrides ────────────────────────────
+
+
+def test_M17_N6_doc_query_with_prompt_overrides_has_answer_guide() -> None:
+    """M_17 N-6: doc_query 턴에서 prompt_overrides가 있으면 answer_guide가 설정된다."""
+    result = _result("doc_query", confidence=0.9, source="llm")
+    overrides = {"doc_query_answer": "표로 정리해서 답변하세요"}
+    dec = decide_with_confidence(result, prompt_overrides=overrides)
+    assert dec.answer_guide == "표로 정리해서 답변하세요"
+    assert dec.inject_rag is True
+
+
+def test_M17_E1_empty_doc_query_answer_normalizes_to_none() -> None:
+    """M_17 E-1: 빈 doc_query_answer → answer_guide=None (미주입)."""
+    result = _result("doc_query", confidence=0.9, source="llm")
+    overrides = {"doc_query_answer": ""}
+    dec = decide_with_confidence(result, prompt_overrides=overrides)
+    assert dec.answer_guide is None
+
+
+def test_M17_E2_prompt_overrides_none_all_answer_guide_none() -> None:
+    """M_17 E-2: prompt_overrides=None → 모든 의도에서 answer_guide=None. M_16 기존 동작 동일."""
+    for intent in ("doc_query", "work_query", "note_save", "calendar_add", "chat"):
+        result = _result(intent, confidence=0.9, source="llm")
+        dec = decide_with_confidence(result, prompt_overrides=None)
+        assert dec.answer_guide is None, f"{intent}: answer_guide는 None이어야 함"
+
+
+def test_M17_E5_calendar_and_chat_no_answer_guide() -> None:
+    """M_17 E-5: calendar/chat 의도 → answer_guide=None (doc/work/note 외 키 미주입)."""
+    overrides = {
+        "doc_query_answer": "표",
+        "work_query_answer": "노트",
+        "knowledge_note": "저장",
+    }
+    for intent in ("calendar_add", "calendar_query", "chat"):
+        result = _result(intent, confidence=0.9, source="llm")
+        dec = decide_with_confidence(result, prompt_overrides=overrides)
+        assert dec.answer_guide is None, f"{intent}: answer_guide는 None이어야 함"
+
+
+def test_M17_work_query_with_overrides_has_answer_guide() -> None:
+    """work_query 의도에서 work_query_answer 지침이 answer_guide로 설정된다."""
+    result = _result("work_query", confidence=0.9, source="llm")
+    overrides = {"work_query_answer": "내 업무 노트 기반으로 답하세요"}
+    dec = decide_with_confidence(result, prompt_overrides=overrides)
+    assert dec.answer_guide == "내 업무 노트 기반으로 답하세요"
+
+
+def test_M17_note_save_with_overrides_has_answer_guide() -> None:
+    """note_save 의도에서 knowledge_note 지침이 answer_guide로 설정된다."""
+    result = _result("note_save", confidence=0.9, source="llm")
+    overrides = {"knowledge_note": "업무 노트 형식으로 저장"}
+    dec = decide_with_confidence(result, prompt_overrides=overrides)
+    assert dec.answer_guide == "업무 노트 형식으로 저장"
+
+
+def test_M17_RoutingDecision_has_answer_guide_field() -> None:
+    """RoutingDecision에 answer_guide 필드가 있다."""
+    dec = RoutingDecision(
+        inject_rag=True,
+        rag_source="docs",
+        tool_hint="hint",
+        autonomous=False,
+        answer_guide="가이드",
+    )
+    assert dec.answer_guide == "가이드"
+
+
+def test_M17_RoutingDecision_answer_guide_default_none() -> None:
+    """RoutingDecision.answer_guide 기본값은 None이다."""
+    dec = RoutingDecision(inject_rag=False, rag_source="both", tool_hint=None, autonomous=False)
+    assert dec.answer_guide is None

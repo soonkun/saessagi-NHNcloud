@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 
 from .types import IntentResult, RagSource
 
@@ -49,6 +50,9 @@ class RoutingDecision:
     rag_source: RagSource  # "docs" | "notes" | "both" — retrieve에 넘길 소스 필터
     tool_hint: str | None  # LLM 시스템 메시지에 1줄로 주입할 도구 유도 지시 (None이면 미주입)
     autonomous: bool  # True면 게이트가 강제하지 않고 LLM 자율 (fallback 경로)
+    answer_guide: str | None = field(
+        default=None
+    )  # M_17: 해당 의도의 답변/작성 지침 본문 (빈/None=미주입)
 
 
 def decide(result: IntentResult, *, legacy_rag_triggered: bool = False) -> RoutingDecision:
@@ -78,19 +82,43 @@ def decide_with_confidence(
     *,
     confidence_threshold: float = 0.55,
     legacy_rag_triggered: bool = False,
+    prompt_overrides: Mapping[str, str] | None = None,
 ) -> RoutingDecision:
     """confidence_threshold를 반영한 확장 라우팅 결정 함수.
 
     스펙 §저신뢰 폴백 — doc_query/work_query의 저신뢰 소스 폴백 구현.
+    M_17: prompt_overrides로 per-intent 답변 지침을 answer_guide에 주입.
 
     Args:
         result: 분류기가 반환한 IntentResult.
         confidence_threshold: 저신뢰 판정 임계값.
         legacy_rag_triggered: 자율 모드 폴백 시 레거시 키워드 결과.
+        prompt_overrides: M_17 — {intent_key: 지침본문} 매핑.
+            None이면 M_16 기존 동작과 100% 동일 (answer_guide=None).
 
     Returns:
         RoutingDecision.
     """
+
+    # M_17: answer_guide 결정 헬퍼
+    def _get_answer_guide(intent: str) -> str | None:
+        """의도에 따라 해당 지침을 prompt_overrides에서 조회."""
+        if prompt_overrides is None:
+            return None
+        _key_map: dict[str, str] = {
+            "doc_query": "doc_query_answer",
+            "work_query": "work_query_answer",
+            "note_save": "knowledge_note",
+        }
+        override_key = _key_map.get(intent)
+        if override_key is None:
+            return None
+        val = prompt_overrides.get(override_key) or None
+        # 빈 문자열 → None 정규화 (미주입)
+        if val is not None and not val.strip():
+            return None
+        return val
+
     # 분류기 실패/비활성/비-RAG 저신뢰 → 전면 자율 폴백
     if result.source != "llm":
         logger.debug(
@@ -102,6 +130,7 @@ def decide_with_confidence(
             rag_source="both",
             tool_hint=None,
             autonomous=True,
+            answer_guide=None,
         )
 
     intent = result.intent
@@ -126,6 +155,7 @@ def decide_with_confidence(
             rag_source=rag_source,
             tool_hint=hint,
             autonomous=False,
+            answer_guide=_get_answer_guide(intent),
         )
 
     # 비-RAG 라벨(calendar_add, calendar_query, note_save, chat)
@@ -142,12 +172,14 @@ def decide_with_confidence(
             rag_source="both",
             tool_hint=None,
             autonomous=True,
+            answer_guide=None,
         )
 
-    # 고신뢰 라벨
+    # 고신뢰 라벨 (note_save 포함)
     return RoutingDecision(
         inject_rag=False,
         rag_source="both",
         tool_hint=_TOOL_HINTS[intent],
         autonomous=False,
+        answer_guide=_get_answer_guide(intent),
     )

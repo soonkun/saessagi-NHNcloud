@@ -57,34 +57,45 @@ async function apiSetIntentGate(body: {
   }
 }
 
-// ── Meeting prompt ───────────────────────────────────────────────────────────
+// ── Agent Prompts (M_17) ────────────────────────────────────────────────────
 
-interface MeetingPromptState {
+interface PromptInfo {
   prompt: string;
-  is_custom: boolean;
-  default_prompt: string;
+  is_custom: boolean | null;
+  default: string | null;
+  risk: "low" | "medium" | "high";
+  label: string;
 }
 
-async function fetchMeetingPrompt(): Promise<MeetingPromptState | null> {
+interface PromptsState {
+  [key: string]: PromptInfo;
+}
+
+async function fetchAgentPrompts(): Promise<PromptsState | null> {
   try {
-    const res = await fetch(API_BASE + "/api/settings/meeting-prompt");
+    const res = await fetch(API_BASE + "/api/settings/prompts");
     if (!res.ok) return null;
-    return (await res.json()) as MeetingPromptState;
+    const data = (await res.json()) as { prompts: PromptsState };
+    return data.prompts;
   } catch {
     return null;
   }
 }
 
-async function saveMeetingPrompt(prompt: string): Promise<boolean> {
+async function saveAgentPrompt(key: string, prompt: string): Promise<{ ok: boolean; detail?: string }> {
   try {
-    const res = await fetch(API_BASE + "/api/settings/meeting-prompt", {
+    const res = await fetch(API_BASE + "/api/settings/prompts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ key, prompt }),
     });
-    return res.ok;
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string };
+      return { ok: false, detail: err.detail };
+    }
+    return { ok: true };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
 
@@ -185,12 +196,13 @@ export function SettingsView(): React.ReactElement {
   const [igSaving, setIgSaving] = useState(false);
   const [igSaved, setIgSaved] = useState(false);
 
-  // 회의록 프롬프트 상태
-  const [meetingPrompt, setMeetingPrompt] = useState("");
-  const [meetingPromptDefault, setMeetingPromptDefault] = useState("");
-  const [isCustomPrompt, setIsCustomPrompt] = useState(false);
-  const [promptSaving, setPromptSaving] = useState(false);
-  const [promptSaved, setPromptSaved] = useState(false);
+  // M_17: 에이전트 지침 상태
+  const [agentPrompts, setAgentPrompts] = useState<PromptsState>({});
+  const [promptDrafts, setPromptDrafts] = useState<Record<string, string>>({});
+  const [promptSavingKey, setPromptSavingKey] = useState<string | null>(null);
+  const [promptSavedKey, setPromptSavedKey] = useState<string | null>(null);
+  const [promptErrors, setPromptErrors] = useState<Record<string, string>>({});
+  const [promptsOpen, setPromptsOpen] = useState(false);
 
   // LLM 공급자 상태 — store(localStorage)와 동기화돼 탭 전환 후에도 유지
   const [llmProvider, setLlmProvider] = useState<"ollama" | "openai">(
@@ -236,30 +248,45 @@ export function SettingsView(): React.ReactElement {
     }
   }
 
-  // 회의록 프롬프트 초기 로드
+  // M_17: 에이전트 지침 초기 로드
   useEffect(() => {
-    void fetchMeetingPrompt().then((s) => {
+    void fetchAgentPrompts().then((s) => {
       if (!s) return;
-      setMeetingPrompt(s.prompt);
-      setMeetingPromptDefault(s.default_prompt);
-      setIsCustomPrompt(s.is_custom);
+      setAgentPrompts(s);
+      const drafts: Record<string, string> = {};
+      for (const key of Object.keys(s)) {
+        drafts[key] = s[key].prompt;
+      }
+      setPromptDrafts(drafts);
     });
   }, []);
 
-  async function handlePromptSave(): Promise<void> {
-    if (promptSaving) return;
-    setPromptSaving(true);
-    const ok = await saveMeetingPrompt(meetingPrompt);
-    setPromptSaving(false);
-    if (ok) {
-      setIsCustomPrompt(meetingPrompt.trim() !== meetingPromptDefault.trim());
-      setPromptSaved(true);
-      setTimeout(() => setPromptSaved(false), 2500);
+  async function handlePromptSave(key: string): Promise<void> {
+    if (promptSavingKey) return;
+    setPromptSavingKey(key);
+    setPromptErrors((prev) => ({ ...prev, [key]: "" }));
+    const result = await saveAgentPrompt(key, promptDrafts[key] ?? "");
+    setPromptSavingKey(null);
+    if (result.ok) {
+      setPromptSavedKey(key);
+      // 상태 갱신
+      setAgentPrompts((prev) => ({
+        ...prev,
+        [key]: {
+          ...prev[key],
+          prompt: promptDrafts[key] ?? "",
+          is_custom: key === "persona" ? null : Boolean((promptDrafts[key] ?? "").trim()),
+        },
+      }));
+      setTimeout(() => setPromptSavedKey(null), 2500);
+    } else {
+      setPromptErrors((prev) => ({ ...prev, [key]: result.detail ?? "저장 실패" }));
     }
   }
 
-  function handlePromptReset(): void {
-    setMeetingPrompt(meetingPromptDefault);
+  function handlePromptReset(key: string): void {
+    const def = agentPrompts[key]?.default ?? "";
+    setPromptDrafts((prev) => ({ ...prev, [key]: def }));
   }
 
   // 초기 로드 — 백엔드 값을 가져와 UI·store 모두 동기화
@@ -766,66 +793,127 @@ export function SettingsView(): React.ReactElement {
         </button>
       </section>
 
-      {/* ── 회의록 작성 지침 ── */}
+      {/* ── 지침 관리 (M_17 에이전트별) ── */}
       <section style={sectionStyle}>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>회의록 작성 지침</h3>
-        <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 10, lineHeight: 1.5 }}>
-          회의록 생성 시 LLM에 전달되는 지침입니다. 직접 편집하거나 기본값으로 초기화할 수 있습니다.
-          {isCustomPrompt && (
-            <span style={{ marginLeft: 6, color: "var(--color-accent)", fontWeight: 600 }}>
-              (커스텀 적용 중)
-            </span>
-          )}
-        </p>
-        <textarea
-          value={meetingPrompt}
-          onChange={(e) => setMeetingPrompt(e.target.value)}
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={() => window.electronAPI?.restoreFocus()}
-          rows={18}
+        <button
+          onMouseDown={(e) => { e.stopPropagation(); setPromptsOpen((v) => !v); }}
           style={{
-            ...inputStyle,
-            resize: "vertical",
-            fontFamily: "monospace",
-            fontSize: 11,
-            lineHeight: 1.55,
-            whiteSpace: "pre",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+            marginBottom: promptsOpen ? 12 : 0,
           }}
-        />
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button
-            onClick={handlePromptReset}
-            style={{
-              flex: 1,
-              background: "transparent",
-              border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              color: "var(--color-text-muted)",
-              cursor: "pointer",
-              padding: "7px 10px",
-              fontSize: 12,
-            }}
-          >
-            기본값으로 초기화
-          </button>
-          <button
-            onClick={() => { void handlePromptSave(); }}
-            disabled={promptSaving}
-            style={{
-              flex: 2,
-              background: promptSaved ? "var(--color-accent)" : "transparent",
-              border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              color: promptSaved ? "#fff" : "var(--color-text)",
-              cursor: promptSaving ? "not-allowed" : "pointer",
-              padding: "7px 10px",
-              fontSize: 12,
-              opacity: promptSaving ? 0.6 : 1,
-            }}
-          >
-            {promptSaving ? "저장 중..." : promptSaved ? "저장됨 ✓" : "지침 저장"}
-          </button>
-        </div>
+        >
+          <h3 style={{ fontWeight: 600, fontSize: 14, margin: 0 }}>
+            지침 관리 (에이전트별)
+          </h3>
+          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
+            {promptsOpen ? "▲ 접기" : "▼ 펼치기"}
+          </span>
+        </button>
+
+        {promptsOpen && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+            {(["persona", "knowledge_note", "doc_query_answer", "work_query_answer", "intent_classify", "meeting_minutes"] as const).map((key) => {
+              const info = agentPrompts[key];
+              if (!info) return null;
+              const isSaving = promptSavingKey === key;
+              const isSaved = promptSavedKey === key;
+              const errorMsg = promptErrors[key] ?? "";
+              const isHigh = info.risk === "high";
+              const hasReset = key !== "persona" && info.default !== null;
+
+              return (
+                <div key={key} style={{ borderTop: "1px solid var(--color-border)", paddingTop: 14 }}>
+                  {/* 헤더: 레이블 + 배지 */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+                    <span style={{ fontWeight: 600, fontSize: 13 }}>{info.label}</span>
+                    {info.is_custom === true && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700,
+                        background: "var(--color-accent)", color: "#fff",
+                        borderRadius: 4, padding: "1px 5px",
+                      }}>커스텀</span>
+                    )}
+                    {isHigh && (
+                      <span style={{
+                        fontSize: 10, fontWeight: 700,
+                        background: "#c0392b", color: "#fff",
+                        borderRadius: 4, padding: "1px 5px",
+                      }}>고급</span>
+                    )}
+                  </div>
+                  {isHigh && (
+                    <p style={{ fontSize: 11, color: "#c0392b", marginBottom: 8, lineHeight: 1.5 }}>
+                      주의: 잘못 편집 시 의도 분류 정확도가 하락할 수 있습니다. 문제 시 기본값으로 복원하세요.
+                    </p>
+                  )}
+                  <textarea
+                    value={promptDrafts[key] ?? ""}
+                    onChange={(e) => setPromptDrafts((prev) => ({ ...prev, [key]: e.target.value }))}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={() => window.electronAPI?.restoreFocus()}
+                    rows={key === "persona" ? 6 : key === "intent_classify" ? 14 : 8}
+                    style={{
+                      ...inputStyle,
+                      resize: "vertical",
+                      fontFamily: "monospace",
+                      fontSize: 11,
+                      lineHeight: 1.55,
+                      whiteSpace: "pre",
+                      maxWidth: "100%",
+                    }}
+                    placeholder={key === "persona" ? "페르소나를 입력하세요 (비워두면 저장 불가)" : `${info.label} 기본값 사용 중`}
+                  />
+                  {errorMsg && (
+                    <p style={{ fontSize: 11, color: "#c0392b", marginTop: 4 }}>{errorMsg}</p>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    {hasReset && (
+                      <button
+                        onMouseDown={(e) => { e.stopPropagation(); handlePromptReset(key); }}
+                        style={{
+                          flex: 1,
+                          background: "transparent",
+                          border: "1px solid var(--color-border)",
+                          borderRadius: 8,
+                          color: "var(--color-text-muted)",
+                          cursor: "pointer",
+                          padding: "7px 8px",
+                          fontSize: 11,
+                        }}
+                      >
+                        기본값으로 복원
+                      </button>
+                    )}
+                    <button
+                      onClick={() => { void handlePromptSave(key); }}
+                      disabled={isSaving}
+                      style={{
+                        flex: 2,
+                        background: isSaved ? "var(--color-accent)" : "transparent",
+                        border: "1px solid var(--color-border)",
+                        borderRadius: 8,
+                        color: isSaved ? "#fff" : "var(--color-text)",
+                        cursor: isSaving ? "not-allowed" : "pointer",
+                        padding: "7px 10px",
+                        fontSize: 12,
+                        opacity: isSaving ? 0.6 : 1,
+                      }}
+                    >
+                      {isSaving ? "적용 중..." : isSaved ? "저장됨 ✓" : "지침 저장"}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {/* ── 정보 ── */}

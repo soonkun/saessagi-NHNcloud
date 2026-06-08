@@ -1099,3 +1099,120 @@ async def complete_json(
 - [ ] **E2E (e) classifier=None**: 게이트 비활성 시 현행 동작 100% 유지(source=both, 레거시 키워드) — "출장비 정산 방법 뭐야?" → `inject_rag=True` + hit 주입 로그 확인.
 - [ ] `ruff`/`mypy`(src/intent_gate src/vector_search src/agent src/app)/`pytest`(tests/intent_gate tests/vector_search tests/agent tests/app) PASS, upstream diff 빈 상태.
 - [ ] `reviews/M_16_IntentGate_REVIEW.md` Critic PASS.
+
+---
+
+## CR-15: M_17 AgentInstructions — 에이전트별 지침(프롬프트) 통합 편집 기능
+
+**상태**: PENDING 사용자 승인
+
+### 배경
+
+현재 사용자가 편집 가능한 지침은 **회의록 작성 프롬프트 1개**뿐이다
+(`GET/POST /api/settings/meeting-prompt` → conf.yaml `app.meeting_minutes_prompt` →
+`MeetingMinutesService.set_custom_prompt`). 사용자는 새싹이의 동작을 더 세밀하게 조정하기
+위해 다음 5종 지침을 추가로 편집하고 싶어 한다.
+
+1. **대화 페르소나** — 말투·기본 답변 규칙. 현재 conf.yaml `character_config.persona_prompt`.
+   `construct_system_prompt`가 거기에 `date_block`+`notes_block`(도구 선택 우선순위)을 덧붙임.
+2. **업무노트 작성 지침** — `save_knowledge_note` 본문 구조·형식. 현재 별도 시스템 프롬프트
+   없이 도구 description(`tool_router/schemas.py`)·notes_block에 하드코딩.
+3. **자료질의·업무질의 답변 지침** — `doc_query`/`work_query` 답변 형식·톤. 현재 별도 프롬프트
+   없음(메인 시스템프롬프트 + RAG 컨텍스트로 답함).
+4. **의도 분류 기준(고급)** — `src/intent_gate/prompts.py` SYSTEM_PROMPT. JSON 스키마·6라벨은
+   고정하고 SYSTEM 텍스트만 편집.
+
+### 사용자 확정 설계 결정
+
+1. **키 기반 단일 엔드포인트**: 프롬프트별 개별 엔드포인트 N개 대신 `GET /api/settings/prompts`
+   (전체 조회) + `POST /api/settings/prompts`({key, prompt}). 키 6종:
+   `persona, knowledge_note, doc_query_answer, work_query_answer, intent_classify,
+   meeting_minutes`. 레거시 `/meeting-prompt`는 내부 위임으로 유지(호환).
+2. **conf.yaml 저장 구조**: 신규 `app.agent_prompts: {persona, knowledge_note,
+   doc_query_answer, work_query_answer, intent_classify, meeting_minutes}` (각 빈 문자열=기본값/
+   미주입). 기존 `app.meeting_minutes_prompt`는 deprecated로 유지 + 1회 마이그레이션.
+3. **키별 runtime 적용 경로**: persona→agent 재초기화 / meeting_minutes→`set_custom_prompt` /
+   doc·work·note→의도게이트 per-turn 주입(재초기화 없음, lazy) / intent_classify→
+   IntentClassifier 프롬프트 교체(agent 재초기화).
+4. **의도게이트 통합**: M_16 `RoutingDecision`에 `answer_guide` 필드 + `decide_with_confidence(
+   prompt_overrides=...)` 추가. doc_query/work_query/note_save 의도 턴에 해당 지침을
+   `[작성 지침] ...`로 INPUT prepend(tool_hint 다음, RAG 컨텍스트 앞). 빈 지침=미주입(현행 동작
+   유지, `prompt_overrides=None`이면 M_16 동작 100% 동일).
+5. **persona 안전성**: persona만 교체하고 `notes_block`(도구 선택 규칙)·`date_block`은 코드가
+   항상 덧붙임(라우팅 규칙 보호). 빈 persona 저장 금지(422), reset 버튼 없음.
+6. **intent 안전성**: `INTENT_JSON_SCHEMA`(6 enum)·코드 few-shot은 편집 불가. 저장 전 검증
+   게이트(6라벨 문자열 포함 + JSON/intent/confidence/reason 토큰 + 길이≤8000), 실패 시 422.
+   런타임 폴백: 나쁜 프롬프트로 분류 실패 시 `fallback_error`→`autonomous=True`(레거시 키워드)
+   로 degrade되며 라우팅 붕괴·크래시 없음. 위험 경고 배지 UI 필수.
+7. **UI 통합**: SettingsView.tsx에 "지침 관리(에이전트별)" 접이식(accordion) 섹션 — 6키 각각
+   textarea + 저장 + (persona/intent 제외) 기본값복원 + 커스텀 배지 + intent 위험 배지. 기존
+   회의록 지침 섹션을 본 구조로 통합. SettingsView는 펫·데스크톱 공유 컴포넌트이므로 넓은 화면
+   가독성(maxWidth/반응형) 고려.
+
+### 범위
+
+- **신규 모듈 M_17 AgentInstructions** — 상세 스펙 `specs/M_17_AgentInstructions_SPEC.md`.
+- 신규 패키지 `src/agent_prompts/`(키 상수·기본값·메타·effective_prompt).
+- M_16 `src/intent_gate/routing.py`(RoutingDecision.answer_guide + prompt_overrides),
+  `src/intent_gate/classifier.py`(system_prompt_override).
+- `src/agent/upstream_adapter.py`(prompt_provider 배선 + answer_guide 주입).
+- `src/app/config.py`(AppConfig.agent_prompts), `src/app/service_context.py`(prompt_provider
+  클로저 + intent system_prompt_override 전달), `src/app/settings_routes.py`(GET/POST /prompts).
+- `web/src/components/SettingsView.tsx`, `conf.yaml`(app.agent_prompts), 테스트 신규/확장.
+- **upstream `Open-LLM-VTuber/**` 수정 없음.**
+
+### 영향 파일
+
+- `src/agent_prompts/` (신규: defaults.py, registry.py, __init__.py)
+- `src/app/config.py` (`AppConfig.agent_prompts` 추가, `meeting_minutes_prompt` deprecated)
+- `src/app/settings_routes.py` (`GET/POST /api/settings/prompts`, `/meeting-prompt` 위임 리팩터)
+- `src/app/service_context.py` (`init_agent`에서 prompt_provider 클로저 + intent override 전달)
+- `src/intent_gate/routing.py` (`RoutingDecision.answer_guide`, `decide_with_confidence(prompt_overrides=)`)
+- `src/intent_gate/classifier.py` (`IntentClassifier(system_prompt_override=)`)
+- `src/agent/upstream_adapter.py` (`prompt_provider`, answer_guide INPUT prepend)
+- `web/src/components/SettingsView.tsx` (지침 관리 accordion 섹션)
+- `conf.yaml` (`app.agent_prompts` 섹션)
+- `tests/agent_prompts/` (신규), `tests/app/test_prompts_routes.py` (신규),
+  `tests/intent_gate/test_routing.py`·`tests/agent/test_adapter.py` (확장)
+- `docs/MODULES.md` (M_17 행 추가)
+
+### REQUIREMENTS 연결
+
+신규 사용자 기능 추가이다. REQUIREMENTS.md에 대응 조항이 없으므로 **승인 시 REQUIREMENTS.md에
+"사용자 편집 가능 지침(에이전트별)" 항목을 먼저 추가**한 뒤 본 CR과 M_17 스펙으로 편입한다.
+(CLAUDE.md "REQUIREMENTS.md에 없는 기능 추가 금지" 준수.)
+
+### 리스크 (상세는 SPEC §에러 처리 / RISKS)
+
+- **프롬프트 주입이 토큰·latency·라우팅에 주는 영향**: doc/work/note 답변 지침이 매 해당 의도
+  턴에 추가됨. 2000자 권장 상한 안내(강제 아님). 긴 지침은 응답 지연·컨텍스트 잠식 → UI 안내.
+- **persona/intent 재초기화 중 동시요청**: `ctx.agent_engine = None` 윈도우에서 대화 요청 시
+  처리 불가. 단일 사용자 전제(CR-03 동시성 정책)로 락 없음. 재초기화 실패 시 None 잔존 →
+  운영자 재시작 필요(500 + ERROR 로그).
+- **intent 편집 위험**: 잘못된 편집 시 분류 정확도 하락. 검증 게이트 + 런타임 폴백 +
+  기본값복원으로 완화. 위험 배지로 사용자 경고.
+- **persona 빈값/주입 공격**: 빈 persona 422 차단. 프롬프트 인젝션 문자열은 sanitize하지 않고
+  그대로 전달(현행 계약, CR-03 A-1) — notes_block은 코드가 항상 append되어 도구 규칙 보호.
+
+### DoD (요약 — 전체는 `specs/M_17_AgentInstructions_SPEC.md` §Definition of Done)
+
+- [ ] 사용자 승인 + REQUIREMENTS.md 항목 추가 후 M_17 스펙으로 편입.
+- [ ] `src/agent_prompts/` 구현(6키 상수·메타·effective_prompt) + `tests/agent_prompts/` PASS.
+- [ ] `AppConfig.agent_prompts` 추가, `load_full_config` meeting_minutes_prompt 1회 마이그레이션.
+- [ ] `GET/POST /api/settings/prompts` 구현, 레거시 `/meeting-prompt` 내부 위임.
+- [ ] `RoutingDecision.answer_guide` + `decide_with_confidence(prompt_overrides=)` (None이면 M_16
+      동작 100% 동일 — 회귀 0).
+- [ ] `BasicMemoryAgentAdapter.prompt_provider` 배선, answer_guide INPUT prepend(순서:
+      tool_hint→answer_guide→RAG→원본).
+- [ ] `IntentClassifier.system_prompt_override` + init_agent 커스텀 전달.
+- [ ] intent_classify 검증 게이트(6라벨·JSON토큰·길이) + 422, 런타임 폴백.
+- [ ] persona/intent 저장 시 agent 재초기화, doc/work/note/meeting은 재초기화 없음(테스트 고정).
+- [ ] SettingsView.tsx 지침 관리 accordion(6키, persona/intent reset 제외, intent 위험 배지),
+      회의록 섹션 통합, 데스크톱 가독성. `web/dist` 재빌드 시 `ELECTRON_BUILD=1`(E-22).
+- [ ] E2E: (a) persona 저장→말투 변화+init_agent 재초기화 로그, (b) 빈 지침=현행 회귀 0,
+      (c) intent 깨진 프롬프트 422+런타임 폴백, (d) doc/work/note 지침이 해당 의도 턴에서만
+      INPUT 주입(로그/payload 확인).
+- [ ] `ruff`/`mypy`(src/agent_prompts src/intent_gate src/agent src/app)/`pytest` PASS,
+      upstream diff 빈 상태.
+- [ ] `reviews/M_17_AgentInstructions_REVIEW.md` Critic PASS.
+</content>

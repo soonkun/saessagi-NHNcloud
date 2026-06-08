@@ -158,3 +158,226 @@ async def test_adapter_close_delegates_to_agent_aclose() -> None:
     await adapter.close()
 
     mock_agent.aclose.assert_awaited_once()
+
+
+# ── M_17 확장: prompt_provider + answer_guide 주입 ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_M17_N6_answer_guide_prepended_after_tool_hint() -> None:
+    """M_17 N-6: answer_guide 있을 때 INPUT에 '[작성 지침] ...' prepend (tool_hint 다음, RAG 앞)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from open_llm_vtuber.agent.input_types import TextSource
+
+    mock_agent = MagicMock()
+    mock_agent.aclose = AsyncMock()
+
+    # chat()이 소비될 수 있도록 stream 설정
+    async def empty_stream(input_data: Any) -> Any:
+        from src.agent.events import EndOfTurn
+
+        yield EndOfTurn()
+
+    mock_agent.chat = empty_stream
+
+    # intent_classifier mock — doc_query 반환
+    from intent_gate.types import IntentResult
+
+    mock_classifier = MagicMock()
+    mock_classifier._confidence_threshold = 0.55
+    mock_classifier.classify = AsyncMock(
+        return_value=IntentResult(
+            intent="doc_query",
+            confidence=0.9,
+            reason="테스트",
+            source="llm",
+        )
+    )
+
+    # prompt_provider: doc_query_answer 지침 반환
+    def prompt_provider() -> dict[str, str]:
+        return {"doc_query_answer": "표로 정리"}
+
+    adapter = BasicMemoryAgentAdapter(
+        mock_agent,
+        rag_service=None,
+        intent_classifier=mock_classifier,
+        prompt_provider=prompt_provider,
+    )
+
+    captured_input: list[Any] = []
+
+    async def capture_chat(input_data: Any) -> Any:
+        captured_input.append(input_data)
+        from src.agent.events import EndOfTurn
+
+        yield EndOfTurn()
+
+    mock_agent.chat = capture_chat
+
+    async for _ in adapter.chat(make_text_batch("자료 알려줘")):
+        pass
+
+    assert len(captured_input) == 1
+    texts = captured_input[0].texts or []
+    contents = [t.content for t in texts if t.source == TextSource.INPUT]
+    # "[작성 지침] 표로 정리"가 prepend되어야 함
+    assert any("[작성 지침] 표로 정리" in c for c in contents)
+
+
+@pytest.mark.asyncio
+async def test_M17_E2_no_prompt_provider_no_answer_guide() -> None:
+    """M_17 E-2: prompt_provider=None → M_16 동작과 동일 (answer_guide 없음)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from intent_gate.types import IntentResult
+
+    mock_agent = MagicMock()
+    mock_agent.aclose = AsyncMock()
+
+    mock_classifier = MagicMock()
+    mock_classifier._confidence_threshold = 0.55
+    mock_classifier.classify = AsyncMock(
+        return_value=IntentResult(
+            intent="doc_query",
+            confidence=0.9,
+            reason="테스트",
+            source="llm",
+        )
+    )
+
+    # prompt_provider=None
+    adapter = BasicMemoryAgentAdapter(
+        mock_agent,
+        rag_service=None,
+        intent_classifier=mock_classifier,
+        prompt_provider=None,
+    )
+
+    captured_input: list[Any] = []
+
+    async def capture_chat(input_data: Any) -> Any:
+        captured_input.append(input_data)
+        from src.agent.events import EndOfTurn
+
+        yield EndOfTurn()
+
+    mock_agent.chat = capture_chat
+
+    async for _ in adapter.chat(make_text_batch("자료 알려줘")):
+        pass
+
+    # "[작성 지침]"이 없어야 함
+    if captured_input:
+        texts = captured_input[0].texts or []
+        from open_llm_vtuber.agent.input_types import TextSource
+
+        contents = [t.content for t in texts if t.source == TextSource.INPUT]
+        assert not any("[작성 지침]" in c for c in contents)
+
+
+@pytest.mark.asyncio
+async def test_M17_MAJOR3_answer_guide_order_with_rag_context() -> None:
+    """Critic MAJOR-3: tool_hint·answer_guide·RAG 컨텍스트 모두 존재 시 순서 검증.
+
+    순서 계약: tool_hint → answer_guide → RAG 컨텍스트 → 원본 메시지
+    rag_service mock을 실제로 연결해 RAG-present 경로를 실행한다.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from open_llm_vtuber.agent.input_types import BatchInput, TextData, TextSource
+
+    from intent_gate.types import IntentResult
+
+    # doc_query 의도 — tool_hint + answer_guide + RAG 모두 주입
+    mock_classifier = MagicMock()
+    mock_classifier._confidence_threshold = 0.55
+    mock_classifier.classify = AsyncMock(
+        return_value=IntentResult(
+            intent="doc_query",
+            confidence=0.9,
+            reason="테스트",
+            source="llm",
+        )
+    )
+
+    # RAG 서비스 mock — retrieve 결과 반환
+    mock_hit = MagicMock()
+    mock_hit.doc_id = "doc-001"
+    mock_hit.doc_name = "테스트문서.pdf"
+    mock_hit.page = 1
+    mock_hit.text = "테스트 RAG 본문"
+    mock_hit.score = 0.9
+    mock_hit.category = "docs"
+
+    mock_retrieval = MagicMock()
+    mock_retrieval.found = True
+    mock_retrieval.hits = [mock_hit]
+
+    mock_rag = MagicMock()
+    mock_rag.retrieve = MagicMock(return_value=mock_retrieval)
+    # VectorStore.get_chunks_by_doc_id는 _store 속성으로 접근
+    mock_rag._store = None
+
+    def prompt_provider() -> dict[str, str]:
+        return {"doc_query_answer": "결론부터 말해줘"}
+
+    mock_agent = MagicMock()
+    mock_agent.aclose = AsyncMock()
+
+    captured_input: list[Any] = []
+
+    async def capture_chat(input_data: Any) -> Any:
+        captured_input.append(input_data)
+        from agent.events import EndOfTurn
+
+        yield EndOfTurn()
+
+    mock_agent.chat = capture_chat
+
+    adapter = BasicMemoryAgentAdapter(
+        mock_agent,
+        rag_service=mock_rag,
+        intent_classifier=mock_classifier,
+        prompt_provider=prompt_provider,
+    )
+
+    batch = BatchInput(texts=[TextData(source=TextSource.INPUT, content="방법이 뭐야?")])
+    async for _ in adapter.chat(batch):
+        pass
+
+    assert len(captured_input) == 1
+    texts = captured_input[0].texts or []
+    input_texts = [t for t in texts if t.source == TextSource.INPUT]
+
+    # from_name 속성으로 각 요소를 구분 (content로 구분하면 오탐 가능)
+    # _HINT_DOC_QUERY 자체에 "[관련 문서 검색 결과]" 문자열이 포함되어 있으므로
+    # RAG 컨텍스트는 from_name="문서검색"으로 식별해야 정확하다.
+    from_names = [getattr(t, "from_name", "") for t in input_texts]
+    contents = [t.content for t in input_texts]
+
+    tool_hint_idx = next((i for i, n in enumerate(from_names) if n == "의도게이트"), None)
+    guide_idx = next((i for i, n in enumerate(from_names) if n == "작성지침"), None)
+    rag_idx = next((i for i, n in enumerate(from_names) if n == "문서검색"), None)
+    original_idx = next((i for i, c in enumerate(contents) if "방법이 뭐야?" in c), None)
+
+    # tool_hint가 있어야 함 (doc_query는 _HINT_DOC_QUERY를 가짐)
+    assert tool_hint_idx is not None, f"tool_hint(의도게이트) 없음. from_names={from_names}"
+    # answer_guide가 있어야 함
+    assert guide_idx is not None, f"answer_guide(작성지침) 없음. from_names={from_names}"
+    # RAG 컨텍스트가 있어야 함
+    assert rag_idx is not None, f"RAG 컨텍스트(문서검색) 없음. from_names={from_names}"
+    # 원본 메시지가 있어야 함
+    assert original_idx is not None, f"원본 메시지 없음. contents={contents}"
+
+    # 순서 검증: tool_hint < answer_guide < RAG 컨텍스트 < 원본
+    assert tool_hint_idx < guide_idx, (
+        f"tool_hint({tool_hint_idx})가 answer_guide({guide_idx})보다 뒤에 있음. from_names={from_names}"
+    )
+    assert guide_idx < rag_idx, (
+        f"answer_guide({guide_idx})가 RAG 컨텍스트({rag_idx})보다 뒤에 있음. from_names={from_names}"
+    )
+    assert rag_idx < original_idx, (
+        f"RAG 컨텍스트({rag_idx})가 원본({original_idx})보다 뒤에 있음. from_names={from_names}"
+    )

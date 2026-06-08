@@ -4,7 +4,7 @@
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 logger = logging.getLogger(__name__)
@@ -119,11 +119,14 @@ def _make_adapter_class() -> type:
             agent: "GemmaChatAgent",
             rag_service: Any = None,
             intent_classifier: Any = None,  # IntentClassifier | None (M_16)
+            prompt_provider: Callable[[], Mapping[str, str]] | None = None,  # M_17
         ) -> None:
             super().__init__()
             self._agent = agent
             self._rag_service = rag_service  # vector_search.RagService | None
             self._intent_classifier = intent_classifier  # M_16: IntentClassifier | None
+            # M_17: lazy 지침 조회 클로저. None이면 {} 취급 → M_16 기존 동작과 동일
+            self._prompt_provider = prompt_provider
             self._pending_tasks: set[asyncio.Task[None]] = set()
             # 직전 턴에서 실제 주입한 RAG 문서의 권위 마커 (chat에서 display_text에 부착)
             self._last_cited_markers: list[str] = []
@@ -191,6 +194,30 @@ def _make_adapter_class() -> type:
             # 이번 턴 인용 마커 초기화 (RAG 미주입 시 빈 채로 유지)
             self._last_cited_markers = []
             if self._rag_service is None:
+                # RAG 서비스 없어도 tool_hint·answer_guide는 주입해야 한다 (M_17)
+                prepend_no_svc: list[Any] = []
+                if self._last_routing is not None and self._last_routing.tool_hint:
+                    prepend_no_svc.append(
+                        TextData(
+                            source=TextSource.INPUT,
+                            content="[지시] " + self._last_routing.tool_hint,
+                            from_name="의도게이트",
+                        )
+                    )
+                if self._last_routing is not None and self._last_routing.answer_guide:
+                    prepend_no_svc.append(
+                        TextData(
+                            source=TextSource.INPUT,
+                            content="[작성 지침] " + self._last_routing.answer_guide,
+                            from_name="작성지침",
+                        )
+                    )
+                if prepend_no_svc:
+                    return BatchInput(
+                        texts=prepend_no_svc + list(input_data.texts or []),
+                        images=input_data.images,
+                        metadata=input_data.metadata,
+                    )
                 return input_data
 
             # 사용자 메시지 텍스트 추출
@@ -222,14 +249,25 @@ def _make_adapter_class() -> type:
 
             if not should_search and not attached_chunks:
                 logger.debug("RAG 스킵: 트리거 키워드·첨부 없음 (query=%r)", user_text[:50])
-                # ── M_16 변경 5 (RAG 미주입 시): tool_hint만 삽입 ────────────
+                # ── M_16 변경 5 (RAG 미주입 시): tool_hint 삽입 ────────────
+                # ── M_17 (RAG 미주입 시): answer_guide 삽입 ──────────────────
+                prepend_no_rag: list[Any] = []
                 if self._last_routing is not None and self._last_routing.tool_hint:
                     hint_td = TextData(
                         source=TextSource.INPUT,
                         content="[지시] " + self._last_routing.tool_hint,
                         from_name="의도게이트",
                     )
-                    new_texts = [hint_td] + list(input_data.texts or [])
+                    prepend_no_rag.append(hint_td)
+                if self._last_routing is not None and self._last_routing.answer_guide:
+                    guide_td = TextData(
+                        source=TextSource.INPUT,
+                        content="[작성 지침] " + self._last_routing.answer_guide,
+                        from_name="작성지침",
+                    )
+                    prepend_no_rag.append(guide_td)
+                if prepend_no_rag:
+                    new_texts = prepend_no_rag + list(input_data.texts or [])
                     return BatchInput(
                         texts=new_texts,
                         images=input_data.images,
@@ -305,6 +343,8 @@ def _make_adapter_class() -> type:
                 )
 
                 # ── M_16 변경 5: tool_hint를 RAG 컨텍스트보다 앞에 삽입 ───────
+                # ── M_17: answer_guide를 tool_hint 다음, RAG 컨텍스트 앞에 삽입 ─
+                # 순서 고정: [tool_hint?] [answer_guide?] [RAG 컨텍스트] [원본 사용자 메시지...]
                 prepend_texts: list[Any] = []
                 if self._last_routing is not None and self._last_routing.tool_hint:
                     hint_td = TextData(
@@ -313,6 +353,15 @@ def _make_adapter_class() -> type:
                         from_name="의도게이트",
                     )
                     prepend_texts.append(hint_td)
+
+                # M_17: answer_guide prepend (tool_hint 다음, RAG 컨텍스트 앞)
+                if self._last_routing is not None and self._last_routing.answer_guide:
+                    guide_td = TextData(
+                        source=TextSource.INPUT,
+                        content="[작성 지침] " + self._last_routing.answer_guide,
+                        from_name="작성지침",
+                    )
+                    prepend_texts.append(guide_td)
 
                 # 컨텍스트를 사용자 메시지 앞에 TextSource.INPUT으로 삽입
                 context_td = TextData(
@@ -332,9 +381,7 @@ def _make_adapter_class() -> type:
                 logger.warning("Proactive RAG 실패 (무시): %s", exc)
                 return input_data
 
-        async def chat(  # type: ignore[override]
-            self, input_data: BatchInput
-        ) -> AsyncIterator[Any]:
+        async def chat(self, input_data: BatchInput) -> AsyncIterator[Any]:
             """GemmaChatAgent.chat를 소비해 upstream SentenceOutput 스트림으로 변환.
 
             - M_16 IntentGate: 진입 직후 의도 분류 1회 (캐시, 턴 단위)
@@ -362,10 +409,18 @@ def _make_adapter_class() -> type:
                     # confidence_threshold는 classifier에서 접근
                     _threshold = getattr(self._intent_classifier, "_confidence_threshold", 0.55)
                     _legacy = self._should_trigger_rag(user_text_for_classify)
+                    # M_17: prompt_provider lazy 조회 (None이면 {} = 미주입)
+                    _overrides: Mapping[str, str] | None = None
+                    if self._prompt_provider is not None:
+                        try:
+                            _overrides = self._prompt_provider()
+                        except Exception as _prov_exc:
+                            logger.warning("prompt_provider 조회 실패 (무시): %s", _prov_exc)
                     _decision = decide_with_confidence(
                         _result,
                         confidence_threshold=_threshold,
                         legacy_rag_triggered=_legacy,
+                        prompt_overrides=_overrides,
                     )
                     self._last_routing = _decision
                     logger.info(

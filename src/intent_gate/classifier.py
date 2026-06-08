@@ -33,17 +33,22 @@ class IntentClassifier:
         confidence_threshold: float = 0.55,
         timeout_seconds: float = 8.0,
         max_input_chars: int = 4000,
+        system_prompt_override: str | None = None,
     ) -> None:
         self._complete_json = complete_json
         self._model_label = model_label
         self._confidence_threshold = confidence_threshold
         self._timeout_seconds = timeout_seconds
         self._max_input_chars = max_input_chars
+        # M_17: 커스텀 SYSTEM_PROMPT (None이면 기본 SYSTEM_PROMPT 사용)
+        # INTENT_JSON_SCHEMA·few-shot은 변경 불가 — 코드가 항상 강제 결합
+        self._system_prompt_override = system_prompt_override
         logger.info(
-            "IntentClassifier 초기화: model=%s, threshold=%.2f, timeout=%.1fs",
+            "IntentClassifier 초기화: model=%s, threshold=%.2f, timeout=%.1fs, custom_prompt=%s",
             model_label,
             confidence_threshold,
             timeout_seconds,
+            "yes" if system_prompt_override else "no",
         )
 
     async def classify(
@@ -75,10 +80,16 @@ class IntentClassifier:
 
         user_prompt = f"{truncated}{attachment_hint}"
 
+        # M_17: system_prompt_override가 있으면 그것을 사용, 없으면 기본값
+        # INTENT_JSON_SCHEMA(6 enum)는 항상 코드가 강제로 전달 (편집 불가)
+        active_system_prompt = (
+            self._system_prompt_override if self._system_prompt_override else SYSTEM_PROMPT
+        )
+
         try:
             async with asyncio.timeout(self._timeout_seconds + 1.0):
                 raw: dict[str, Any] = await self._complete_json(
-                    SYSTEM_PROMPT,
+                    active_system_prompt,
                     user_prompt,
                     INTENT_JSON_SCHEMA,
                     max_tokens=64,

@@ -340,6 +340,15 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             try:
                 from intent_gate import IntentClassifier
 
+                # M_17: intent_classify 커스텀 프롬프트 조회 (빈값이면 None — 기본값 사용)
+                _intent_prompt_override: str | None = None
+                try:
+                    _ic_custom = self.app_config.agent_prompts.intent_classify
+                    if _ic_custom and _ic_custom.strip():
+                        _intent_prompt_override = _ic_custom
+                except Exception as _ic_exc:
+                    logger.debug("intent_classify override 조회 실패 (무시): %s", _ic_exc)
+
                 if intent_cfg.provider == IntentGateProviderKind.SAME_AS_CHAT:
                     # 메인 대화 에이전트의 complete_json을 재사용
                     self.intent_classifier = IntentClassifier(
@@ -347,11 +356,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                         model_label=self.app_config.ollama.model,
                         confidence_threshold=intent_cfg.confidence_threshold,
                         timeout_seconds=intent_cfg.timeout_seconds,
+                        system_prompt_override=_intent_prompt_override,  # M_17
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=same_as_chat, model=%s)",
+                        "(provider=same_as_chat, model=%s, custom_prompt=%s)",
                         self.app_config.ollama.model,
+                        "yes" if _intent_prompt_override else "no",
                     )
                 elif intent_cfg.provider == IntentGateProviderKind.OLLAMA:
                     from agent.builder import build_chat_agent
@@ -374,11 +385,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                         model_label=intent_cfg.ollama_model,
                         confidence_threshold=intent_cfg.confidence_threshold,
                         timeout_seconds=intent_cfg.timeout_seconds,
+                        system_prompt_override=_intent_prompt_override,  # M_17
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=ollama, model=%s)",
+                        "(provider=ollama, model=%s, custom_prompt=%s)",
                         intent_cfg.ollama_model,
+                        "yes" if _intent_prompt_override else "no",
                     )
                 elif intent_cfg.provider == IntentGateProviderKind.OPENAI:
                     from agent.builder import build_chat_agent
@@ -407,11 +420,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                         model_label=intent_cfg.openai_model,
                         confidence_threshold=intent_cfg.confidence_threshold,
                         timeout_seconds=intent_cfg.timeout_seconds,
+                        system_prompt_override=_intent_prompt_override,  # M_17
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=openai, model=%s)",
+                        "(provider=openai, model=%s, custom_prompt=%s)",
                         intent_cfg.openai_model,
+                        "yes" if _intent_prompt_override else "no",
                     )
                 else:
                     self.intent_classifier = None
@@ -425,11 +440,20 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 )
                 self.intent_classifier = None
 
-        # (7b) 어댑터 래핑
+        # (7b) M_17: prompt_provider 클로저 배선 (lazy — 매 턴 최신 커스텀 지침 조회)
+        # app_config 참조를 클로저로 캡처해, 저장 직후 다음 턴에 즉시 반영됨.
+        # 중요: raw 커스텀 값만 반환 (빈 문자열이면 라우팅에서 None 정규화 → 미주입).
+        # effective_prompt(기본값 폴백 포함)는 사용하지 않는다 — M_16 회귀 0 계약.
+        _app_cfg_ref = self.app_config  # 클로저 캡처용 로컬 변수
+
+        _prompt_provider = _make_prompt_provider(_app_cfg_ref)
+
+        # (7c) 어댑터 래핑
         self.agent_engine = BasicMemoryAgentAdapter(
             gemma_agent,
             rag_service=self.rag_service,
             intent_classifier=self.intent_classifier,  # M_16
+            prompt_provider=_prompt_provider,  # M_17
         )
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 
@@ -699,6 +723,42 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             await super().close()
         except Exception as exc:
             logger.error(f"super().close() 실패: {exc}")
+
+
+def _make_prompt_provider(
+    app_config: "AppConfig | None",
+) -> "Callable[[], dict[str, str]]":
+    """M_17: prompt_provider 클로저 팩토리.
+
+    매 턴 최신 커스텀 지침을 lazy 조회해 dict로 반환한다.
+    **raw 커스텀 값만** 반환 — 빈 문자열이면 라우팅에서 None으로 정규화되어 미주입.
+    effective_prompt(기본값 폴백 포함)를 사용하면 기본 상수가 항상 주입되어
+    doc_query/work_query/note_save 모든 턴에 [작성 지침]이 강제 주입되므로 사용 금지.
+
+    테스트: tests/app/test_service_context_prompt_provider.py
+    """
+
+    def _prompt_provider() -> dict[str, str]:
+        try:
+            if app_config is None:
+                return {}
+            ap = getattr(app_config, "agent_prompts", None)
+            if ap is None:
+                return {}
+            # strip 후 비어있으면 ""(= 라우팅에서 None 정규화 → 미주입)
+            doc = (getattr(ap, "doc_query_answer", "") or "").strip()
+            work = (getattr(ap, "work_query_answer", "") or "").strip()
+            note = (getattr(ap, "knowledge_note", "") or "").strip()
+            return {
+                "doc_query_answer": doc,
+                "work_query_answer": work,
+                "knowledge_note": note,
+            }
+        except Exception as _exc:
+            logger.debug("prompt_provider 조회 실패 (무시): %s", _exc)
+            return {}
+
+    return _prompt_provider
 
 
 async def _call_stop(service: Any, name: str) -> None:

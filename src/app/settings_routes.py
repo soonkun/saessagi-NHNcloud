@@ -317,35 +317,16 @@ class SetMeetingPromptRequest(BaseModel):
 async def set_meeting_prompt(body: SetMeetingPromptRequest, request: Request) -> dict[str, Any]:
     """회의록 생성 시스템 프롬프트를 저장하고 즉시 적용한다.
 
+    [M_17] 내부적으로 POST /prompts (key=meeting_minutes)에 위임.
+    레거시 엔드포인트 하위 호환 유지.
     빈 문자열 전달 시 기본값(SYSTEM_PROMPT)으로 초기화.
     """
-    prompt = body.prompt.strip()
-
-    conf = _conf_path()
-    try:
-        raw = yaml.safe_load(conf.read_text()) or {}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
-
-    app_section = raw.setdefault("app", {})
-    app_section["meeting_minutes_prompt"] = prompt
-
-    try:
-        conf.write_text(
-            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
-        )
-        logger.info(f"회의록 프롬프트 저장 완료 (길이={len(prompt)}, 커스텀={bool(prompt)})")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
-
     ctx = getattr(request.app.state, "service_context", None)
     app_cfg = ctx.app_config if ctx else None
-    if app_cfg:
-        app_cfg.meeting_minutes_prompt = prompt
-    if ctx and ctx.meeting_minutes_service:
-        ctx.meeting_minutes_service.set_custom_prompt(prompt)
-
-    return {"status": "ok", "is_custom": bool(prompt)}
+    conf = _conf_path()
+    result = await _save_prompt("meeting_minutes", body.prompt.strip(), conf, ctx, app_cfg)
+    # 레거시 응답 형식 유지
+    return {"status": result["status"], "is_custom": bool(body.prompt.strip())}
 
 
 # ── GET /api/settings/intent-gate ────────────────────────────────────────────
@@ -470,6 +451,243 @@ async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[
     except Exception as exc:
         logger.error(f"intent_gate agent 재초기화 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+
+# ── GET /api/settings/prompts ────────────────────────────────────────────────
+
+
+@router.get("/prompts")
+async def get_prompts(request: Request) -> dict[str, Any]:
+    """에이전트별 지침 전체 조회 (M_17).
+
+    6개 키 전부를 한 번에 반환한다. ctx/app_config 부재 시에도 default 상수만으로 200 반환.
+    """
+    from agent_prompts import PROMPT_KEYS
+    from agent_prompts.registry import effective_prompt, get_default, get_label, get_risk
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    char_cfg = ctx.character_config if ctx else None
+
+    prompts: dict[str, Any] = {}
+    for key in PROMPT_KEYS:
+        current_prompt = effective_prompt(key, app_cfg, char_cfg)
+        default_val = get_default(key)
+
+        # is_custom 판정 (persona는 null)
+        if key == "persona":
+            is_custom = None
+        else:
+            # 커스텀 필드가 있으면 true
+            custom_raw = ""
+            if app_cfg is not None:
+                try:
+                    agent_prompts_obj = getattr(app_cfg, "agent_prompts", None)
+                    if agent_prompts_obj is not None:
+                        custom_raw = getattr(agent_prompts_obj, key, "") or ""
+                except Exception:
+                    pass
+            is_custom = bool(custom_raw.strip())
+
+        prompts[key] = {
+            "prompt": current_prompt,
+            "is_custom": is_custom,
+            "default": default_val,
+            "risk": get_risk(key),
+            "label": get_label(key),
+        }
+
+    return {"prompts": prompts}
+
+
+# ── POST /api/settings/prompts ───────────────────────────────────────────────
+
+# M_17: intent_classify 검증에 필요한 상수
+_INTENT_REQUIRED_LABELS = (
+    "calendar_add",
+    "calendar_query",
+    "doc_query",
+    "note_save",
+    "work_query",
+    "chat",
+)
+_INTENT_REQUIRED_TOKENS = ("JSON", "intent", "confidence", "reason")
+_INTENT_MAX_LENGTH = 8000
+
+
+def _validate_intent_classify_prompt(prompt: str) -> None:
+    """intent_classify 프롬프트 검증.
+
+    실패 시 HTTPException(422) raise.
+    검증 항목:
+    1. 6개 라벨 문자열 모두 포함
+    2. JSON/intent/confidence/reason 토큰 포함
+    3. 길이 <= 8000
+
+    Raises:
+        HTTPException: 422 with detail 메시지
+    """
+    if len(prompt) > _INTENT_MAX_LENGTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"의도 분류 프롬프트 검증 실패: 길이 {len(prompt)} > {_INTENT_MAX_LENGTH}자 초과",
+        )
+
+    missing_labels = [lbl for lbl in _INTENT_REQUIRED_LABELS if lbl not in prompt]
+    if missing_labels:
+        raise HTTPException(
+            status_code=422,
+            detail=f"의도 분류 프롬프트 검증 실패: 누락된 라벨 {missing_labels}",
+        )
+
+    missing_tokens = [tok for tok in _INTENT_REQUIRED_TOKENS if tok not in prompt]
+    if missing_tokens:
+        raise HTTPException(
+            status_code=422,
+            detail=f"의도 분류 프롬프트 검증 실패: 필수 토큰 누락 {missing_tokens} (JSON 출력 지시 필요)",
+        )
+
+
+class SetPromptRequest(BaseModel):
+    key: str
+    prompt: str  # persona 외에는 빈 문자열 허용(= 기본값/미주입)
+
+
+async def _save_prompt(
+    key: str,
+    prompt: str,
+    conf: Path,
+    ctx: Any,
+    app_cfg: Any,
+) -> dict[str, Any]:
+    """지침 저장 공통 로직.
+
+    1. conf.yaml `app.agent_prompts[key]` 기록
+    2. in-memory app_config 갱신
+    3. 키별 runtime 적용
+    Returns dict with status/key/is_custom/applied fields.
+    """
+    from agent_prompts import PROMPT_KEYS
+
+    # 키 검증
+    if key not in PROMPT_KEYS:
+        raise HTTPException(status_code=422, detail=f"알 수 없는 지침 키: {key!r}")
+
+    # persona 빈값 금지
+    if key == "persona" and not prompt.strip():
+        raise HTTPException(status_code=422, detail="페르소나는 비울 수 없습니다.")
+
+    # intent_classify 검증 게이트
+    if key == "intent_classify" and prompt.strip():
+        _validate_intent_classify_prompt(prompt)
+
+    # conf.yaml 읽기
+    try:
+        raw = yaml.safe_load(conf.read_text()) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    # conf.yaml 갱신
+    app_section = raw.setdefault("app", {})
+    agent_prompts_section = app_section.setdefault("agent_prompts", {})
+    agent_prompts_section[key] = prompt
+
+    # persona는 character_config.persona_prompt도 동시 갱신
+    if key == "persona":
+        raw.setdefault("character_config", {})["persona_prompt"] = prompt
+
+    # deprecated meeting_minutes_prompt 동기화 (meeting_minutes 키)
+    if key == "meeting_minutes":
+        app_section["meeting_minutes_prompt"] = prompt
+
+    try:
+        conf.write_text(
+            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        )
+        logger.info("M_17: agent_prompts.%s 저장 완료 (길이=%d)", key, len(prompt))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    # in-memory 갱신
+    if app_cfg is not None:
+        try:
+            agent_prompts_obj = getattr(app_cfg, "agent_prompts", None)
+            if agent_prompts_obj is not None:
+                setattr(agent_prompts_obj, key, prompt)
+        except Exception as exc:
+            logger.warning("in-memory agent_prompts 갱신 실패: %s", exc)
+        if key == "meeting_minutes":
+            app_cfg.meeting_minutes_prompt = prompt
+
+    # persona: character_config.persona_prompt 갱신
+    if key == "persona" and ctx is not None:
+        try:
+            ctx.character_config.persona_prompt = prompt
+        except Exception as exc:
+            logger.warning("character_config.persona_prompt 갱신 실패: %s", exc)
+
+    # ctx 부재 시 conf_only
+    if ctx is None:
+        return {
+            "status": "conf_only",
+            "key": key,
+            "is_custom": None,
+            "applied": _apply_path_for(key),
+        }
+
+    # 키별 runtime 적용
+    from agent_prompts.registry import get_meta
+
+    apply_path = get_meta(key).apply_path
+
+    if key == "meeting_minutes":
+        if ctx.meeting_minutes_service is not None:
+            ctx.meeting_minutes_service.set_custom_prompt(prompt)
+        is_custom = bool(prompt.strip())
+        return {"status": "ok", "key": key, "is_custom": is_custom, "applied": apply_path}
+
+    if key in ("knowledge_note", "doc_query_answer", "work_query_answer"):
+        # gate_injection: agent 재초기화 없음. prompt_provider lazy 조회
+        is_custom = bool(prompt.strip())
+        return {"status": "ok", "key": key, "is_custom": is_custom, "applied": apply_path}
+
+    if key in ("persona", "intent_classify"):
+        # agent 재초기화 필요
+        ctx.agent_engine = None
+        try:
+            char_cfg = ctx.character_config
+            await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
+            logger.info("M_17: %s 저장 후 agent 재초기화 완료", key)
+        except Exception as exc:
+            logger.error("M_17: %s agent 재초기화 실패: %s", key, exc)
+            raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+        is_custom_val: bool | None = None if key == "persona" else True
+        return {"status": "ok", "key": key, "is_custom": is_custom_val, "applied": apply_path}
+
+    return {"status": "ok", "key": key, "is_custom": bool(prompt.strip()), "applied": apply_path}
+
+
+def _apply_path_for(key: str) -> str:
+    """키 → apply_path 문자열 반환 (ctx 없을 때 응답용)."""
+    _map = {
+        "persona": "agent_reinit",
+        "knowledge_note": "gate_injection",
+        "doc_query_answer": "gate_injection",
+        "work_query_answer": "gate_injection",
+        "intent_classify": "classifier_reload",
+        "meeting_minutes": "set_custom_prompt",
+    }
+    return _map.get(key, "unknown")
+
+
+@router.post("/prompts")
+async def set_prompt(body: SetPromptRequest, request: Request) -> dict[str, Any]:
+    """에이전트별 지침 1개를 저장하고 즉시 적용한다 (M_17)."""
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    conf = _conf_path()
+    return await _save_prompt(body.key, body.prompt, conf, ctx, app_cfg)
 
 
 def _set_upstream_llm_provider(raw: dict[str, Any], provider: str) -> None:

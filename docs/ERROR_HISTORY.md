@@ -39,6 +39,24 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-29: M_17 _prompt_provider 클로저 — effective_prompt 사용으로 기본 상수 강제 주입 (2026-06-08)
+
+**증상**: 사용자가 아무 지침도 편집하지 않은 기본 상태(신규 설치)에서도 doc_query/work_query/note_save 모든 턴의 INPUT에 `[작성 지침] DOC_QUERY_ANSWER_GUIDE...` 가 강제 주입됨. M_16의 "지침 미설정 시 미주입" 계약 위반.
+
+**원인**: `service_context.py`의 `_prompt_provider` 클로저가 `effective_prompt()`를 호출했는데, `effective_prompt()`는 커스텀이 비어있으면 기본 상수(`DOC_QUERY_ANSWER_GUIDE` 등)를 폴백으로 반환한다. 따라서 커스텀 0건 상태에서도 기본 상수가 반환되어 라우팅에서 None 정규화가 안 되고 미주입이 되지 않았다.
+
+**수정**:
+1. `_make_prompt_provider(app_config)` 헬퍼 함수를 모듈 레벨로 분리 (테스트 가능하게).
+2. 클로저 내에서 `effective_prompt` 대신 raw 커스텀 값(`app_config.agent_prompts.<key>`)만 참조.
+3. `strip()` 후 비어있으면 `""` 반환 → 라우팅에서 `None`으로 정규화 → 미주입.
+4. `effective_prompt`는 GET `/api/settings/prompts`(표시·기본값 노출)용으로만 유지.
+
+**추가 테스트**: `tests/app/test_service_context_prompt_provider.py` — 커스텀 0건 → 빈 문자열 반환, 기본 상수 미반환, 어댑터 연결 시 미주입 7개 케이스.
+
+**교훈**: "GET용 표시 함수"와 "주입 경로용 값 조회"는 책임이 다르다. `effective_prompt()`는 기본값 폴백을 포함하므로 주입 경로에서 사용하면 "미설정 시 미주입" 계약을 위반한다. 주입 경로 클로저는 반드시 raw 커스텀 값만 참조해야 한다.
+
+---
+
 ## E-01: dragLock이 바탕화면을 완전히 차단하는 문제
 
 **날짜**: 2026-04-25  
