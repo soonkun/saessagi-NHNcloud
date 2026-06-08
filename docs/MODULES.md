@@ -455,6 +455,8 @@ Phase 1 산출물. 구현은 Phase 2에서 이 계약대로만 이루어진다.
 | M_11 | ProactiveDispatcher | NEW | ✅ DONE | M_09, M_10 |
 | M_12 | Frontend | FORK+NEW | ✅ DONE | M_01 메시지 스키마, CR-10/CR-11 |
 | M_13 | MeetingMinutes | NEW | ✅ DONE | M_05 (GemmaChatAgent.complete_json), CR-MM-A |
+| M_15 | KnowledgeService | NEW | ✅ DONE | M_07 VectorSearch |
+| M_16 | IntentGate | NEW | ✅ DONE (E2E 검증: calendar_add/doc_query/work_query 실데이터 확인) | M_05 GemmaChatAgent.complete_json, M_07 VectorSearch (소스 필터 보강) |
 
 ---
 

@@ -1019,3 +1019,83 @@ async def complete_json(
 - [ ] `reviews/M_13_MeetingMinutes_REVIEW.md`에 Critic PASS 기록
 - [ ] `docs/MODULES.md` M_13 상태 `✅ DONE`
 - [ ] 실제 녹취록 샘플로 HWPX 생성 확인 (수동 검증)
+
+---
+
+## CR-14: M_16 IntentGate — LLM 기반 의도 분류 게이트로 도구 라우팅 정확도 개선
+
+**상태**: PENDING 사용자 승인
+
+### 배경 (재현된 결함)
+
+사용자가 "이번주 수요일 13시 30분에 1시간 동안 팀 업무회의가 있어"라고 입력했을 때, 일정 등록(`add_event`)이 호출되지 않고 엉뚱하게 RAG 문서검색이 실행됐다.
+
+근본 원인 2가지:
+
+1. **RAG 트리거 정규식 오발동** — `src/agent/upstream_adapter.py:31` `_RAG_TRIGGER_RE`에 평서문 종결어미 `있어|있나|있니|있어요|있나요`(물음표 없는 변종)가 포함돼 있다. "회의가 **있어**"가 이 패턴에 매치되어 Proactive RAG가 발동, RAG 컨텍스트가 사용자 메시지 **앞**에 prepend(`upstream_adapter.py:277` `[context_td] + texts`)되면서 LLM이 `search_docs` 쪽으로 끌려갔다.
+2. **의도 판단 계층 부재** — 어떤 도구(`add_event`/`get_events`/`search_docs`/`save_knowledge_note`/`take_screenshot`)를 쓸지 100% LLM 자율 선택에 위임. 로컬 gemma4:e4b 같은 약한 모델은 도구 선택이 불안정하다.
+
+도구 핸들러 자체(`src/tool_router/router.py:_handle_add_event`)는 정상 구현돼 있다. 호출이 트리거되지 않았을 뿐이다.
+
+### 사용자 확정 설계 결정
+
+1. **LLM 기반 의도 분류 게이트**를 대화 본 호출 앞단에 둔다(입력 1건당 1회 분류 → 결정론적 라우팅). 트리거 정규식 땜질만 하는 임시조치는 채택하지 않는다(게이트가 RAG 발동 여부를 의도로 결정). 단, 게이트 폴백/비활성 환경의 2차 방어선으로 평서문 종결어미는 정규식에서 제거한다.
+2. **분류 모델을 SettingsView에서 선택 가능**하게 한다(메인 대화 모델과 별개 지정 가능: 로컬 Ollama 또는 OpenAI). **기본값은 `same_as_chat`**(메인 모델 재사용 → 추가 모델 로드 0, 오프라인·메모리 친화).
+3. **검색 소스 분리 = 단일 벡터 스토어 + category 소스 필터**(별도 RAG 시스템·별도 벡터 스토어 아님). `doc_query`는 **공용 문서만(노트 제외)**, `work_query`는 **개인 노트만(`__knowledge__`)** 검색한다. 코드 근거: 노트는 `category="__knowledge__"`로 저장됨(`src/knowledge/service.py:19`, `:308`). `store.search(category=...)`/`RagService.retrieve(query, top_k, category)`가 이미 category 필터를 관통함(`src/vector_search/store.py:249`, `src/vector_search/rag.py:86`).
+4. **현재 필터는 정확일치(`category = 'X'`)만 지원**하므로 "노트 제외 전부(문서만)"를 표현하지 못한다. 따라서 작은 보강 필요:
+   - `RagService.retrieve`와 `VectorStore.search`에 소스 필터 추가: `source: Literal["docs","notes","both"] = "both"`.
+   - `notes` → `where category = '__knowledge__'`
+   - `docs` → `where (category IS NULL OR category != '__knowledge__')`
+   - `both` → 필터 없음(현행 하이브리드)
+   - 기존 `category=` 정확일치 파라미터는 **유지**(호환). 새 소스 필터는 그 위에 **직교적으로(AND)** 동작. SQL 인젝션 방어는 기존 `_escape_category` 패턴(`src/vector_search/store.py:19`) 준수.
+   - `is_note`는 저장 필드가 아니라 `hit.category == "__knowledge__"`로 계산되는 파생값이며(`src/tool_router/router.py:307`, `src/agent/upstream_adapter.py:230`) 보강 후에도 그대로 유지.
+5. **하드 필터 + 저신뢰 소스 폴백**: `doc_query → docs`, `work_query → notes` 엄격 필터. 단 `doc_query`/`work_query` 사이에서 confidence가 임계값 미만이면 RAG는 켜둔 채 `source="both"`로 폴백(현행 하이브리드)해 false negative를 방지한다. 이 폴백 규칙은 `decide()` 라우팅 함수에 명시한다. (RAG 자체를 끄는 자율 폴백과 구분 — 비-RAG 라벨 저신뢰만 자율 폴백.)
+6. `calendar_query` 포함(위 표대로). RAG off, `get_events` 유도.
+7. **`meeting_minutes`는 본 모듈 범위 밖**으로 확정. 회의록은 전용 탭 + 편집 가능 지침을 가진 완전 분리 시스템으로 이미 동작하며, 의도 분류 대상이 아니다. 본 모듈은 회의록 시스템을 전혀 건드리지 않는다(라벨 미포함, 라우팅·힌트·도구·UI·프롬프트 일절 미변경).
+
+### 범위
+
+- **신규 모듈 M_16 IntentGate** — 상세 스펙 `specs/M_16_IntentGate_SPEC.md`.
+- 의도 라벨 **6종**: `calendar_add`(RAG off, add_event), `calendar_query`(off, get_events), `doc_query`(**RAG on, 검색 소스=docs(노트 제외)**, search_docs), `note_save`(off, save_knowledge_note), `work_query`(**RAG on, 검색 소스=notes(노트만)**, search_docs), `chat`(off, 도구 강제 없음). **`meeting_minutes` 라벨 없음**(범위 밖).
+- 라우팅은 시스템 힌트 1줄 주입 + RAG on/off + **RAG 검색 소스(docs/notes/both)** 결정. **도구 화이트리스트 제한은 하지 않는다**(오분류 시 회복 가능성 보존).
+- 분류 실패/저신뢰 시 graceful degrade: 비-RAG 라벨은 레거시 키워드 휴리스틱 + LLM 자율(source=both), `doc_query`/`work_query` 저신뢰는 RAG 유지 + source=both 소스 폴백.
+
+### 영향 파일
+
+- `src/intent_gate/` (신규: types/prompts/classifier/routing)
+- `src/vector_search/store.py` (보강: `VectorStore.search`에 `source` 파라미터 + where 절 규칙)
+- `src/vector_search/rag.py` (보강: `RagService.retrieve`에 `source` 파라미터 → store.search 전달)
+- `src/agent/upstream_adapter.py` (통합: chat()에 분류 1회 + _augment_with_rag가 decision 따름 + retrieve에 `source=rag_source` 전달 + tool_hint 주입 + 평서문 종결어미 정규식 제거)
+- `src/app/config.py` (`IntentGateConfig` + `AppConfig.intent_gate`)
+- `src/app/service_context.py` (classifier 조립 + close 정리)
+- `src/app/settings_routes.py` (`GET/POST /api/settings/intent-gate`)
+- `web/src/components/SettingsView.tsx` (의도 분류기 섹션 UI)
+- `conf.yaml` (`app.intent_gate` 섹션)
+- `tests/intent_gate/` (신규), `tests/vector_search/` (소스 필터 보강), `tests/agent/test_upstream_adapter.py` (회귀)
+- `docs/MODULES.md` (M_16 행 추가)
+- **upstream `Open-LLM-VTuber/**` 수정 없음**
+
+### REQUIREMENTS 연결
+
+기존 요구사항 정확도 개선(§4.1 일정 등록, §2.2 질의응답)이며 **신규 사용자 기능 추가 아님**. 공용 문서/개인 노트 검색 범위 분리는 §2.2 질의응답의 정확도 개선이다. 분류기 모델 설정 UI는 기존 LLM 공급자 설정(§8 모델)의 연장. REQUIREMENTS.md 본문 수정 불요 — 승인 시 본 CR과 M_16 스펙으로 편입.
+
+### 리스크 (상세는 SPEC §에러 처리)
+
+- 분류 오류로 정상 RAG가 막히거나(false negative), 일정이 RAG로 새는 경우(false positive). → 저신뢰 폴백 + 도구 미제한으로 완화. confidence_threshold 튜닝 필요.
+- `doc_query`/`work_query` 오분류로 맞는 문서/노트가 소스 필터에 의해 제외(false negative). → 두 라벨 저신뢰 시 `source="both"` 소스 폴백으로 완화.
+- LanceDB where 절의 `IS NULL`/`!=` 미지원 가능성. → 보강 시 단위 테스트로 사전 확인, 예외는 빈 결과로 graceful.
+- 분류 1회 추가 latency(REQUIREMENTS §9 응답 지연 예산 잠식). → `same_as_chat` + `max_tokens=64`/`temperature=0.0`/짧은 출력으로 ≤1.5초(GPU) 목표.
+- 모델별 JSON 출력 포맷 차이(약한 모델의 깨진 JSON). → `response_format=json_object` + 파싱 정규화 + fallback.
+
+### DoD (요약 — 전체는 `specs/M_16_IntentGate_SPEC.md` §Definition of Done)
+
+- [ ] 사용자 승인 후 M_16 스펙으로 편입.
+- [ ] `src/intent_gate/` 구현(라벨 6종, `meeting_minutes` 없음) + `tests/intent_gate/` 정상 ≥6, 엣지 ≥7, 적대적 ≥4 PASS.
+- [ ] **vector_search 보강**: `VectorStore.search`/`RagService.retrieve`에 `source` 파라미터(docs/notes/both) 추가, where 절 규칙 구현, 기존 `category=`와 AND 직교, `_escape_category` 방어 준수. 기본값 both로 기존 호출자 회귀 0. `tests/vector_search/` 소스 필터 테스트 PASS.
+- [ ] **E2E (a) calendar_add**: "...팀 업무회의가 있어" → 로그 `intent=calendar_add inject_rag=False`, RAG 주입 로그 없음, `tool_call_start name==add_event`, 캘린더 DB에 실제 1건 추가(데이터 확인).
+- [ ] **E2E (b) doc_query**: "연차 규정 뭐야?" → 로그 `intent=doc_query inject_rag=True rag_source=docs`, 주입 hit category가 전부 노트 아님(NULL 또는 != "__knowledge__") 확인.
+- [ ] **E2E (c) work_query**: "내가 지난주에 뭐 처리했지?" → 로그 `intent=work_query inject_rag=True rag_source=notes`, 주입 hit category가 전부 "__knowledge__" 확인.
+- [ ] **E2E (d) 저신뢰 폴백**: doc/work 경계 발화 confidence<threshold → 로그 `rag_source=both`(소스 폴백) 확인.
+- [ ] **E2E (e) classifier=None**: 게이트 비활성 시 현행 동작 100% 유지(source=both, 레거시 키워드) — "출장비 정산 방법 뭐야?" → `inject_rag=True` + hit 주입 로그 확인.
+- [ ] `ruff`/`mypy`(src/intent_gate src/vector_search src/agent src/app)/`pytest`(tests/intent_gate tests/vector_search tests/agent tests/app) PASS, upstream diff 빈 상태.
+- [ ] `reviews/M_16_IntentGate_REVIEW.md` Critic PASS.

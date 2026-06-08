@@ -37,6 +37,7 @@ def _ollama_base(ctx: Any) -> str:
 
 # ── GET /api/settings/models ─────────────────────────────────────────────────
 
+
 @router.get("/models")
 async def list_models(request: Request) -> dict[str, Any]:
     """Ollama에서 로컬 모델 목록을 가져온다."""
@@ -54,6 +55,7 @@ async def list_models(request: Request) -> dict[str, Any]:
 
 
 # ── GET /api/settings/model ──────────────────────────────────────────────────
+
 
 @router.get("/model")
 async def get_model(request: Request) -> dict[str, str]:
@@ -73,6 +75,7 @@ async def get_model(request: Request) -> dict[str, str]:
 
 
 # ── POST /api/settings/model ─────────────────────────────────────────────────
+
 
 class SetModelRequest(BaseModel):
     model: str
@@ -128,6 +131,7 @@ async def set_model(body: SetModelRequest, request: Request) -> dict[str, str]:
 
 # ── GET /api/settings/llm-provider ──────────────────────────────────────────
 
+
 @router.get("/llm-provider")
 async def get_llm_provider(request: Request) -> dict[str, Any]:
     """현재 LLM 공급자 설정을 반환한다."""
@@ -150,6 +154,7 @@ async def get_llm_provider(request: Request) -> dict[str, Any]:
 
 
 # ── POST /api/settings/llm-provider ─────────────────────────────────────────
+
 
 class SetLlmProviderRequest(BaseModel):
     provider: str  # "ollama" | "openai"
@@ -208,7 +213,9 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
         # openai_llm conf 삽입/갱신
         api_key = body.openai_api_key or (app_cfg.openai.api_key if app_cfg else "")
         model = body.openai_model or (app_cfg.openai.model if app_cfg else "gpt-4o-mini")
-        llm_configs = raw.get("character_config", {}).get("agent_config", {}).setdefault("llm_configs", {})
+        llm_configs = (
+            raw.get("character_config", {}).get("agent_config", {}).setdefault("llm_configs", {})
+        )
         llm_configs["openai_llm"] = {
             "base_url": "https://api.openai.com/v1",
             "llm_api_key": api_key,
@@ -222,7 +229,9 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
         _set_upstream_llm_provider(raw, "ollama_llm")
 
     try:
-        conf.write_text(yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False))
+        conf.write_text(
+            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        )
         logger.info(f"conf.yaml LLM 공급자 전환 완료: {provider}")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
@@ -254,6 +263,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
             _patch_agent_settings_provider(agent_settings, "openai_llm")
             # llm_configs에 openai_llm 삽입
             from open_llm_vtuber.config_manager.stateless_llm import OpenAIConfig
+
             agent_cfg.llm_configs.openai_llm = OpenAIConfig(
                 base_url="https://api.openai.com/v1",
                 llm_api_key=api_key,
@@ -280,6 +290,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
 
 # ── GET /api/settings/meeting-prompt ────────────────────────────────────────
 
+
 @router.get("/meeting-prompt")
 async def get_meeting_prompt(request: Request) -> dict[str, Any]:
     """현재 회의록 생성 시스템 프롬프트를 반환한다."""
@@ -296,6 +307,7 @@ async def get_meeting_prompt(request: Request) -> dict[str, Any]:
 
 
 # ── POST /api/settings/meeting-prompt ───────────────────────────────────────
+
 
 class SetMeetingPromptRequest(BaseModel):
     prompt: str  # 빈 문자열이면 기본값으로 초기화
@@ -319,7 +331,9 @@ async def set_meeting_prompt(body: SetMeetingPromptRequest, request: Request) ->
     app_section["meeting_minutes_prompt"] = prompt
 
     try:
-        conf.write_text(yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False))
+        conf.write_text(
+            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        )
         logger.info(f"회의록 프롬프트 저장 완료 (길이={len(prompt)}, 커스텀={bool(prompt)})")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
@@ -334,12 +348,134 @@ async def set_meeting_prompt(body: SetMeetingPromptRequest, request: Request) ->
     return {"status": "ok", "is_custom": bool(prompt)}
 
 
+# ── GET /api/settings/intent-gate ────────────────────────────────────────────
+
+
+@router.get("/intent-gate")
+async def get_intent_gate(request: Request) -> dict[str, Any]:
+    """현재 의도 분류기 설정을 반환한다 (M_16)."""
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    ig = app_cfg.intent_gate if app_cfg else None
+
+    from .config import IntentGateConfig
+
+    default = IntentGateConfig()
+    enabled = ig.enabled if ig else default.enabled
+    provider = getattr(ig, "provider", default.provider)
+    provider_str = getattr(provider, "value", str(provider))
+    ollama_model = ig.ollama_model if ig else default.ollama_model
+    openai_model = ig.openai_model if ig else default.openai_model
+    confidence_threshold = ig.confidence_threshold if ig else default.confidence_threshold
+    timeout_seconds = ig.timeout_seconds if ig else default.timeout_seconds
+
+    return {
+        "enabled": enabled,
+        "provider": provider_str,
+        "ollama_model": ollama_model,
+        "openai_model": openai_model,
+        "confidence_threshold": confidence_threshold,
+        "timeout_seconds": timeout_seconds,
+    }
+
+
+# ── POST /api/settings/intent-gate ───────────────────────────────────────────
+
+
+class SetIntentGateRequest(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = None  # "ollama" | "openai" | "same_as_chat"
+    ollama_model: str | None = None
+    openai_model: str | None = None
+    confidence_threshold: float | None = None
+    timeout_seconds: float | None = None
+
+
+@router.post("/intent-gate")
+async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[str, Any]:
+    """의도 분류기 설정을 저장하고 즉시 적용한다 (M_16).
+
+    conf.yaml의 app.intent_gate 섹션을 갱신하고 in-memory app_config 업데이트 후
+    agent를 재초기화한다(기존 model 전환 패턴과 동일).
+    """
+    from .config import IntentGateProviderKind
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+
+    conf = _conf_path()
+    try:
+        raw = yaml.safe_load(conf.read_text()) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    app_section = raw.setdefault("app", {})
+    ig_section = app_section.setdefault("intent_gate", {})
+
+    if body.enabled is not None:
+        ig_section["enabled"] = body.enabled
+    if body.provider is not None:
+        ig_section["provider"] = body.provider
+    if body.ollama_model is not None:
+        ig_section["ollama_model"] = body.ollama_model
+    if body.openai_model is not None:
+        ig_section["openai_model"] = body.openai_model
+    if body.confidence_threshold is not None:
+        ig_section["confidence_threshold"] = body.confidence_threshold
+    if body.timeout_seconds is not None:
+        ig_section["timeout_seconds"] = body.timeout_seconds
+
+    try:
+        conf.write_text(
+            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        )
+        logger.info("conf.yaml intent_gate 설정 저장 완료")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    # in-memory 업데이트
+    if app_cfg:
+        current = app_cfg.intent_gate
+        updates: dict[str, Any] = {}
+        if body.enabled is not None:
+            updates["enabled"] = body.enabled
+        if body.provider is not None:
+            try:
+                updates["provider"] = IntentGateProviderKind(body.provider)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"provider는 'ollama', 'openai', 'same_as_chat' 중 하나여야 합니다: {body.provider!r}",
+                )
+        if body.ollama_model is not None:
+            updates["ollama_model"] = body.ollama_model
+        if body.openai_model is not None:
+            updates["openai_model"] = body.openai_model
+        if body.confidence_threshold is not None:
+            updates["confidence_threshold"] = body.confidence_threshold
+        if body.timeout_seconds is not None:
+            updates["timeout_seconds"] = body.timeout_seconds
+        app_cfg.intent_gate = current.model_copy(update=updates)
+
+    if ctx is None:
+        return {"status": "conf_only"}
+
+    # agent 재초기화 (classifier 재조립 포함)
+    ctx.agent_engine = None
+    try:
+        char_cfg = ctx.character_config
+        await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
+        logger.info("intent_gate 변경 후 agent 재초기화 완료")
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.error(f"intent_gate agent 재초기화 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+
 def _set_upstream_llm_provider(raw: dict[str, Any], provider: str) -> None:
     """conf.yaml dict에서 upstream agent_settings의 llm_provider를 교체."""
     try:
-        agent_settings = (
-            raw["character_config"]["agent_config"]["agent_settings"]
-        )
+        agent_settings = raw["character_config"]["agent_config"]["agent_settings"]
         for agent_name, agent_val in agent_settings.items():
             if isinstance(agent_val, dict) and "llm_provider" in agent_val:
                 agent_val["llm_provider"] = provider

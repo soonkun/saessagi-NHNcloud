@@ -28,7 +28,7 @@ _RAG_TRIGGER_RE = re.compile(
     r"설명해줘|설명해|설명해주세요|"
     r"말해줘|말해주세요|"
     r"알아\?|알고있어|알고 있어|"
-    r"있어\?|있나\?|있니\?|있어요\?|있나요\?|있어|있나|있니|있어요|있나요|"
+    r"있어\?|있나\?|있니\?|있어요\?|있나요\?|"  # M_16 변경 6: 물음표 없는 평서문 종결어미 제거
     r"방법|사용법|사용방법|이용방법|양식|규정|절차|기준|서식|"
     r"어떤거|어떤 거|어떤걸|어떤 걸"
 )
@@ -109,15 +109,26 @@ def _make_adapter_class() -> type:
 
         Proactive RAG: 질문·탐색 의도가 감지된 메시지에 한해 벡터 검색을 수행하고
         유사도 임계값(_MIN_INJECTION_SCORE) 이상인 결과만 컨텍스트에 주입한다.
+
+        M_16 IntentGate: chat() 진입 직후 LLM 기반 의도 분류(1회)를 수행해
+        RAG on/off, 검색 소스, 도구 힌트를 결정론적으로 라우팅한다.
         """
 
-        def __init__(self, agent: "GemmaChatAgent", rag_service: Any = None) -> None:
+        def __init__(
+            self,
+            agent: "GemmaChatAgent",
+            rag_service: Any = None,
+            intent_classifier: Any = None,  # IntentClassifier | None (M_16)
+        ) -> None:
             super().__init__()
             self._agent = agent
             self._rag_service = rag_service  # vector_search.RagService | None
+            self._intent_classifier = intent_classifier  # M_16: IntentClassifier | None
             self._pending_tasks: set[asyncio.Task[None]] = set()
             # 직전 턴에서 실제 주입한 RAG 문서의 권위 마커 (chat에서 display_text에 부착)
             self._last_cited_markers: list[str] = []
+            # M_16: 직전 분류 결과 캐시 (턴 단위, 동일 턴 내 재분류 금지)
+            self._last_routing: Any = None  # RoutingDecision | None
 
         @staticmethod
         def _should_trigger_rag(text: str) -> bool:
@@ -203,18 +214,43 @@ def _make_adapter_class() -> type:
                     len(attached_chunks),
                 )
 
-            # 트리거 키워드 + 첨부 둘 다 없으면 RAG 생략
-            should_search = self._should_trigger_rag(user_text)
+            # ── M_16 변경 3: decision에 따라 should_search 결정 ─────────────
+            if self._last_routing is not None and not self._last_routing.autonomous:
+                should_search = self._last_routing.inject_rag  # 게이트 결정 우선
+            else:
+                should_search = self._should_trigger_rag(user_text)  # 폴백: 레거시 키워드
+
             if not should_search and not attached_chunks:
                 logger.debug("RAG 스킵: 트리거 키워드·첨부 없음 (query=%r)", user_text[:50])
+                # ── M_16 변경 5 (RAG 미주입 시): tool_hint만 삽입 ────────────
+                if self._last_routing is not None and self._last_routing.tool_hint:
+                    hint_td = TextData(
+                        source=TextSource.INPUT,
+                        content="[지시] " + self._last_routing.tool_hint,
+                        from_name="의도게이트",
+                    )
+                    new_texts = [hint_td] + list(input_data.texts or [])
+                    return BatchInput(
+                        texts=new_texts,
+                        images=input_data.images,
+                        metadata=input_data.metadata,
+                    )
                 return input_data
 
             try:
+                # ── M_16 변경 4: rag_source를 retrieve에 전달 ──────────────
+                rag_source = (
+                    self._last_routing.rag_source
+                    if (self._last_routing is not None and not self._last_routing.autonomous)
+                    else "both"
+                )
+
                 # 첨부 있어도 검색은 트리거 키워드 있을 때만
                 retrieval = None
                 if should_search:
                     retrieval = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda: self._rag_service.retrieve(user_text, 5)
+                        None,
+                        lambda: self._rag_service.retrieve(user_text, 5, source=rag_source),
                     )
 
                 # 일반 검색 hits (score 임계값 통과한 것만)
@@ -268,13 +304,24 @@ def _make_adapter_class() -> type:
                     user_text[:50],
                 )
 
+                # ── M_16 변경 5: tool_hint를 RAG 컨텍스트보다 앞에 삽입 ───────
+                prepend_texts: list[Any] = []
+                if self._last_routing is not None and self._last_routing.tool_hint:
+                    hint_td = TextData(
+                        source=TextSource.INPUT,
+                        content="[지시] " + self._last_routing.tool_hint,
+                        from_name="의도게이트",
+                    )
+                    prepend_texts.append(hint_td)
+
                 # 컨텍스트를 사용자 메시지 앞에 TextSource.INPUT으로 삽입
                 context_td = TextData(
                     source=TextSource.INPUT,
                     content=context_text,
                     from_name="문서검색",
                 )
-                new_texts = [context_td] + list(input_data.texts or [])
+                prepend_texts.append(context_td)
+                new_texts = prepend_texts + list(input_data.texts or [])
                 return BatchInput(
                     texts=new_texts,
                     images=input_data.images,
@@ -290,6 +337,7 @@ def _make_adapter_class() -> type:
         ) -> AsyncIterator[Any]:
             """GemmaChatAgent.chat를 소비해 upstream SentenceOutput 스트림으로 변환.
 
+            - M_16 IntentGate: 진입 직후 의도 분류 1회 (캐시, 턴 단위)
             - Proactive RAG: 트리거 키워드 감지 시 자동 검색 후 컨텍스트 주입
             - TextChunk 누적 → 전체 텍스트를 하나의 SentenceOutput으로 yield
             - ToolCallStart/Result → dict yield (upstream이 JSON으로 전송)
@@ -298,7 +346,47 @@ def _make_adapter_class() -> type:
             """
             from open_llm_vtuber.agent.output_types import SentenceOutput, DisplayText, Actions
 
-            # Proactive RAG 적용
+            # ── M_16 변경 2: chat() 진입 직후 1회 분류 ──────────────────────
+            user_text_for_classify = " ".join(
+                t.content for t in (input_data.texts or []) if t.source == TextSource.INPUT
+            ).strip()
+            has_attachment = "[첨부 자료:" in user_text_for_classify
+
+            if self._intent_classifier is not None and user_text_for_classify.strip():
+                try:
+                    from intent_gate import decide_with_confidence
+
+                    _result = await self._intent_classifier.classify(
+                        user_text_for_classify, has_attachment=has_attachment
+                    )
+                    # confidence_threshold는 classifier에서 접근
+                    _threshold = getattr(self._intent_classifier, "_confidence_threshold", 0.55)
+                    _legacy = self._should_trigger_rag(user_text_for_classify)
+                    _decision = decide_with_confidence(
+                        _result,
+                        confidence_threshold=_threshold,
+                        legacy_rag_triggered=_legacy,
+                    )
+                    self._last_routing = _decision
+                    logger.info(
+                        "IntentGate: intent=%s conf=%.2f source=%s "
+                        "inject_rag=%s rag_source=%s autonomous=%s",
+                        _result.intent,
+                        _result.confidence,
+                        _result.source,
+                        _decision.inject_rag,
+                        _decision.rag_source,
+                        _decision.autonomous,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as _exc:
+                    logger.warning("IntentGate 분류 실패 (무시): %s", _exc)
+                    self._last_routing = None
+            else:
+                self._last_routing = None
+
+            # Proactive RAG 적용 (M_16 변경 3~5는 _augment_with_rag 내부에서 처리)
             input_data = await self._augment_with_rag(input_data)
 
             text_parts: list[str] = []

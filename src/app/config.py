@@ -118,8 +118,14 @@ class PathsConfig(BaseModel):
         if not root:
             return self
         base = Path(root)
-        for field_name in ("data_dir", "assets_dir", "vector_store_dir",
-                           "calendar_db_path", "chat_history_dir", "log_dir"):
+        for field_name in (
+            "data_dir",
+            "assets_dir",
+            "vector_store_dir",
+            "calendar_db_path",
+            "chat_history_dir",
+            "log_dir",
+        ):
             val = getattr(self, field_name)
             if val and not Path(val).is_absolute():
                 object.__setattr__(self, field_name, str(base / val))
@@ -134,6 +140,25 @@ class AgentConfig(BaseModel):
     faster_first_response: bool = Field(default=True)
     interrupt_method: Literal["system", "user"] = Field(default="user")
     use_mcpp: bool = Field(default=True)
+
+
+class IntentGateProviderKind(str, Enum):
+    """의도 분류기 공급자 선택 (M_16)."""
+
+    OLLAMA = "ollama"
+    OPENAI = "openai"
+    SAME_AS_CHAT = "same_as_chat"
+
+
+class IntentGateConfig(BaseModel):
+    """M_16 IntentGate 설정 서브스키마."""
+
+    enabled: bool = Field(default=True)
+    provider: IntentGateProviderKind = Field(default=IntentGateProviderKind.SAME_AS_CHAT)
+    ollama_model: str = Field(default="gemma4:e4b")
+    openai_model: str = Field(default="gpt-4o-mini")
+    confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
 class ProactiveConfig(BaseModel):
@@ -183,6 +208,7 @@ class AppConfig(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
+    intent_gate: IntentGateConfig = Field(default_factory=IntentGateConfig)  # M_16
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pyarrow as pa
@@ -216,8 +216,18 @@ class VectorStore:
         query_vec: np.ndarray,  # shape (1024,) float32
         top_k: int = 8,
         category: str | None = None,
+        source: Literal["docs", "notes", "both"] = "both",  # M_16: 소스 필터 (신규)
     ) -> list[SearchHit]:
         """코사인 유사도 ANN 검색 (스펙 §4.6, §6.2).
+
+        Args:
+            query_vec: 쿼리 임베딩 벡터 shape (1024,).
+            top_k: 반환할 최대 결과 수.
+            category: 기존 정확일치 필터 (호환 유지).
+            source: M_16 소스 필터.
+                "docs"  → 노트 제외 전부  (category IS NULL OR category != '__knowledge__')
+                "notes" → 노트만          (category = '__knowledge__')
+                "both"  → 필터 없음 (기본값, 현행 동작 유지)
 
         Returns:
             cosine similarity 내림차순 정렬된 SearchHit 리스트. 결과 0건 → [].
@@ -239,6 +249,9 @@ class VectorStore:
             logger.warning("search top_k > 50, clamp to 50 (요청=%d)", top_k)
             top_k = 50
 
+        # M_16: knowledge category 상수 (src/knowledge/service.py:19 참조)
+        _KNOWLEDGE_CATEGORY = "__knowledge__"
+
         try:
             q = (
                 self._tbl.search(query_vec.tolist(), vector_column_name="vector")
@@ -246,9 +259,23 @@ class VectorStore:
                 .limit(top_k)
             )
 
+            # where 절 구성: category 정확일치 + source 필터 AND 직교
+            clauses: list[str] = []
+
             if category is not None:
                 escaped = _escape_category(category)
-                q = q.where(f"category = '{escaped}'")
+                clauses.append(f"category = '{escaped}'")  # 기존 라인 유지
+
+            if source == "notes":
+                escaped_kc = _escape_category(_KNOWLEDGE_CATEGORY)
+                clauses.append(f"category = '{escaped_kc}'")
+            elif source == "docs":
+                escaped_kc = _escape_category(_KNOWLEDGE_CATEGORY)
+                clauses.append(f"(category IS NULL OR category != '{escaped_kc}')")
+            # source == "both": 절 추가 없음 (현행)
+
+            if clauses:
+                q = q.where(" AND ".join(clauses))
 
             rows: list[dict[str, Any]] = q.to_list()
         except VectorStoreError:
@@ -258,7 +285,13 @@ class VectorStore:
 
         hits: list[SearchHit] = [_row_to_search_hit(row) for row in rows]
 
-        logger.debug("search 완료: top_k=%d, category=%s, 결과=%d건", top_k, category, len(hits))
+        logger.debug(
+            "search 완료: top_k=%d, category=%s, source=%s, 결과=%d건",
+            top_k,
+            category,
+            source,
+            len(hits),
+        )
         return hits
 
     def get_chunks_by_doc_id(self, doc_id: str, limit: int = 5) -> list[dict[str, Any]]:
@@ -269,12 +302,7 @@ class VectorStore:
         """
         try:
             escaped = doc_id.replace("'", "''")
-            rows = (
-                self._tbl.search()
-                .where(f"doc_id = '{escaped}'")
-                .limit(limit)
-                .to_list()
-            )
+            rows = self._tbl.search().where(f"doc_id = '{escaped}'").limit(limit).to_list()
             return rows
         except Exception as exc:
             logger.warning("get_chunks_by_doc_id 실패 (doc_id=%s): %s", doc_id, exc)

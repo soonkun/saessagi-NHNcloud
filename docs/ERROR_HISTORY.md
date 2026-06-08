@@ -311,3 +311,14 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 **수정**: `settings_routes.py` GET 핸들러에서 `provider_str = getattr(provider, "value", provider)`로 enum의 `.value`("openai"/"ollama")를 내보내도록 변경. `app_config`가 없을 때의 문자열 fallback("ollama")도 그대로 통과.  
 **검증**: 라이브 백엔드로 수정 전 GET이 `"provider":"LlmProviderKind.OPENAI"` 반환을 재현 → 수정 후 `"provider":"openai"` 확인 → POST ollama↔openai 양방향 전환 후 GET 반영 확인 → conf.yaml에 키·provider·meeting_minutes_prompt 온전함 확인.  
 **교훈**: **`(str, Enum)` 멤버를 JSON·API로 내보낼 때는 절대 `str(member)`를 쓰지 말 것 — 반드시 `.value`를 쓴다.** (`str(member)`는 "Class.MEMBER"가 됨. Python 3.11+ `enum.StrEnum`은 이 문제가 없지만 본 프로젝트는 `(str, Enum)` 사용.) 그리고 **프론트에서 `x === "openai" ? A : B` 식의 엄격 동등 비교는 백엔드 직렬화가 조금만 달라져도 조용히 잘못된 기본값으로 빠진다** — enum/문자열 경계에서는 정확한 값 계약을 양쪽에서 확인할 것.
+
+---
+
+## E-27: 어댑터(stdlib logging) 로그가 loguru 파일/stderr 싱크에 유실됨
+
+**날짜**: 2026-06-08  
+**증상**: `src/agent/upstream_adapter.py`·`gemma_chat_agent.py` 등 `logging.getLogger(__name__)`를 쓰는 모듈의 INFO 로그(예: "RAG 컨텍스트 주입", "IntentGate: intent=...")가 백엔드 로그 파일에 **전혀 남지 않음**. loguru를 쓰는 모듈(app.*)만 보임. 이 때문에 RAG 주입 여부·의도 분류 결과를 로그로 확인할 수 없어, M_16 게이트가 실제로 동작하는지 데이터로 검증하는 것이 막혔다(그리고 과거 RAG 디버깅이 어려웠던 잠재 원인).  
+**원인**: `app/logging.py`의 `init_logging`이 loguru sink만 구성하고 **표준 logging → loguru 브리지(InterceptHandler)를 설치하지 않음**. loguru가 stderr를 점유한 뒤 stdlib 루트 로거는 기본 lastResort(WARNING+ only, 핸들러 없음) 상태라 INFO 레코드가 드롭됨. 결과적으로 stdlib 로거 사용 모듈의 관측 로그가 통째로 사라짐.  
+**수정**: `app/logging.py`에 표준 `InterceptHandler`를 추가하고 `logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)`로 루트 로거를 loguru에 연결. loguru 권장 통합 패턴. 이후 어댑터의 RAG·IntentGate 로그가 파일에 정상 기록됨.  
+**검증**: 브리지 추가 후 백엔드 재기동 → 실제 WS 대화에서 `IntentGate: intent=calendar_add conf=0.97 inject_rag=False`, `IntentGate: intent=doc_query ... rag_source=docs`, `RAG 컨텍스트 주입: ... hits=5` 등이 로그 파일에 찍히는 것을 직접 확인.  
+**교훈**: **loguru를 쓰는 앱에서 일부 모듈이 표준 logging을 쓰면 반드시 InterceptHandler 브리지를 설치할 것.** 안 그러면 그 모듈 로그가 조용히 유실되어 "로그로 검증"이라는 원칙 자체가 무력화된다. 로깅 초기화 시 "모든 로거가 같은 싱크로 모이는가"를 확인할 것.

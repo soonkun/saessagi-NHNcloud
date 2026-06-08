@@ -58,6 +58,9 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self._temp_cleanup_scheduler: Any = None  # apscheduler.AsyncIOScheduler | None
         # M_15: KnowledgeService 슬롯 (Phase 1 후 추가)
         self.knowledge_service: Any = None  # KnowledgeService | None
+        # M_16: IntentClassifier 슬롯
+        self.intent_classifier: Any = None  # IntentClassifier | None
+        self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
         # D-13: 마지막으로 연결된 활성 WebSocket (단일 사용자 전제)
@@ -92,7 +95,11 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     if fw.model_path and not Path(fw.model_path).is_absolute():
                         fw.model_path = str(Path(root) / fw.model_path)
                         logger.debug(f"ASR model_path resolved: {fw.model_path}")
-                    if hasattr(fw, "download_root") and fw.download_root and not Path(fw.download_root).is_absolute():
+                    if (
+                        hasattr(fw, "download_root")
+                        and fw.download_root
+                        and not Path(fw.download_root).is_absolute()
+                    ):
                         fw.download_root = str(Path(root) / fw.download_root)
             except AttributeError:
                 pass
@@ -207,17 +214,17 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             "2) **첨부 파일 본문은 자동으로 [관련 문서 검색 결과] 블록에 포함되어 있습니다.** "
             "사용자가 본문 내용을 말로 다 설명하지 않아도 그 청크에서 절차/날짜/담당자/주요 결정사항/"
             "핵심 결론 등을 직접 추출하세요. summary는 사용자 발언 + 첨부 본문 추출 정보를 함께 정리. "
-            "절대 사용자 한 줄 발언만으로 빈약한 노트(\"문서를 작성했다\" 같은 한 줄)를 만들지 마세요. "
+            '절대 사용자 한 줄 발언만으로 빈약한 노트("문서를 작성했다" 같은 한 줄)를 만들지 마세요. '
             "첨부 본문에 실제 내용이 있으면 그것을 노트의 핵심으로 옮겨담아야 합니다.\n"
             "3) `summary`는 한국어 markdown — 가능하면 `## 상황 / ## 절차 / ## 사용 자료 / ## 교훈` "
             "섹션으로 구조화. 사용자 말을 그대로 옮기지 말고 핵심을 정리.\n"
             "4) `tags`는 1~3개의 분류 단어 (예: ['회계','출장']).\n\n"
             "## save_knowledge_note 호출 후 응답\n"
-            "사용자에게 자연어로 \"방금 ⟨제목⟩ 노트로 저장해 두었어요\"라고 한국어로 알리고, "
+            '사용자에게 자연어로 "방금 ⟨제목⟩ 노트로 저장해 두었어요"라고 한국어로 알리고, '
             "답변 끝에 ToolResult payload의 `note_marker` (예: `[[note:생성된-슬러그]]`)를 "
             "반드시 정확히 한 번 포함하세요. 사용자에게는 이것이 노트로 점프하는 칩으로 보입니다.\n"
             "ToolResult payload에 `related_docs_info`가 있으면 그 안의 각 `filename`을 "
-            "답변에 그대로 한 번씩 자연어로 언급하세요 — 예: \"관련 자료는 ⟨회의보고서.hwpx⟩에 있어요.\" "
+            '답변에 그대로 한 번씩 자연어로 언급하세요 — 예: "관련 자료는 ⟨회의보고서.hwpx⟩에 있어요." '
             "프론트가 파일명을 인식해 다운로드 칩으로 렌더하므로, 사용자가 그 자리에서 바로 파일을 받을 수 있습니다.\n\n"
             "## 검색 결과(search_docs)에 노트가 등장한 경우\n"
             "각 hit의 `is_note=true` 이면 사용자가 저장한 업무 노트입니다. "
@@ -322,8 +329,108 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             else None,
         )
 
-        # (7) 어댑터 래핑
-        self.agent_engine = BasicMemoryAgentAdapter(gemma_agent, rag_service=self.rag_service)
+        # (7) M_16: IntentClassifier 조립
+        from app.config import IntentGateProviderKind
+
+        intent_cfg = self.app_config.intent_gate
+        if not intent_cfg.enabled:
+            self.intent_classifier = None
+            logger.info("AppServiceContext.init_agent: IntentGate 비활성 (enabled=False)")
+        else:
+            try:
+                from intent_gate import IntentClassifier
+
+                if intent_cfg.provider == IntentGateProviderKind.SAME_AS_CHAT:
+                    # 메인 대화 에이전트의 complete_json을 재사용
+                    self.intent_classifier = IntentClassifier(
+                        complete_json=gemma_agent.complete_json,
+                        model_label=self.app_config.ollama.model,
+                        confidence_threshold=intent_cfg.confidence_threshold,
+                        timeout_seconds=intent_cfg.timeout_seconds,
+                    )
+                    logger.info(
+                        "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
+                        "(provider=same_as_chat, model=%s)",
+                        self.app_config.ollama.model,
+                    )
+                elif intent_cfg.provider == IntentGateProviderKind.OLLAMA:
+                    from agent.builder import build_chat_agent
+
+                    # 분류 전용 경량 에이전트 생성
+                    classify_agent = await build_chat_agent(
+                        app_config=self.app_config,
+                        ollama_config=self.app_config.ollama.model_copy(
+                            update={"model": intent_cfg.ollama_model}
+                        ),
+                        tool_manager=None,
+                        tool_executor=None,
+                        system_prompt="",
+                        extra_tool_specs=None,
+                        tts_preprocessor_config=None,
+                    )
+                    self._intent_classifier_agent = classify_agent
+                    self.intent_classifier = IntentClassifier(
+                        complete_json=classify_agent.complete_json,
+                        model_label=intent_cfg.ollama_model,
+                        confidence_threshold=intent_cfg.confidence_threshold,
+                        timeout_seconds=intent_cfg.timeout_seconds,
+                    )
+                    logger.info(
+                        "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
+                        "(provider=ollama, model=%s)",
+                        intent_cfg.ollama_model,
+                    )
+                elif intent_cfg.provider == IntentGateProviderKind.OPENAI:
+                    from agent.builder import build_chat_agent
+                    from app.config import LlmProviderKind
+
+                    openai_app_config = self.app_config.model_copy(
+                        update={
+                            "llm_provider": LlmProviderKind.OPENAI,
+                            "openai": self.app_config.openai.model_copy(
+                                update={"model": intent_cfg.openai_model}
+                            ),
+                        }
+                    )
+                    classify_agent = await build_chat_agent(
+                        app_config=openai_app_config,
+                        ollama_config=self.app_config.ollama,
+                        tool_manager=None,
+                        tool_executor=None,
+                        system_prompt="",
+                        extra_tool_specs=None,
+                        tts_preprocessor_config=None,
+                    )
+                    self._intent_classifier_agent = classify_agent
+                    self.intent_classifier = IntentClassifier(
+                        complete_json=classify_agent.complete_json,
+                        model_label=intent_cfg.openai_model,
+                        confidence_threshold=intent_cfg.confidence_threshold,
+                        timeout_seconds=intent_cfg.timeout_seconds,
+                    )
+                    logger.info(
+                        "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
+                        "(provider=openai, model=%s)",
+                        intent_cfg.openai_model,
+                    )
+                else:
+                    self.intent_classifier = None
+                    logger.warning(
+                        "AppServiceContext.init_agent: 알 수 없는 intent_gate.provider=%s → 비활성",
+                        intent_cfg.provider,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "AppServiceContext.init_agent: IntentClassifier 조립 실패 (비활성): %s", exc
+                )
+                self.intent_classifier = None
+
+        # (7b) 어댑터 래핑
+        self.agent_engine = BasicMemoryAgentAdapter(
+            gemma_agent,
+            rag_service=self.rag_service,
+            intent_classifier=self.intent_classifier,  # M_16
+        )
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 
         # (8) config 동기화
@@ -415,7 +522,9 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     template_path=meeting_template_path,
                     temp_dir=meeting_temp_dir,
                     download_base_url=download_base_url,
-                    custom_system_prompt=self.app_config.meeting_minutes_prompt if self.app_config else "",
+                    custom_system_prompt=self.app_config.meeting_minutes_prompt
+                    if self.app_config
+                    else "",
                 )
                 logger.info("MeetingMinutesService 초기화 완료 (agent=None, init_agent에서 배선)")
 
@@ -450,7 +559,9 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 store=VectorStore(db_path=vector_store_dir),
                 min_score=app_config.rag_min_score,
             )
-            logger.info("RagService 초기화 완료: model=%s, store=%s", bge_model_dir, vector_store_dir)
+            logger.info(
+                "RagService 초기화 완료: model=%s, store=%s", bge_model_dir, vector_store_dir
+            )
         except Exception as exc:
             logger.warning(f"rag_service 초기화 실패 (search_docs 비활성화): {exc}")
             self.rag_service = None
@@ -530,6 +641,14 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
           → super().close()
         각 stop/close는 개별 try/except로 감싸 한 서비스 실패가 다른 정리를 막지 않도록.
         """
+        # M_16: 분류 전용 에이전트 정리 (provider=ollama/openai일 때만 별도 인스턴스 존재)
+        if self._intent_classifier_agent is not None:
+            try:
+                await self._intent_classifier_agent.aclose()
+                logger.debug("intent_classifier_agent.aclose() 완료")
+            except Exception as exc:
+                logger.error(f"intent_classifier_agent.aclose() 실패: {exc}")
+
         if self.idle_monitor is not None:
             try:
                 await _call_stop(self.idle_monitor, "idle_monitor")

@@ -1,11 +1,35 @@
 # src/app/logging.py
 """loguru 로깅 초기화 및 PII 마스킹 필터."""
 
+import logging as _stdlib_logging
 import os
 import re
 import sys
 
 from loguru import logger
+
+
+class _InterceptHandler(_stdlib_logging.Handler):
+    """표준 logging 레코드를 loguru로 전달하는 브리지.
+
+    우리 src 모듈 일부(agent.upstream_adapter, agent.gemma_chat_agent 등)는
+    `logging.getLogger(__name__)`를 사용한다. 브리지가 없으면 이 로그가
+    loguru sink(파일·stderr)에 도달하지 못해 RAG 주입·IntentGate 분류 같은
+    핵심 관측 로그가 통째로 유실된다(E-27).
+    """
+
+    def emit(self, record: _stdlib_logging.LogRecord) -> None:
+        try:
+            level: str | int = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+        frame, depth = _stdlib_logging.currentframe(), 2
+        while frame is not None and frame.f_code.co_filename == _stdlib_logging.__file__:
+            frame = frame.f_back
+            depth += 1
+        logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
 
 # PII 패턴 (정규식 3종)
 _PHONE_RE = re.compile(r"01[0-9]-?\d{3,4}-?\d{4}")
@@ -74,5 +98,8 @@ def init_logging(log_dir: str, level: str = "INFO") -> None:
         enqueue=True,  # 비동기 쓰기 — 이벤트 루프 블로킹 < 1 ms
         filter=_pii_filter,  # type: ignore[arg-type]
     )
+
+    # 표준 logging → loguru 브리지 설치 (stdlib 로거 사용 모듈의 로그 포착)
+    _stdlib_logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
 
     logger.info(f"로깅 초기화 완료: log_dir={log_dir}, level={level}")

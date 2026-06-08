@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from .embedder import Embedder
 from .store import VectorStore
@@ -41,6 +42,7 @@ class RagService:
         query: str,
         top_k: int = 8,
         category: str | None = None,
+        source: Literal["docs", "notes", "both"] = "both",  # M_16: 소스 필터 (신규)
     ) -> RetrievalResult:
         """쿼리를 임베딩해 VectorStore를 검색하고 RetrievalResult를 반환.
 
@@ -82,8 +84,8 @@ class RagService:
         # 4. 임베딩
         query_vec = self._embedder.embed_query(query)
 
-        # 5. 검색
-        hits = self._store.search(query_vec, top_k=top_k, category=category)
+        # 5. 검색 (M_16: source 파라미터 전달)
+        hits = self._store.search(query_vec, top_k=top_k, category=category, source=source)
 
         # 6, 7. found 판정 및 no_match_reason 생성 (스펙 §6.3.2)
         if len(hits) > 0 and hits[0].score >= self._min_score:

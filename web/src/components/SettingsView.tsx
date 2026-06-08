@@ -18,6 +18,45 @@ async function fetchOllamaModels(): Promise<string[]> {
   }
 }
 
+// ── Intent Gate ──────────────────────────────────────────────────────────────
+
+interface IntentGateState {
+  enabled: boolean;
+  provider: "ollama" | "openai" | "same_as_chat";
+  ollama_model: string;
+  openai_model: string;
+  confidence_threshold: number;
+}
+
+async function fetchIntentGate(): Promise<IntentGateState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/intent-gate");
+    if (!res.ok) return null;
+    return (await res.json()) as IntentGateState;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSetIntentGate(body: {
+  enabled?: boolean;
+  provider?: string;
+  ollama_model?: string;
+  openai_model?: string;
+  confidence_threshold?: number;
+}): Promise<boolean> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/intent-gate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Meeting prompt ───────────────────────────────────────────────────────────
 
 interface MeetingPromptState {
@@ -139,6 +178,13 @@ export function SettingsView(): React.ReactElement {
   const [saved, setSaved] = useState(false);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
 
+  // 의도 분류기 상태 (M_16)
+  const [igEnabled, setIgEnabled] = useState(true);
+  const [igProvider, setIgProvider] = useState<"ollama" | "openai" | "same_as_chat">("same_as_chat");
+  const [igOllamaModel, setIgOllamaModel] = useState("");
+  const [igSaving, setIgSaving] = useState(false);
+  const [igSaved, setIgSaved] = useState(false);
+
   // 회의록 프롬프트 상태
   const [meetingPrompt, setMeetingPrompt] = useState("");
   const [meetingPromptDefault, setMeetingPromptDefault] = useState("");
@@ -161,6 +207,34 @@ export function SettingsView(): React.ReactElement {
   const [openaiKeyPlaceholder, setOpenaiKeyPlaceholder] = useState("sk-...");
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmSaved, setLlmSaved] = useState(false);
+
+  // 의도 분류기 초기 로드 (M_16)
+  useEffect(() => {
+    void fetchIntentGate().then((s) => {
+      if (!s) return;
+      setIgEnabled(s.enabled);
+      setIgProvider(s.provider);
+      setIgOllamaModel(s.ollama_model);
+    });
+  }, []);
+
+  async function handleIgSave(): Promise<void> {
+    if (igSaving) return;
+    setIgSaving(true);
+    const body: { enabled: boolean; provider: string; ollama_model?: string } = {
+      enabled: igEnabled,
+      provider: igProvider,
+    };
+    if (igProvider === "ollama" && igOllamaModel) {
+      body.ollama_model = igOllamaModel;
+    }
+    const ok = await apiSetIntentGate(body);
+    setIgSaving(false);
+    if (ok) {
+      setIgSaved(true);
+      setTimeout(() => setIgSaved(false), 2500);
+    }
+  }
 
   // 회의록 프롬프트 초기 로드
   useEffect(() => {
@@ -443,6 +517,116 @@ export function SettingsView(): React.ReactElement {
           }}
         >
           {llmSaving ? "전환 중..." : llmSaved ? "전환 완료 ✓" : "LLM 적용 (백엔드 재초기화)"}
+        </button>
+      </section>
+
+      {/* ── 의도 분류기 (M_16) ── */}
+      <section style={sectionStyle}>
+        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>의도 분류기</h3>
+        <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 12, lineHeight: 1.5 }}>
+          의도 분류기는 입력마다 1회 짧은 추론으로 일정/공용문서검색/내업무검색/노트저장 등을 구분해
+          정확한 도구와 검색 범위를 고릅니다. '메인 모델과 동일'이 기본값입니다.
+        </p>
+
+        {/* 활성화 토글 */}
+        <label style={labelStyle}>분류기 사용</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {([
+            { id: true, label: "사용" },
+            { id: false, label: "사용 안 함 (레거시 키워드)" },
+          ] as const).map(({ id, label }) => (
+            <button
+              key={String(id)}
+              onMouseDown={(e) => { e.stopPropagation(); setIgEnabled(id); }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                fontSize: 13,
+                fontWeight: igEnabled === id ? 700 : 400,
+                background: igEnabled === id ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${igEnabled === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: igEnabled === id ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* provider 선택 */}
+        {igEnabled && (
+          <>
+            <label style={labelStyle}>분류기 모델 공급자</label>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              {([
+                { id: "same_as_chat" as const, label: "메인 모델과 동일" },
+                { id: "ollama" as const, label: "Ollama (별도 모델)" },
+                { id: "openai" as const, label: "OpenAI" },
+              ]).map(({ id, label }) => (
+                <button
+                  key={id}
+                  onMouseDown={(e) => { e.stopPropagation(); setIgProvider(id); }}
+                  style={{
+                    flex: 1,
+                    padding: "7px 6px",
+                    fontSize: 12,
+                    fontWeight: igProvider === id ? 700 : 400,
+                    background: igProvider === id ? "var(--color-accent)" : "transparent",
+                    border: `1px solid ${igProvider === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                    borderRadius: 8,
+                    color: igProvider === id ? "#fff" : "var(--color-text)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {igProvider === "ollama" && (
+              <>
+                <label style={labelStyle}>분류기 Ollama 모델</label>
+                <select
+                  value={igOllamaModel}
+                  onChange={(e) => setIgOllamaModel(e.target.value)}
+                  style={{ ...inputStyle, cursor: "pointer", appearance: "auto", marginBottom: 6 }}
+                  disabled={ollamaModels.length === 0}
+                >
+                  {ollamaModels.length === 0 ? (
+                    <option value="">모델 목록 로딩 중...</option>
+                  ) : (
+                    ollamaModels.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))
+                  )}
+                </select>
+                <p style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 8, lineHeight: 1.5 }}>
+                  분류는 6지선다 + 짧은 출력이므로 가벼운 모델(예: gemma4:e2b)도 충분합니다.
+                </p>
+              </>
+            )}
+          </>
+        )}
+
+        <button
+          onClick={() => { void handleIgSave(); }}
+          disabled={igSaving}
+          style={{
+            marginTop: 6,
+            background: igSaved ? "var(--color-accent)" : "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: igSaved ? "#fff" : "var(--color-text)",
+            cursor: igSaving ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: 13,
+            width: "100%",
+            opacity: igSaving ? 0.6 : 1,
+          }}
+        >
+          {igSaving ? "적용 중..." : igSaved ? "적용됨 ✓" : "의도 분류기 적용"}
         </button>
       </section>
 
