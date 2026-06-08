@@ -22,7 +22,8 @@
 - **AI 모델의 자체 지식을 RAG 결과로 착각하지 말 것.** 벡터 스토어가 비어 있어도 LLM이 정답을 맞힐 수 있다. RAG 작동 여부는 반드시 (1) 벡터 스토어에 실제 문서가 있는지, (2) 쿼리 시 hit가 반환되는지, (3) 로그에 "Proactive RAG: N건 주입" 같은 실제 주입 기록이 있는지로만 판단할 것.
 - **specs/M_NN_SPEC.md 없이 src/ 파일 생성 금지.**
 - **REQUIREMENTS.md에 없는 기능 추가 금지.** 필요 시 `docs/CHANGE_REQUESTS.md` 작성 후 사용자 승인 먼저.
-- **외부 네트워크 호출 금지.** fetch/requests는 127.0.0.1·localhost·사내 IP만 허용.
+- **외부 네트워크 호출 금지** (인터넷 검색·임의 외부 API 등). fetch/requests는 127.0.0.1·localhost·사내 IP만 허용.
+  - **단, LLM 공급자 호출은 예외(의도된 임시 대역).** 상용 타깃은 기관 인트라넷 중앙 GPU(대구 PPP존)이고, 그 인프라 구축 전까지는 ChatGPT(GPT-4o/GPT-5)를 "인트라넷에 올릴 OSS 모델"의 임시 대역으로 사용한다. 즉 conf.yaml의 LLM provider가 openai면 `api.openai.com` 호출이 발생하는 것은 **정상**이며 위반이 아니다. 이 규칙의 본래 의도는 인터넷 검색·웹 크롤링·임의 외부 서비스 호출 차단이다. (배포 비전 상세는 메모리 `project_deployment_vision` 참조. 향후 인트라넷 GPU 구축 시 base_url만 사내로 전환.)
 - **변경 전 반드시 관련 소스 읽기.** 코드 동작 이해 없이 수정하면 회귀 발생.
 - **버그를 발견하고 수정했으면 반드시 `docs/ERROR_HISTORY.md`에 기록할 것.** 증상·원인·수정 내용·교훈을 빠짐없이 작성. 같은 실수가 반복되지 않도록 하는 것이 목적이며, 기록 없이 수정만 하는 것은 금지.
 - **프론트엔드 작업 전 `docs/FRONTEND_CONSTRAINTS.md` 확인.**
