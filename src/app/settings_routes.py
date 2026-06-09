@@ -65,7 +65,7 @@ async def get_model(request: Request) -> dict[str, str]:
         return {"model": ctx.app_config.ollama.model}
     # fallback: conf.yaml 읽기
     try:
-        text = _conf_path().read_text()
+        text = _conf_path().read_text(encoding="utf-8")
         m = re.search(r"^    model:\s*['\"]?([^'\"\n]+)['\"]?", text, re.MULTILINE)
         if m:
             return {"model": m.group(1).strip()}
@@ -96,14 +96,14 @@ async def set_model(body: SetModelRequest, request: Request) -> dict[str, str]:
     # 1. conf.yaml 업데이트
     conf = _conf_path()
     try:
-        text = conf.read_text()
+        text = conf.read_text(encoding="utf-8")
         # character_config.agent_config.llm_configs.ollama_llm.model
         text = re.sub(
             r"([ \t]+model:\s*)['\"]?[^'\"\n]+['\"]?",
             lambda m_: m_.group(1) + f'"{new_model}"',
             text,
         )
-        conf.write_text(text)
+        conf.write_text(encoding="utf-8",data=text)
         logger.info(f"conf.yaml model 업데이트 완료: {new_model}")
     except Exception as exc:
         logger.warning(f"conf.yaml 업데이트 실패: {exc}")
@@ -194,7 +194,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
 
     conf = _conf_path()
     try:
-        raw = yaml.safe_load(conf.read_text()) or {}
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
 
@@ -229,7 +229,7 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
         _set_upstream_llm_provider(raw, "ollama_llm")
 
     try:
-        conf.write_text(
+        conf.write_text(encoding="utf-8",data=
             yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
         )
         logger.info(f"conf.yaml LLM 공급자 전환 완료: {provider}")
@@ -386,7 +386,7 @@ async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[
 
     conf = _conf_path()
     try:
-        raw = yaml.safe_load(conf.read_text()) or {}
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
 
@@ -407,7 +407,7 @@ async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[
         ig_section["timeout_seconds"] = body.timeout_seconds
 
     try:
-        conf.write_text(
+        conf.write_text(encoding="utf-8",data=
             yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
         )
         logger.info("conf.yaml intent_gate 설정 저장 완료")
@@ -583,7 +583,7 @@ async def _save_prompt(
 
     # conf.yaml 읽기
     try:
-        raw = yaml.safe_load(conf.read_text()) or {}
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
 
@@ -601,7 +601,7 @@ async def _save_prompt(
         app_section["meeting_minutes_prompt"] = prompt
 
     try:
-        conf.write_text(
+        conf.write_text(encoding="utf-8",data=
             yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
         )
         logger.info("M_17: agent_prompts.%s 저장 완료 (길이=%d)", key, len(prompt))

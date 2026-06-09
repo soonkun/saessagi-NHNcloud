@@ -14,5 +14,9 @@ if [ ! -d "$SRC_DIR" ]; then
 fi
 
 mkdir -p "$DST_DIR"
-rsync -a --include="*.png" --exclude="*" "$SRC_DIR/" "$DST_DIR/"
+if command -v rsync &>/dev/null; then
+  rsync -a --include="*.png" --exclude="*" "$SRC_DIR/" "$DST_DIR/"
+else
+  cp "$SRC_DIR/"*.png "$DST_DIR/" 2>/dev/null || true
+fi
 echo "[sync-character-assets] synced $(ls "$DST_DIR"/*.png 2>/dev/null | wc -l | tr -d ' ') PNGs → $DST_DIR"

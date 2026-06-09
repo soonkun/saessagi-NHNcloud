@@ -5,6 +5,7 @@ import { join } from 'path';
 import { is } from '@electron-toolkit/utils';
 
 const isMac = process.platform === 'darwin';
+const isWindows = process.platform === 'win32';
 
 export class WindowManager {
   private window: BrowserWindow | null = null;
@@ -237,7 +238,8 @@ export class WindowManager {
     if (isMac) this.window.setWindowButtonVisibility(false);
     this.window.setResizable(false);
     this.window.setSkipTaskbar(true);
-    this.window.setFocusable(false);
+    // Windows에서 setFocusable(false)는 키보드 입력을 완전히 차단하므로 생략
+    if (!isWindows) this.window.setFocusable(false);
 
     this.window.setIgnoreMouseEvents(true, { forward: true });
     if (isMac) {
@@ -277,7 +279,7 @@ export class WindowManager {
     this.window.setFocusable(true);
     this.window.focus();
     setTimeout(() => {
-      if (this.window && this.currentMode === 'pet') {
+      if (this.window && this.currentMode === 'pet' && !isWindows) {
         this.window.setFocusable(false);
       }
     }, 300);

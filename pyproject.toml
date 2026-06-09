@@ -22,6 +22,7 @@ dependencies = [
     # melotts: pypinyin 버전 충돌로 pyproject.toml 제외 -- bootstrap.py에서 별도 설치
     "TTS>=0.22.0,<1; python_version < '3.12' and sys_platform == 'win32'",  # Coqui XTTS v2 — CPML 라이선스·Python<3.12·Windows 전용 (CR-02 법무 승인 대기)
     "torch>=2.0.0",         # MeloTTS + XTTS v2 딥러닝 런타임
+    "torchaudio>=2.0.0",    # MeloTTS + silero-vad 오디오 처리
     "soundfile>=0.12,<1",   # WAV I/O 보조 (libsndfile 기반)
     "python-multipart>=0.0.9",  # FastAPI UploadFile multipart 지원
     "httpx>=0.27,<1",           # M_05 probe_ollama + upstream AsyncLLM 의존
@@ -206,6 +207,19 @@ markers = [
     "e2e_fast: 모델 없이 돌 수 있는 빠른 E2E (CI 대상)",
     "e2e_model: 실제 Gemma/Whisper/MeloTTS/BGE-M3 필요 (로컬/스테이지 전용)",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [dependency-groups]
 dev = [

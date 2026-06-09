@@ -21,7 +21,7 @@ if not exist "%ROOT%\web\dist\index.html" (
     ) else (
         npm install
     )
-    npm run build
+    set "ELECTRON_BUILD=1" && npm run build
     cd /d "%ROOT%"
 )
 

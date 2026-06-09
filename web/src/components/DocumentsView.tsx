@@ -154,7 +154,7 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
             style={{
               flex: 1,
               fontSize: 13,
-              background: "var(--color-input-bg, #1a1a1a)",
+              background: "var(--color-panel)",
               border: "1px solid var(--color-accent)",
               borderRadius: 3,
               color: "var(--color-text)",
@@ -585,7 +585,7 @@ export function DocumentsView(): React.ReactElement {
               if (e.key === "Enter") void handleCreateFolder();
               if (e.key === "Escape") { setAddingFolder(false); setNewFolderName(""); }
             }}
-            style={{ flex: 1, fontSize: 12, background: "var(--color-input-bg, #1a1a1a)", border: "1px solid var(--color-accent)", borderRadius: 4, color: "var(--color-text)", padding: "4px 8px", opacity: isCreating ? 0.5 : 1 }}
+            style={{ flex: 1, fontSize: 12, background: "var(--color-panel)", border: "1px solid var(--color-accent)", borderRadius: 4, color: "var(--color-text)", padding: "4px 8px", opacity: isCreating ? 0.5 : 1 }}
           />
           <button
             onClick={() => void handleCreateFolder()}
