@@ -58,6 +58,7 @@ logs/
 
 # Local data
 data/
+!data/Template/
 cache/
 *.db
 *.sqlite
