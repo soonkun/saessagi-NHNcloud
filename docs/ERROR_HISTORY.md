@@ -5,6 +5,153 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-40: RAG 검색 지연 분석 — 파편화 가설 기각, 실제 병목은 무인덱스 엔진 오버헤드 (2026-06-11)
+
+**증상**: 문서가 늘면서 검색 체감 지연. 실측: 쿼리 임베딩 22ms(GPU) + 벡터 검색 ~90ms.
+**조사 결과** (가설 검증 과정 기록):
+1. 스토어 상태: 14,104 청크가 343개 프래그먼트(조각당 평균 41행), 테이블 버전 788 누적. → 파편화가 주범이라 가설.
+2. `tbl.optimize()` 컴팩션 실행: 343조각 → 1조각, top-8 결과 비트 동일. **그러나 검색 시간 99→100ms로 불변 — 가설 기각.**
+3. numpy로 동일한 14k×1024 코사인 전수 계산: **3.2ms**. LanceDB 무인덱스 검색 ~90ms의 96%는 수학이 아니라 엔진 오버헤드(쿼리당 디스크 스캔+플래닝).
+4. 사본에 IVF-PQ 인덱스(partitions=128, sub_vectors=64) 빌드(6.4초) 후 실제 한국어 쿼리 10개로 recall 측정:
+   - nprobes=32, refine=10: 88.8% recall, 29ms
+   - **nprobes=128, refine=30: 100.0% recall, 41ms** ← 균형점
+**조치**: ① 라이브 스토어 컴팩션 실행(디스크·목록 스캔·파편화 누적 방지 목적), ② `VectorStore.optimize()` 추가 + 업로드/문서삭제/폴더삭제 후 60초 디바운스 자동 컴팩션(`rag_routes._schedule_store_optimize`). ③ 인덱스 도입은 사용자 결정 대기 (recall 100% 파라미터 확보됨).
+**교훈**:
+1. "파편화 때문에 느리다"는 직관은 측정으로 확인하기 전까지 가설일 뿐이다. 컴팩션 전후 동일 쿼리 벤치마크가 가설을 즉시 기각해줬다.
+2. LanceDB 무인덱스 KNN은 데이터가 작아도 쿼리당 수십 ms의 고정 오버헤드가 있다. 수 ms대가 필요하면 인덱스가 유일한 길이다.
+3. ANN 도입 시 recall은 기본 파라미터로 가정하지 말고 실제 쿼리로 측정할 것 — 기본값(nprobes=32, refine=10)은 88.8%였고, 전수 프로브+리파인(128/30)으로 100%를 확보했다.
+
+---
+
+## E-39: 일괄 업로드 UI — 완료 후에도 미완처럼 보이는 상태 설계 (2026-06-11)
+
+**증상**: 다수 파일 업로드 시 (1) 전체 진행 상황을 알 수 없음, (2) 목록에 스크롤이 없어 화면 밖 파일의 성공/실패 확인 불가, (3) 새싹이가 neutral로 돌아와(=완료) 사용자는 끝났다고 인지하는데 화면에는 100% 아닌 행들이 남아 혼란.
+**원인**: 리프레시 문제가 아니라 **상태 설계 문제**. 성공한 파일 행은 목록에서 즉시 제거되고 실패 행만 영구히 남는 구조 → 완료 시점에 남아있는 건 실패/잔재 행들뿐이라 "전부 100%가 안 된" 것처럼 보였다. 또 XHR 진행률은 전송 진행률이라, 전송 100% 후 서버 파싱·임베딩(응답 대기) 동안 숫자가 멈춰 보였다.
+**수정** (`DocumentsView.tsx`):
+- UploadItem에 `status: waiting|uploading|processing|done|error` 도입. 성공 행도 "완료 ✓"(녹색)로 **목록에 유지** — 파일별 성공/실패 확인 가능.
+- 전송 100% 후 응답 대기 구간은 "분석·임베딩 중…"으로 표시 (멈춘 % 대신).
+- 전체 진행 헤더 추가: "업로드 중 — N/M (실패 K)" + 집계 진행 바.
+- 파일별 목록에 `maxHeight: 180, overflowY: auto` 스크롤.
+- 전부 끝나면 "목록 지우기" 버튼 노출 (수동 정리).
+**교훈**: 일괄 작업 UI에서 "완료 항목 즉시 제거"는 잔여 항목만 남겨 전체가 실패한 듯한 인상을 준다. 완료 상태를 명시적으로 남기고 사용자가 정리하게 할 것. 진행률이 전송/처리 2단계로 나뉘면 단계명을 표시할 것.
+
+---
+
+## E-38: 새 폴더 이름 입력 불가 — restoreFocus 미적용 입력 필드 잔존 (2026-06-11)
+
+**증상**: 문서 탭 "새 폴더" 클릭 후 이름 입력창을 클릭해도 커서가 안 생기고 타이핑이 안 됨.
+**원인**: E-23/E-27과 동일한 pet 모드 `setFocusable(false)` 문제의 재발. 채팅 입력(ChatPanel)과 노트(NotesView)에는 `restoreFocus()` 패치가 적용됐지만, **새로 추가된 입력 필드들엔 누락**돼 있었다. DOM `focus()`만으로는 OS 키보드 포커스(key window)가 오지 않는다.
+**수정**: 전 컴포넌트 입력 필드 일괄 감사(`grep <input|<textarea` vs `restoreFocus` 카운트) 후 누락분 전부 패치 —
+- DocumentsView: 새 폴더 입력 + 폴더 이름변경 입력 (onClick + 입력창 열릴 때 useEffect에서도 호출 — 클릭 없이 바로 타이핑 가능하도록)
+- CalendarView: 제목·기간·설명 3개
+- MeetingView: 녹취/회의록 textarea 4개
+- SettingsView: OpenAI 키, 서버 주소 2개
+**교훈**: **키보드 입력을 받는 모든 `<input>`/`<textarea>`는 `onClick={() => window.electronAPI?.restoreFocus()}`가 필수**이고, 코드로 `focus()`를 호출하는 useEffect에서는 그 직전에 `restoreFocus()`를 호출해야 한다. 새 입력 필드를 추가할 때마다 빠뜨리면 이 버그가 무한 재발한다 — FRONTEND_CONSTRAINTS §6에 규칙化. 리뷰 시 `grep -c "<input\|<textarea"` 와 `grep -c restoreFocus` 비교로 빠르게 감사 가능.
+
+---
+
+## E-37: melo "model_dir not found" — 로컬 TTS 모델을 한 번도 쓴 적이 없었음 (2026-06-11)
+
+**증상**: 기동마다 `model_dir not found: assets/models/melotts-ko — melo 자동 다운로드 경로 사용` 경고. 사용자는 이 지점에서 로딩이 오래 걸린다고 인지.
+**원인**: 3중 결함.
+1. `tts/builder.py`의 기본 `asset_root="assets/models"`가 **상대경로** — 런처가 다른 cwd에서 백엔드를 실행하면 경로가 빗나가 "not found". `cache_dir="cache"`도 동일(캐시 폴더가 실행 위치마다 생성됨).
+2. `melo_tts_engine.py`가 model_path를 **검증만 하고 로드에 사용하지 않음** — 경로를 찾아도 `MeloTTS(language="KR")`로 호출해 항상 HF 캐시 경로로 로딩. 로컬 모델 디렉토리는 장식이었다.
+3. `assets/models/melotts-ko/`의 실체가 깨져 있었음 — `config.json`이 2바이트 `{}`(복사 누락), `checkpoint.pth`는 HF 캐시본과 해시 불일치(손상 추정). 즉 (2)를 고쳐도 로드 불가능한 상태.
+**수정**:
+- 엔진에서 상대 model_dir/cache_dir을 `_project_root()` 기준으로 해석 (cwd 무관).
+- model_path 발견 시 `MeloTTS(config_path=..., ckpt_path=...)`로 **로컬 직접 로드** (HF 캐시/원격 조회 우회).
+- 모델 파일 복구: HF 캐시(`models--myshell-ai--MeloTTS-Korean`)에서 정상 config.json + checkpoint.pth 복사 (네트워크 불필요 — 지금까지 실제 동작하던 검증본).
+- 검증: cwd=C:\에서 init → 경고 없음, 로컬 로드, 합성 241KB wav 성공. tests/tts 57 passed.
+**교훈**:
+1. "경고 후 폴백으로 어쨌든 동작"하는 코드는 폴백이 영구 기본값이 된다 — 로컬 자산이 한 번도 안 쓰이고 있어도 아무도 모른다. 폴백 발동을 눈에 띄게 기록하고, 자산 배치를 주기적으로 검증할 것.
+2. 모델 자산 복사 후에는 파일 크기만 보지 말고 해시·로드 테스트로 무결성 확인.
+3. 참고: TTS 초기화 ~10-20초는 melo+다국어 BERT 로드 자체의 비용으로 이 수정과 무관하게 남는다. 더 줄이려면 lazy init(첫 사용 시 로드) 같은 구조 변경 필요.
+
+---
+
+## E-36: 일괄 업로드 "Network error" + 진행률 행 꼬임 + STT 미초기화 (2026-06-11)
+
+**증상**: (1) RFP 수십 건 일괄 업로드 중 일부 파일만 "Network error during upload", 일부는 0% 멈춤. (2) 회의록 탭 전사 시 "STT 엔진이 초기화되지 않았습니다".
+**원인**:
+1. Network error 자체는 코드 버그 아님 — 업로드 도중 백엔드가 재시작되던 시간대(13:37~38)에 전송된 파일들이 연결 거부된 것. 백엔드 access log 확인 결과 **도달한 업로드는 전원 201, 5xx 0건**. 실패 파일은 서버에 흔적이 없으므로 재업로드만 하면 됨(부분 상태 없음).
+2. 단, 조사 중 실버그 3건 발견:
+   - `DocumentsView.tsx` 업로드 목록이 **인덱스로 항목 제거/갱신** — 하나가 끝나 제거되면 나머지의 idx가 밀려 진행률·에러가 엉뚱한 행에 표시됨.
+   - `Promise.all`로 **전 파일 동시 업로드**(브라우저 6연결) — 대형 HWPX 파싱을 서버가 6개씩 동시 수행.
+   - 업로드 임베딩이 to_thread로 옮겨진 후(E-34) 동시 업로드 시 **같은 SentenceTransformer에 병렬 진입** 가능 — 스레드 안전성 미보장 + VRAM 스파이크.
+3. STT: Whisper 모델이 이 PC에 미배치(E-34 참고사항)였고 conf.yaml이 맥 시절 HF 캐시 경로를 가리킴.
+**수정**:
+- 업로드 목록을 id 기반 추적으로 변경 + `UPLOAD_CONCURRENCY=2` 워커 큐로 동시 업로드 제한. web/dist 재빌드.
+- `rag_routes.py`에 모듈 레벨 `_EMBED_LOCK`(threading.Lock)으로 임베딩 직렬화.
+- Whisper 모델 배치: `huggingface_hub.snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo')` → `assets/models/faster-whisper-large-v3-turbo/`(1.6GB), conf.yaml `model_path` 갱신. 검증: CUDA/float16 로드 + 실제 wav 전사("안녕하세요 테스트입니다") + 임시 포트(12394) 풀부팅에서 "ASR 초기화 실패" 0건.
+**교훈**:
+1. React 목록에서 항목이 제거되는 비동기 작업은 인덱스가 아니라 고유 id로 추적할 것.
+2. 파일 일괄 처리 UI는 동시성 상한을 둘 것 — 브라우저 연결 수가 서버 부하 상한이 되게 두면 안 된다.
+3. blocking 작업을 to_thread로 옮길 때는 **그 작업이 공유 자원(모델 인스턴스)을 쓰는지** 같이 검토할 것 — 이벤트 루프 블로킹이 사실상 락 역할을 하고 있었을 수 있다.
+4. 모델 검증은 임시 포트 풀부팅으로 — 사용 중인 포트(12393)와 충돌 없이 init 경로 전체를 확인할 수 있다.
+
+---
+
+## E-35: MeetingMinutesService 기동 실패 — 템플릿에 placeholder 미주입 (2026-06-11)
+
+**증상**: 시작 로그마다 `MeetingMinutesService 초기화 실패 (템플릿 오류): 필수 placeholder 누락: ['{{ATTENDEES}}', ...]` 경고. 회의록 생성 기능 비활성.
+**원인**: 코드 버그가 아니라 **배포 데이터 문제**. `data/Template/회의 결과보고 템플릿.hwpx`는 한글(HWP)로 만든 원본 양식 그대로였고(placeholder 0개), HwpxWriter는 회의록 생성 시 `{{TITLE}}` 등 11개 자리표시자를 찾아 치환하는 설계라 **`scripts/prepare_meeting_template.py`로 자리표시자를 주입한 가공본**이 필요하다. git에는 원본이 커밋돼 있어(2026-03-20) 새 머신 체크아웃에서는 가공 단계가 누락된 상태가 된다.
+**수정**: 원본을 `회의 결과보고 템플릿.원본백업.hwpx`로 백업 → `prepare_meeting_template.py` 실행(placeholder 11개 주입 + 견본 단락 6개 제거) → `HwpxWriter(Path(...))` 검증 통과 → 백엔드 재시작 후 `MeetingMinutesService 초기화 완료` 확인.
+**교훈**: 새 머신/체크아웃 셋업 시 `prepare_meeting_template.py` 1회 실행이 필수다. 템플릿 양식을 새 한글 파일로 교체할 때도 반드시 재실행할 것(스크립트는 단락 인덱스 하드코딩이라 양식 구조가 바뀌면 PLACEHOLDER_MAP 조정 필요).
+
+---
+
+## E-34: 폴더 일괄삭제 무반응 — Electron 미지원 prompt() + 이벤트 루프 블로킹 (2026-06-11)
+
+**증상**: 문서 탭에서 폴더 삭제 → 확인 다이얼로그에서 "확인"을 눌러도 아무 일도 일어나지 않음. 에러 표시도 없음.
+**원인**: 2중 결함.
+1. **프론트(직접 원인)**: `DocumentsView.tsx`의 폴더 삭제 2차 확인이 `window.prompt()`(폴더 이름 직접 입력)였는데, **Electron은 prompt()를 지원하지 않고 예외를 던진다.** 이 throw가 try 블록 밖이라 조용히 죽음 → DELETE 요청이 백엔드에 아예 전송되지 않음(백엔드 access log로 확인). 1차 `confirm()`은 Electron이 지원해서 다이얼로그가 떴기 때문에 "확인했는데 안 됨"으로 보였다.
+2. **백엔드(잠재 결함)**: 요청이 도달했더라도 `delete_folder`가 (a) async 라우트에서 블로킹 호출 직접 실행 → 이벤트 루프 점유로 채팅·TTS 포함 **앱 전체 정지**, (b) `to_arrow()`로 전체 테이블(벡터 포함, 28k행 ≈ 100MB+)을 로드한 뒤 문서별 `delete_by_doc_id` 반복 — 그 함수도 내부에서 또 전체 테이블 로드. 25문서 × 28k행이면 수 분 소요.
+**수정**:
+- `DocumentsView.tsx`: prompt() → 2차 confirm()으로 교체. web/dist 재빌드.
+- `VectorStore.delete_by_category()` 신설 — `count_rows(filter)` + 단일 predicate `delete()`. 27,841청크 삭제 실측 **0.06초**.
+- `delete_by_doc_id`도 `count_rows(filter)`로 교체 (전체 테이블 로드 제거).
+- `rag_routes.py`: 폴더 삭제·문서 목록·업로드(파싱+임베딩)를 `asyncio.to_thread`로 — 대형 작업 중에도 채팅이 멈추지 않음.
+- `_list_documents_from_store`: `search().select([3개 컬럼])`으로 벡터 로드 제거 (목록 조회 0.17초).
+- 부수 수정: loguru 사용 파일들의 `%s` 스타일 로그 호출 일괄 f-string 전환 (loguru는 %-포맷 미지원 → "%s"가 리터럴로 찍혀 **에러 내용이 전부 숨겨지고 있었음**. 이 수정으로 ASR 초기화 실패의 실제 원인이 처음 드러남 — E-34 참고사항: Whisper 모델 미배치).
+**교훈**:
+1. **Electron 렌더러에서 `window.prompt()` 절대 금지** — confirm/alert은 되지만 prompt는 예외를 던진다. 사용자 입력이 필요하면 인앱 모달로.
+2. async 라우트에서 무거운 sync 작업(임베딩·대량 삭제·전체 테이블 로드)을 직접 호출하면 단일 이벤트 루프가 멈춰 앱 전체가 정지한다. 반드시 `asyncio.to_thread`.
+3. LanceDB에서 개수 확인은 `count_rows(filter)`, 컬럼 일부 조회는 `search().select([...])` — `to_arrow()`는 벡터까지 전부 메모리에 올린다.
+4. loguru에 `logger.info("...%s", x)` 스타일을 쓰면 에러 없이 리터럴 "%s"가 찍힌다 — 진단 정보가 조용히 사라지므로 loguru 파일에선 f-string 필수.
+5. "포트 10048 바인드 실패 후 셧다운" 로그는 백엔드 이중 기동이다 — 기존 인스턴스를 먼저 종료할 것.
+
+---
+
+## E-33: 특수문자 파일명 문서 삭제 불가 — "doc_id not found" (2026-06-11)
+
+**증상**: 문서 탭에서 특정 문서 삭제 시 `doc_id '23. 기후변화에 따른 쌀 품질&' not found` 에러. 파일명이 잘린 채 서버에 전달됨.
+**원인**: 2중 결함.
+1. **프론트**: `web/src/services/api.ts`의 `deleteDocument`가 doc_id를 `encodeURIComponent` 없이 URL에 삽입 (바로 옆 `getDocumentDownloadUrl`은 인코딩함). doc_id는 파일명 기반(`{filename}_{uuid8}`)인데, 웹 포털에서 받은 파일은 이름에 `&#8729;` 같은 HTML 엔티티가 그대로 남아 있고, 그 안의 `#`이 URL fragment로 해석돼 doc_id가 `&`에서 잘려 전송 → 404.
+2. **백엔드(더 깊은 문제)**: 일부 업로드에서 multipart 파일명이 UTF-8 surrogateescape로 잘못 디코딩돼, 저장된 doc_id/doc_name에 **lone surrogate(0xDCxx)** 가 포함됨. 이 문자열은 UTF-8 인코딩 불가라 JS `encodeURIComponent`가 예외를 던지므로 프론트 수정만으론 해당 문서를 영영 삭제할 수 없었다.
+**수정**:
+- `api.ts`: `deleteDocument`/`renameFolder`/`deleteFolder`에 `encodeURIComponent` 추가. `ELECTRON_BUILD=1`로 web/dist 재빌드.
+- `rag_routes.py`: 업로드 시 `_sanitize_filename()` 추가 — surrogateescape 바이트 복구 → `html.unescape`(엔티티 → 실제 문자) → Windows 금지문자 제거. 신규 업로드에서 재발 차단.
+- 기존 오염 데이터: `scripts/repair_broken_doc_ids.py`(일회성)로 정리 — 사용자가 지우려던 문서는 삭제(183청크+원본), 나머지 2건은 doc_id/doc_name/text를 정상 문자열로 수리 후 동일 벡터로 재-upsert(재임베딩 불필요), 원본 디렉토리명도 동기화. **surrogate가 든 doc_id는 SQL where 문자열 비교도 위험하므로 ASCII-safe한 chunk_id(UUID) IN 절로 삭제**한 것이 포인트.
+**교훈**:
+1. 경로 파라미터에 사용자 유래 문자열(파일명 등)을 넣을 땐 프론트에서 반드시 `encodeURIComponent`. 한 API 파일 안에서 인코딩 여부가 함수마다 다르면 누락 의심.
+2. doc_id 같은 식별자에 원본 파일명을 그대로 쓰면 URL·SQL·JSON 세 군데서 각각 깨질 수 있다. 식별자에 들어가는 외부 문자열은 입구(업로드)에서 정규화할 것.
+3. 벡터 스토어 데이터 수리 시 벡터를 그대로 복사해 재-upsert하면 재임베딩 없이 메타데이터만 고칠 수 있다.
+4. 백엔드 재시작 직후 LanceDB 첫 조회가 옛 버전을 반환할 수 있다(매니페스트 캐싱 추정). 외부 프로세스에서 스토어를 수정했으면 재조회로 최종 확인.
+
+---
+
+## E-32: 개조식 문서(RFP) 업로드 시 청크 폭증 — 단락마다 1청크 (2026-06-10)
+
+**증상**: 개조식 문장으로 된 3페이지짜리 연구 RFP(HWPX)를 업로드했더니 청크가 ~140개 생성됨. 사실상 불릿 한 줄마다 청크 1개.
+**원인**: UI 업로드 경로(`app/rag_routes.py`)가 `DocumentIngest`/`chunk_segments`를 **쓰지 않고** 자체 인라인 청킹(`_chunk_text`, 500자 고정 윈도우)을 사용했다. 흐름이 (1) 파서가 단락(`<hp:p>`, HWPX는 개조식 한 줄 = 1단락)마다 세그먼트 1건 생성 → (2) 각 세그먼트를 독립적으로 `_chunk_text`에 통과시킴. 불릿 한 줄은 500자 미만이라 그대로 1청크가 되어, 단락 수 = 청크 수가 됐다. `chunk_chars` 누적 병합 로직이 단 한 번도 작동하지 않음(병합은 한 세그먼트 *안에서만* 일어나는데 세그먼트가 이미 한 줄짜리). 같은 내용이 PDF였다면 페이지=세그먼트라 정상적으로 묶였을 것 — 즉 포맷에 따라 청크 수가 10배 차이 나는 설계 결함.
+**수정**:
+- `document_ingest/segments.py`에 `chunk_meta_segments()` 추가 — 같은 page에 속한 인접 세그먼트를 `chunk_chars`까지 누적 병합(줄 구조는 `\n`로 보존), page가 바뀌면 병합 중단(출처 메타 보존), 단일 초과 세그먼트는 문장/하드 분할.
+- `rag_routes.py`의 업로드 핸들러가 `_chunk_text` 루프 대신 `chunk_meta_segments(meta_segments, chunk_chars=500, overlap_chars=50)` 호출하도록 교체. `_chunk_text` 제거.
+- 검증: 개조식 불릿 141줄 시뮬레이션 → 141청크에서 **15청크**로 감소, 페이지 메타 보존 확인.
+**교훈**: 청킹 구현이 3곳에 분산돼 있다 — `document_ingest/segments.py:chunk_segments`(디렉토리 인제스트용), `app/rag_routes.py`(UI 업로드용·실사용 경로), `knowledge/service.py:_chunk_text`(노트용). "청크가 이상하다"는 보고가 오면 **실제로 어느 경로가 임베딩하는지** 먼저 확인할 것. UI 업로드는 `rag_routes.py`다. 파서가 "단락 = 세그먼트"로 쪼개는 포맷(HWPX/DOCX)은 반드시 세그먼트 병합 청킹을 거쳐야 한다.
+
+---
+
 ## E-25: OpenAI 설정 후 대화가 여전히 Ollama로 가는 문제 (2026-05-02)
 
 **증상**: 설정에서 ChatGPT(OpenAI)로 전환·저장했는데 응답이 달라지지 않음.  

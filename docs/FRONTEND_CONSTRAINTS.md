@@ -65,3 +65,12 @@ npm run electron:dev
 # 절대 금지: 브라우저에서 테스트
 npm run dev  # 이 명령은 브라우저에서 열림
 ```
+
+---
+
+## 6. Electron 미지원 브라우저 API
+
+- **`window.prompt()` 절대 금지** — Electron은 prompt()를 지원하지 않고 예외(`prompt() is and will not be supported`)를 던진다. try 밖에서 호출하면 핸들러가 조용히 죽어 "버튼을 눌러도 아무 일도 안 일어나는" 버그가 된다 (ERROR_HISTORY E-34: 폴더 일괄삭제 무반응).
+- `window.confirm()` / `window.alert()`은 지원된다 — 단순 확인은 confirm으로, 텍스트 입력이 필요하면 인앱 모달 컴포넌트로 구현할 것.
+- API 경로에 사용자 유래 문자열(파일명 기반 doc_id 등)을 넣을 땐 반드시 `encodeURIComponent` (E-33: `#` 포함 파일명이 URL fragment로 잘림).
+- **키보드 입력을 받는 모든 `<input>`/`<textarea>`에 `onClick={() => window.electronAPI?.restoreFocus()}` 필수** — pet 모드에서 창이 `setFocusable(false)`라 DOM focus만으로는 타이핑이 안 된다. 코드로 `.focus()`를 호출하는 useEffect에서도 직전에 `restoreFocus()` 호출. 누락 감사: 컴포넌트별 `grep -c "<input\|<textarea"` vs `grep -c restoreFocus` 비교 (ERROR_HISTORY E-38).

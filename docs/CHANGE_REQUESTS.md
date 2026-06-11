@@ -1216,3 +1216,27 @@ async def complete_json(
       upstream diff 빈 상태.
 - [ ] `reviews/M_17_AgentInstructions_REVIEW.md` Critic PASS.
 </content>
+
+---
+
+## CR-06: 검색 품질·속도 업그레이드 — ANN 인덱스 + 리랭커 + 하이브리드 검색
+
+**상태**: APPROVED (2026-06-11, 사용자 대화 승인 — "리랭커랑 하이브리드 검색도 만들었으면 하는데")
+
+**배경**:
+RAG 코퍼스 증가(14k+ 청크)로 검색 지연 체감. E-40 분석 결과 무인덱스 LanceDB KNN의
+고정 오버헤드(~90ms)가 병목. 또한 유사 문서가 많은 코퍼스(업무편람 25부 등) 특성상
+1단계 벡터 검색만으로는 정밀도 한계.
+
+**내용** (3종 세트, 모두 로컬·오프라인, LLM 무관):
+1. **IVF-PQ ANN 인덱스**: 벡터 검색 95ms → 41ms. nprobes=128 + refine_factor=30으로
+   실측 recall@8 100% (실제 한국어 쿼리 10개 기준, E-40). 코퍼스 증가에도 검색 시간 유지.
+2. **리랭커**: BAAI/bge-reranker-v2-m3 (cross-encoder, ~2.3GB, GPU). 벡터 검색
+   상위 후보를 질문-청크 쌍으로 정밀 재채점 후 top_k 선별. LLM 설정과 무관.
+3. **하이브리드 검색**: LanceDB FTS(BM25) + 벡터 검색을 RRF로 융합. 고유명사·코드
+   등 정확 키워드 질의 보강. 모델 불필요.
+
+**설정**: conf.yaml `app.rag_*` 플래그 (rerank/hybrid on-off, 후보 수). UI 설정 불필요.
+모델 미배치 시 해당 단계 자동 skip (graceful degradation).
+
+**스펙**: specs/M_18_SearchUpgrade_SPEC.md

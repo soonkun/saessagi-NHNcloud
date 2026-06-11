@@ -457,6 +457,7 @@ Phase 1 산출물. 구현은 Phase 2에서 이 계약대로만 이루어진다.
 | M_13 | MeetingMinutes | NEW | ✅ DONE | M_05 (GemmaChatAgent.complete_json), CR-MM-A |
 | M_15 | KnowledgeService | NEW | ✅ DONE | M_07 VectorSearch |
 | M_16 | IntentGate | NEW | ✅ DONE (E2E 검증: calendar_add/doc_query/work_query 실데이터 확인) | M_05 GemmaChatAgent.complete_json, M_07 VectorSearch (소스 필터 보강) |
+| M_18 | SearchUpgrade (ANN 인덱스+리랭커+하이브리드) | NEW | ✅ DONE (실측: retrieve 259ms, recall@8 100%, 키워드 쿼리 적중 확인 — CR-06/E-40) | M_07 VectorSearch, bge-reranker-v2-m3 |
 
 ---
 
