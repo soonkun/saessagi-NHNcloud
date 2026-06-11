@@ -133,10 +133,7 @@ class IdleMonitor:
         # 폴링 Task 생성
         self._task = loop.create_task(self._poll_loop())
         self._started = True
-        logger.info(
-            "IdleMonitor started with backend=%s",
-            type(self._backend).__name__,
-        )
+        logger.info(f"IdleMonitor started with backend={type(self._backend).__name__}")
 
     async def stop(self) -> None:
         """폴링 Task 취소 + 백엔드 훅 정리.
@@ -162,7 +159,7 @@ class IdleMonitor:
             try:
                 self._backend.stop()
             except Exception as exc:  # noqa: BLE001
-                logger.warning("backend.stop() 오류 (무시): %s", exc)
+                logger.warning(f"backend.stop() 오류 (무시): {exc!r}")
 
         self._started = False
         logger.info("IdleMonitor stopped")
@@ -264,7 +261,7 @@ class IdleMonitor:
                     # idle→active는 UX상 조용한 복귀 — 이벤트 emit 없음
 
         except Exception as exc:  # noqa: BLE001
-            logger.error("IdleMonitor._tick 내부 예외: %s", exc, exc_info=True)
+            logger.opt(exception=True).error(f"IdleMonitor._tick 내부 예외: {exc!r}")
 
     # ------------------------------------------------------------------
     # 내부 메서드
@@ -288,7 +285,7 @@ class IdleMonitor:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.warning("idle callback raised: %s", exc, exc_info=True)
+            logger.opt(exception=True).warning(f"idle callback raised: {exc!r}")
 
     async def _poll_loop(self) -> None:
         """1초 주기 폴링 루프."""

@@ -604,7 +604,7 @@ async def _save_prompt(
         conf.write_text(encoding="utf-8",data=
             yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
         )
-        logger.info("M_17: agent_prompts.%s 저장 완료 (길이=%d)", key, len(prompt))
+        logger.info(f"M_17: agent_prompts.{key} 저장 완료 (길이={len(prompt)})")
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
 
@@ -615,7 +615,7 @@ async def _save_prompt(
             if agent_prompts_obj is not None:
                 setattr(agent_prompts_obj, key, prompt)
         except Exception as exc:
-            logger.warning("in-memory agent_prompts 갱신 실패: %s", exc)
+            logger.warning(f"in-memory agent_prompts 갱신 실패: {exc!r}")
         if key == "meeting_minutes":
             app_cfg.meeting_minutes_prompt = prompt
 
@@ -624,7 +624,7 @@ async def _save_prompt(
         try:
             ctx.character_config.persona_prompt = prompt
         except Exception as exc:
-            logger.warning("character_config.persona_prompt 갱신 실패: %s", exc)
+            logger.warning(f"character_config.persona_prompt 갱신 실패: {exc!r}")
 
     # ctx 부재 시 conf_only
     if ctx is None:
@@ -657,9 +657,9 @@ async def _save_prompt(
         try:
             char_cfg = ctx.character_config
             await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
-            logger.info("M_17: %s 저장 후 agent 재초기화 완료", key)
+            logger.info(f"M_17: {key} 저장 후 agent 재초기화 완료")
         except Exception as exc:
-            logger.error("M_17: %s agent 재초기화 실패: %s", key, exc)
+            logger.error(f"M_17: {key} agent 재초기화 실패: {exc!r}")
             raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
 
         is_custom_val: bool | None = None if key == "persona" else True

@@ -177,10 +177,8 @@ class ProactiveDispatcher:
 
         self._started = True
         logger.info(
-            "ProactiveDispatcher started: morning=%s, cooldown=%dmin, dnd=%s",
-            self._morning_time,
-            self._cooldown_min,
-            self._dnd_enabled,
+            f"ProactiveDispatcher started: morning={self._morning_time}, "
+            f"cooldown={self._cooldown_min}min, dnd={self._dnd_enabled}"
         )
 
     async def stop(self) -> None:
@@ -195,12 +193,12 @@ class ProactiveDispatcher:
             try:
                 self._scheduler.shutdown(wait=False)
             except Exception as exc:
-                logger.warning("APScheduler shutdown 오류 (무시): %s", exc)
+                logger.warning(f"APScheduler shutdown 오류 (무시): {exc!r}")
 
         try:
             self._idle_monitor.on_event(None)
         except Exception as exc:
-            logger.warning("idle_monitor.on_event(None) 오류 (무시): %s", exc)
+            logger.warning(f"idle_monitor.on_event(None) 오류 (무시): {exc!r}")
 
         self._started = False
         logger.info("ProactiveDispatcher stopped")
@@ -250,11 +248,11 @@ class ProactiveDispatcher:
             try:
                 await self._send_text(payload)
             except Exception as exc:
-                logger.error("send_text 실패: topic=%s, exc=%s", topic, exc)
+                logger.error(f"send_text 실패: topic={topic}, exc={exc!r}")
                 return False
 
             self._last_emitted_at[topic] = now
-            logger.info("emit success: topic=%s", topic)
+            logger.info(f"emit success: topic={topic}")
             return True
 
     def set_dnd(self, enabled: bool) -> None:
@@ -269,7 +267,7 @@ class ProactiveDispatcher:
             raise TypeError(f"enabled must be bool, got {type(enabled)!r}")
         self._dnd_enabled = enabled
         self._idle_monitor.set_dnd(enabled)
-        logger.info("DND set to %s", enabled)
+        logger.info(f"DND set to {enabled}")
 
     # ------------------------------------------------------------------
     # 내부 잡 함수
@@ -290,7 +288,7 @@ class ProactiveDispatcher:
                 lambda: self._calendar.get_events(today_start, today_end),
             )
         except Exception as exc:
-            logger.error("morning_briefing: get_events 실패: %s", exc)
+            logger.error(f"morning_briefing: get_events 실패: {exc!r}")
             return
 
         event_list = [
@@ -315,7 +313,7 @@ class ProactiveDispatcher:
                 lambda: self._calendar.events_due_within(self._reminder_lead_minutes),
             )
         except Exception as exc:
-            logger.error("events_due_within 실패: %s", exc)
+            logger.error(f"events_due_within 실패: {exc!r}")
             return
 
         if not events:

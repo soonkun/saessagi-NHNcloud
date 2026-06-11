@@ -75,13 +75,16 @@ def _set_offline_env_vars() -> None:
     )
 
 
-def _ensure_cache_dir(cache_dir: str) -> None:
-    """캐시 디렉토리가 없으면 생성한다."""
+def _ensure_cache_dir(cache_dir: str) -> str:
+    """캐시 디렉토리를 (상대경로면 프로젝트 루트 기준으로 해석해) 생성하고 반환한다."""
+    if not os.path.isabs(cache_dir):
+        cache_dir = os.path.join(_project_root(), cache_dir)
     try:
         os.makedirs(cache_dir, exist_ok=True)
     except OSError as exc:
         logger.error("Failed to create cache_dir %s: %s", cache_dir, exc)
         raise TTSInitError(f"cache dir not writable: {cache_dir}") from exc
+    return cache_dir
 
 
 class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
@@ -118,9 +121,13 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
         """
         # 1. model_dir 검증 (설정된 경우에만; melo는 HF Hub 캐시에서 자동 로딩)
         model_path = Path(model_dir) if model_dir else None
+        if model_path is not None and not model_path.is_absolute():
+            # 상대경로는 프로젝트 루트 기준으로 해석 — 런처가 다른 cwd에서 백엔드를
+            # 실행하면 'assets/models/melotts-ko'가 빗나가 로컬 모델을 못 찾았다 (E-37).
+            model_path = Path(_project_root()) / model_path
         if model_path is not None:
             if not model_path.exists() or not model_path.is_dir():
-                logger.warning("model_dir not found: %s — melo 자동 다운로드 경로 사용", model_dir)
+                logger.warning("model_dir not found: %s — melo 자동 다운로드 경로 사용", model_path)
                 model_path = None
             else:
                 missing_files = [f for f in MELO_REQUIRED_FILES if not (model_path / f).exists()]
@@ -177,7 +184,19 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
             raise TTSInitError(f"Failed to import melo.api.TTS: {exc}") from exc
 
         try:
-            model = MeloTTS(language="KR", device=resolved_device)
+            if model_path is not None:
+                # 로컬 모델 직접 로드 — HF Hub 캐시/원격 조회를 완전히 우회한다.
+                # (기존 코드는 model_path를 검증만 하고 로드에 쓰지 않아, 항상
+                #  HF 캐시 경로로 로딩됐다 — E-37)
+                logger.info("MeloTTS 로컬 모델 로드: %s", model_path)
+                model = MeloTTS(
+                    language="KR",
+                    device=resolved_device,
+                    config_path=str(model_path / "config.json"),
+                    ckpt_path=str(model_path / "checkpoint.pth"),
+                )
+            else:
+                model = MeloTTS(language="KR", device=resolved_device)
         except Exception as exc:
             logger.error("MeloTTS init failed: %s", exc)
             raise TTSInitError(str(exc)) from exc
@@ -202,8 +221,8 @@ class MeloTTSEngine(TTSInterface):  # type: ignore[misc]
                 raise TTSInitError(f"speaker_id out of range: {speaker_id} (max: {max_id})")
             resolved_speaker_id = speaker_id
 
-        # 캐시 디렉토리 생성
-        _ensure_cache_dir(cache_dir)
+        # 캐시 디렉토리 생성 (상대경로면 프로젝트 루트 기준으로 정규화됨)
+        cache_dir = _ensure_cache_dir(cache_dir)
 
         # 인스턴스 속성 저장
         self.model_dir = str(model_path.resolve()) if model_path is not None else ""

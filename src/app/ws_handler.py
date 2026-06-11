@@ -296,7 +296,7 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
         try:
             dispatcher.set_dnd(enabled)
         except Exception as exc:
-            logger.error("set-dnd dispatcher failed: %s", exc)
+            logger.error(f"set-dnd dispatcher failed: {exc!r}")
             await websocket.send_json({"type": "error", "message": "set-dnd: dispatcher failed"})
             return
 
