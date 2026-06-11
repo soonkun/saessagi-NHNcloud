@@ -84,9 +84,12 @@ function loadLlmInfo(): LlmInfo | null {
 interface ChatSlice {
   messages: Message[];
   aiStatus: AiStatus;
+  /** 진행 상태 말풍선 텍스트 ("문서를 찾아보고 있어요…" 등). null이면 비표시 */
+  agentStatus: string | null;
   isMicOn: boolean;
   addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
   setAiStatus: (status: AiStatus) => void;
+  setAgentStatus: (text: string | null) => void;
   setMicOn: (on: boolean) => void;
   clearMessages: () => void;
   attachCitations: (messageId: string, citedDocs: import("./types").CitedDoc[]) => void;
@@ -157,6 +160,7 @@ export const useStore = create<AppStore>((set) => ({
   // Chat
   messages: [],
   aiStatus: "idle",
+  agentStatus: null,
   isMicOn: false,
   addMessage: (msg) => {
     const id = nextId();
@@ -165,10 +169,15 @@ export const useStore = create<AppStore>((set) => ({
         ...state.messages,
         { ...msg, id, timestamp: Date.now() },
       ],
+      // AI 답변이 표시되는 순간 진행 상태 말풍선은 치운다
+      ...(msg.role === "ai" ? { agentStatus: null } : {}),
     }));
     return id;
   },
-  setAiStatus: (status) => set({ aiStatus: status }),
+  // idle 전환 시 진행 상태도 함께 정리 (대화 종료·에러·타임아웃 전 경로 공통)
+  setAiStatus: (status) =>
+    set(status === "idle" ? { aiStatus: status, agentStatus: null } : { aiStatus: status }),
+  setAgentStatus: (text) => set({ agentStatus: text }),
   setMicOn: (on) => set({ isMicOn: on }),
   clearMessages: () => set({ messages: [] }),
   attachCitations: (messageId, citedDocs) =>

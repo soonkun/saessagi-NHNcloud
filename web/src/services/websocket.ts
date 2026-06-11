@@ -361,6 +361,8 @@ function dispatch(msg: WsIncomingMessage): void {
         stopAudio();
         cancelLocalSpeech();
         store.setAiStatus("thinking");
+        // 백엔드 첫 상태 이벤트 도착 전까지의 즉각 피드백
+        store.setAgentStatus("생각하고 있어요…");
         clearThinkingTimer();
         thinkingTimer = setTimeout(() => {
           store.setAiStatus("idle");
@@ -431,6 +433,13 @@ function dispatch(msg: WsIncomingMessage): void {
       break;
 
     case "tool_call_status":
+      // 진행 상태 이벤트 — 백엔드가 단계별로 보내는 동적 상태 ("문서를 찾는 중…" 등)
+      if (msg.tool_name === "_agent_status") {
+        if (msg.status === "running" && typeof msg.content === "string") {
+          store.setAgentStatus(msg.content);
+        }
+        break;
+      }
       // 노트 저장 도구 완료 시 목록 자동 새로고침 — 항상 도달하는 신뢰 신호.
       // (완료 메시지에 [[note:slug]] 마커가 없을 수도 있으므로 이 경로가 주력)
       if (msg.tool_name === "save_knowledge_note") {

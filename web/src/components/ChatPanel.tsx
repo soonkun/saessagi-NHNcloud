@@ -92,6 +92,7 @@ export function ChatContent({
 } = {}): React.ReactElement {
   const messages = useStore((s) => s.messages);
   const aiStatus = useStore((s) => s.aiStatus);
+  const agentStatus = useStore((s) => s.agentStatus);
   const addMessage = useStore((s) => s.addMessage);
   const llmInfo = useStore((s) => s.llmInfo);
   const setChatTab = useStore((s) => s.setChatTab);
@@ -118,7 +119,7 @@ export function ChatContent({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, agentStatus]);
 
   useEffect(() => {
     setTimeout(() => inputRef.current?.focus(), 50);
@@ -597,6 +598,30 @@ export function ChatContent({
             </div>
           </div>
         ))}
+        {/* 진행 상태 말풍선 — 백엔드가 보내는 단계별 상태 ("문서를 찾는 중…" 등) */}
+        {agentStatus && (
+          <div className="msg-enter" style={{ display: "flex", justifyContent: "flex-start" }}>
+            <div
+              style={{
+                maxWidth: "80%",
+                padding: "8px 12px",
+                borderRadius: "12px 12px 12px 4px",
+                background: "var(--color-msg-ai)",
+                border: "1px dashed var(--color-border)",
+                fontSize: 13,
+                lineHeight: 1.5,
+                color: "var(--color-text-muted)",
+                fontStyle: "italic",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span className="status-blink" style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-accent)", display: "inline-block", flexShrink: 0 }} />
+              {agentStatus}
+            </div>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 

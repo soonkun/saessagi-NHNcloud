@@ -109,6 +109,8 @@ export interface WsToolCallStatusMessage {
   tool_id: string;
   tool_name: string;
   status: "running" | "completed" | "error";
+  /** tool_name="_agent_status"일 때 진행 상태 문구 ("문서를 찾아보고 있어요…" 등) */
+  content?: string;
 }
 
 export interface WsBackendSynthComplete {

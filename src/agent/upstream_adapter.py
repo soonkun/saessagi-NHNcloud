@@ -38,6 +38,31 @@ _RAG_TRIGGER_RE = re.compile(
 _MIN_INJECTION_SCORE = 0.50
 
 
+def _status_event(text: str) -> dict[str, Any]:
+    """프론트 진행 상태 말풍선용 이벤트.
+
+    upstream single_conversation은 type=="tool_call_status"인 dict만 WS로 중계하므로
+    그 채널을 재사용한다. tool_name="_agent_status"로 실제 도구 이벤트와 구분.
+    """
+    return {
+        "type": "tool_call_status",
+        "status": "running",
+        "tool_id": "agent-status",
+        "tool_name": "_agent_status",
+        "content": text,
+    }
+
+
+# 도구 호출 시작 → 진행 상태 문구 (save_knowledge_note는 별도 안내 메시지 경로 유지)
+_TOOL_STATUS_TEXT: dict[str, str] = {
+    "search_docs": "문서를 검색하고 있어요…",
+    "create_meeting_minutes": "회의록을 만들고 있어요…",
+    "add_event": "일정을 등록하고 있어요…",
+    "get_events": "일정을 확인하고 있어요…",
+    "take_screenshot": "화면을 확인하고 있어요…",
+}
+
+
 def _format_rag_context(hits: list[dict[str, Any]]) -> str:
     """RAG 검색 결과를 LLM 주입용 텍스트로 포맷.
 
@@ -404,6 +429,9 @@ def _make_adapter_class() -> type:
             ).strip()
             has_attachment = "[첨부 자료:" in user_text_for_classify
 
+            # 진행 상태 1: 의도 분류는 LLM 1회 호출(~1초)이라 먼저 알린다
+            yield _status_event("질문을 살펴보고 있어요…")
+
             if self._intent_classifier is not None and user_text_for_classify.strip():
                 try:
                     from intent_gate import decide_with_confidence
@@ -446,8 +474,27 @@ def _make_adapter_class() -> type:
             else:
                 self._last_routing = None
 
+            # 진행 상태 2: 문서 검색이 일어날 턴이면 알린다 (_augment 내부 조건과 동일 취지)
+            will_search = self._rag_service is not None and (
+                has_attachment
+                or (
+                    self._last_routing is not None
+                    and not self._last_routing.autonomous
+                    and self._last_routing.inject_rag
+                )
+                or (
+                    (self._last_routing is None or self._last_routing.autonomous)
+                    and self._should_trigger_rag(user_text_for_classify)
+                )
+            )
+            if will_search:
+                yield _status_event("관련 문서를 찾아보고 있어요…")
+
             # Proactive RAG 적용 (M_16 변경 3~5는 _augment_with_rag 내부에서 처리)
             input_data = await self._augment_with_rag(input_data)
+
+            # 진행 상태 3: LLM 생성 시작 — 가장 긴 구간
+            yield _status_event("답변을 작성하고 있어요…")
 
             text_parts: list[str] = []
             note_saved = False  # 이번 턴에 업무 노트 저장이 일어났는가
@@ -457,6 +504,9 @@ def _make_adapter_class() -> type:
                     if event.text:
                         text_parts.append(event.text)
                 elif isinstance(event, ToolCallStart):
+                    # 진행 상태: 도구 실행 단계를 알린다
+                    if event.name in _TOOL_STATUS_TEXT:
+                        yield _status_event(_TOOL_STATUS_TEXT[event.name])
                     yield {
                         "type": "tool_call_start",
                         "tool_id": event.tool_id,
@@ -483,6 +533,8 @@ def _make_adapter_class() -> type:
                         "tool_name": event.name,
                         "content": event.content,
                     }
+                    # 도구 완료 → LLM이 결과를 정리하는 구간으로 복귀
+                    yield _status_event("답변을 작성하고 있어요…")
                 elif isinstance(event, EndOfTurn):
                     break
                 elif isinstance(event, AgentError):
