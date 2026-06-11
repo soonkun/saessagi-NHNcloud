@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import html
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,13 +24,67 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/rag", tags=["rag"])
 
 _ALLOWED_SUFFIXES = {".txt", ".md", ".pdf", ".docx", ".pptx", ".hwpx", ".markdown"}
-_CHUNK_SIZE = 500
-_CHUNK_OVERLAP = 50
+# app_config 부재 시(테스트 등) fallback. 실제 값은 conf.yaml app.rag_chunk_chars/overlap.
+_CHUNK_SIZE = 800
+_CHUNK_OVERLAP = 100
 
 _ROOT = Path(os.environ.get("SAESSAGI_ROOT", "."))
 _FOLDERS_FILE = _ROOT / "data" / "rag_folders.json"
 _ORIGINALS_DIR = _ROOT / "data" / "rag_originals"
 _NO_FOLDER_BUCKET = "__no_folder__"
+
+
+# Windows 파일명 금지 문자 (HTML 엔티티 디코딩 후 나올 수 있음)
+_INVALID_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# 임베딩 직렬화 락 — 프론트가 파일 여러 개를 동시 업로드하면(동시 6연결 관측)
+# to_thread로 옮긴 임베딩이 같은 SentenceTransformer 인스턴스에 병렬 진입한다.
+# 모델 호출은 스레드 안전이 보장되지 않고 VRAM 스파이크도 생기므로 1개씩 처리.
+_EMBED_LOCK = threading.Lock()
+
+# 업로드/삭제 후 컴팩션 디바운스 태스크 (E-40)
+_optimize_task: "asyncio.Task[None] | None" = None
+
+
+def _schedule_store_optimize(store: Any, delay_seconds: float = 60.0) -> None:
+    """마지막 업로드/삭제 후 delay_seconds 뒤에 컴팩션 1회 실행 (디바운스).
+
+    일괄 업로드 중에는 매 요청이 타이머를 리셋하므로, 배치가 끝나고 잠잠해진
+    시점에 한 번만 돈다. 컴팩션 없이 업서트·삭제가 누적되면 작은 프래그먼트가
+    수백 개로 늘어 검색이 느려진다 (E-40).
+    """
+    global _optimize_task
+    if _optimize_task is not None and not _optimize_task.done():
+        _optimize_task.cancel()
+
+    async def _run() -> None:
+        try:
+            await asyncio.sleep(delay_seconds)
+            await asyncio.to_thread(store.optimize)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("store optimize 실패 (무시): %s", exc)
+
+    _optimize_task = asyncio.create_task(_run())
+
+
+def _sanitize_filename(raw: str) -> str:
+    """업로드 파일명 정규화.
+
+    웹 포털에서 받은 파일은 이름에 HTML 엔티티(&#8729; 등)가 그대로 남아 있는 경우가
+    있다. 이 엔티티의 '#'이 doc_id에 들어가면 URL fragment로 해석되는 등 문제를
+    일으키므로 실제 문자로 디코딩하고, 디코딩 결과의 Windows 금지 문자는 제거한다.
+    """
+    # multipart 파싱이 UTF-8 파일명을 surrogateescape로 잘못 디코딩한 경우 복구.
+    # (복구하지 않으면 doc_id가 UTF-8 인코딩 불가 문자열이 되어 URL/JSON 모두 깨진다)
+    try:
+        raw = raw.encode("utf-8", "surrogateescape").decode("utf-8")
+    except UnicodeError:
+        raw = raw.encode("utf-8", "replace").decode("utf-8")
+    name = html.unescape(raw).strip()
+    name = _INVALID_FILENAME_CHARS_RE.sub("", name)
+    return name or "upload"
 
 
 def _folder_bucket(folder_id: str | None) -> Path:
@@ -121,7 +179,8 @@ class DeleteResponse(BaseModel):
 def _load_folders() -> list[dict[str, str]]:
     if _FOLDERS_FILE.exists():
         try:
-            return json.loads(_FOLDERS_FILE.read_text(encoding="utf-8"))
+            data = json.loads(_FOLDERS_FILE.read_text(encoding="utf-8"))
+            return data if isinstance(data, list) else []
         except Exception:
             return []
     return []
@@ -159,18 +218,6 @@ def _chunk_with_meta(text: str, doc_name: str, page: int | None) -> str:
     if page is not None:
         return f"[출처: {doc_name}, {page}페이지] {text}"
     return f"[출처: {doc_name}] {text}"
-
-
-def _chunk_text(text: str, size: int = _CHUNK_SIZE, overlap: int = _CHUNK_OVERLAP) -> list[str]:
-    if not text:
-        return []
-    chunks: list[str] = []
-    start = 0
-    while start < len(text):
-        end = start + size
-        chunks.append(text[start:end])
-        start += size - overlap
-    return [c for c in chunks if c.strip()]
 
 
 def _parse_to_meta_segments(filename: str, data: bytes) -> list[tuple[str, int | None]]:
@@ -217,24 +264,22 @@ def _parse_to_meta_segments(filename: str, data: bytes) -> list[tuple[str, int |
 
 def _list_documents_from_store(store: Any) -> list[DocumentInfo]:
     try:
-        import pyarrow as pa
-
-        arrow_tbl: pa.Table = store._tbl.to_arrow()
-        if arrow_tbl.num_rows == 0:
+        # 필요한 3개 컬럼만 select — to_arrow()는 1024차원 벡터까지 전부
+        # 메모리에 올려(수만 청크 기준 100MB+) 목록 조회마다 수 초가 걸렸다.
+        rows: list[dict[str, Any]] = (
+            store._tbl.search()
+            .select(["doc_id", "doc_name", "category"])
+            .limit(1_000_000)
+            .to_list()
+        )
+        if not rows:
             return []
 
-        doc_ids = arrow_tbl.column("doc_id").to_pylist()
-        doc_names = arrow_tbl.column("doc_name").to_pylist()
-
-        # category 컬럼은 없을 수도 있음 (구 스키마 호환)
-        categories: list[Any]
-        if "category" in arrow_tbl.schema.names:
-            categories = arrow_tbl.column("category").to_pylist()
-        else:
-            categories = [None] * arrow_tbl.num_rows
-
         seen: dict[str, DocumentInfo] = {}
-        for doc_id, doc_name, category in zip(doc_ids, doc_names, categories):
+        for row in rows:
+            doc_id = row["doc_id"]
+            doc_name = row["doc_name"]
+            category = row.get("category")
             # M_15: __knowledge__ 카테고리는 문서 탭에서 제외 (노트 탭에서 별도 관리)
             if category == "__knowledge__":
                 continue
@@ -318,18 +363,12 @@ async def delete_folder(
         rag = _require_rag(ctx)
         store = getattr(rag, "store", None) or getattr(rag, "_store", None)
         if store is not None:
-            # 청크 삭제 실패 시 폴더 레지스트리 삭제도 중단 (고아 청크 방지)
-            import pyarrow as pa
-
-            arrow_tbl: pa.Table = store._tbl.to_arrow()
-            if arrow_tbl.num_rows > 0 and "category" in arrow_tbl.schema.names:
-                doc_ids_col = arrow_tbl.column("doc_id").to_pylist()
-                categories_col = arrow_tbl.column("category").to_pylist()
-                target_doc_ids = {
-                    doc_id for doc_id, cat in zip(doc_ids_col, categories_col) if cat == folder_id
-                }
-                for did in target_doc_ids:
-                    deleted_chunks += store.delete_by_doc_id(did)
+            # 청크 삭제 실패 시 폴더 레지스트리 삭제도 중단 (고아 청크 방지).
+            # category 단일 predicate 일괄 삭제 + to_thread —
+            # 문서별 반복 삭제(테이블 전체 스캔 × 문서 수)는 수만 청크에서 이벤트
+            # 루프를 수 분간 점유해 앱 전체가 멈췄다 (E-34).
+            deleted_chunks = await asyncio.to_thread(store.delete_by_category, folder_id)
+            _schedule_store_optimize(store)
 
     folders = _load_folders()
     _save_folders([f for f in folders if f["folder_id"] != folder_id])
@@ -376,7 +415,7 @@ async def upload_document(request: Request) -> UploadResponse:
     ctx = _get_context(request)
     rag = _require_rag(ctx)
 
-    filename = file.filename or "upload"
+    filename = _sanitize_filename(file.filename or "upload")
     suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
     if suffix not in _ALLOWED_SUFFIXES:
         raise HTTPException(
@@ -405,30 +444,42 @@ async def upload_document(request: Request) -> UploadResponse:
 
     data = await file.read()
     try:
-        meta_segments = _parse_to_meta_segments(filename, data)
+        # 파싱은 CPU-bound — 이벤트 루프 점유 방지
+        meta_segments = await asyncio.to_thread(_parse_to_meta_segments, filename, data)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"텍스트 추출 실패: {exc}")
 
     if not meta_segments:
         raise HTTPException(status_code=422, detail="문서에서 텍스트를 추출할 수 없습니다")
 
-    # 각 세그먼트를 청킹하되 page 메타를 청크마다 보존
-    chunk_metas: list[tuple[str, int | None]] = []
-    for seg_text, seg_page in meta_segments:
-        for c in _chunk_text(seg_text):
-            chunk_metas.append((c, seg_page))
+    # 인접한 짧은 세그먼트(개조식 불릿 등)를 chunk_chars까지 병합해 청킹한다.
+    # page가 다르면 병합하지 않으므로 출처 페이지 메타는 청크마다 보존된다.
+    from document_ingest.segments import chunk_meta_segments
+
+    app_cfg = getattr(ctx, "app_config", None)
+    chunk_metas: list[tuple[str, int | None]] = chunk_meta_segments(
+        meta_segments,
+        chunk_chars=getattr(app_cfg, "rag_chunk_chars", _CHUNK_SIZE),
+        overlap_chars=getattr(app_cfg, "rag_chunk_overlap", _CHUNK_OVERLAP),
+    )
 
     if not chunk_metas:
         raise HTTPException(status_code=422, detail="청킹 결과가 비어있습니다")
 
     doc_id = f"{filename}_{uuid.uuid4().hex[:8]}"
 
-    try:
+    store = getattr(rag, "_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="vector store unavailable")
+
+    def _embed_and_upsert() -> None:
+        """임베딩 + upsert (blocking) — to_thread로 실행해 채팅/TTS가 멈추지 않게 한다."""
         from vector_search.types import DocumentChunk
 
         embedder = rag._embedder
         texts = [c for c, _ in chunk_metas]
-        vectors: np.ndarray[Any, np.dtype[np.float32]] = embedder.embed_passages(texts)
+        with _EMBED_LOCK:
+            vectors: np.ndarray[Any, np.dtype[np.float32]] = embedder.embed_passages(texts)
 
         doc_chunks = [
             DocumentChunk(
@@ -444,16 +495,17 @@ async def upload_document(request: Request) -> UploadResponse:
             )
             for chunk_text, seg_page in chunk_metas
         ]
-
-        store = getattr(rag, "_store", None)
-        if store is None:
-            raise HTTPException(status_code=503, detail="vector store unavailable")
         store.upsert(doc_chunks, vectors)
+
+    try:
+        await asyncio.to_thread(_embed_and_upsert)
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("upload_document error: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
+
+    _schedule_store_optimize(store)
 
     # 청크 upsert 성공 후에만 원본 저장 — 다운로드용
     try:
@@ -495,7 +547,7 @@ async def list_documents(request: Request) -> list[DocumentInfo]:
             logger.error("list_documents via list_documents() error: %s", exc)
             raise HTTPException(status_code=500, detail=str(exc))
 
-    return _list_documents_from_store(store)
+    return await asyncio.to_thread(_list_documents_from_store, store)
 
 
 @router.get("/documents/{doc_id}/download")
@@ -538,6 +590,7 @@ async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
 
     # 청크 삭제 성공 시 원본도 정리 (디렉토리 부재 OK)
     _delete_original(doc_id)
+    _schedule_store_optimize(store)
 
     logger.info("delete_document: doc_id=%s, deleted=%d", doc_id, deleted)
     return DeleteResponse(ok=True, deleted_chunks=deleted)

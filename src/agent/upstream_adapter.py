@@ -120,6 +120,8 @@ def _make_adapter_class() -> type:
             rag_service: Any = None,
             intent_classifier: Any = None,  # IntentClassifier | None (M_16)
             prompt_provider: Callable[[], Mapping[str, str]] | None = None,  # M_17
+            tts_brief_enabled: bool = True,
+            tts_brief_max_chars: int = 80,
         ) -> None:
             super().__init__()
             self._agent = agent
@@ -127,6 +129,9 @@ def _make_adapter_class() -> type:
             self._intent_classifier = intent_classifier  # M_16: IntentClassifier | None
             # M_17: lazy 지침 조회 클로저. None이면 {} 취급 → M_16 기존 동작과 동일
             self._prompt_provider = prompt_provider
+            # 긴 답변은 전체 낭독 대신 완료 멘트만 말한다 (사용자 요청 2026-06-11)
+            self._tts_brief_enabled = tts_brief_enabled
+            self._tts_brief_max_chars = tts_brief_max_chars
             self._pending_tasks: set[asyncio.Task[None]] = set()
             # 직전 턴에서 실제 주입한 RAG 문서의 권위 마커 (chat에서 display_text에 부착)
             self._last_cited_markers: list[str] = []
@@ -233,7 +238,7 @@ def _make_adapter_class() -> type:
             if attached_doc_ids:
                 attached_chunks = await asyncio.get_event_loop().run_in_executor(
                     None,
-                    lambda: self._fetch_attached_chunks(attached_doc_ids, per_doc_limit=5),
+                    lambda: self._fetch_attached_chunks(attached_doc_ids, per_doc_limit=30),
                 )
                 logger.info(
                     "첨부 청크 자동 주입: doc_ids=%s, chunks=%d",
@@ -498,9 +503,24 @@ def _make_adapter_class() -> type:
                 # 노트 저장 완료 메시지엔 [neutral] 태그를 붙여 작성 중 캐릭터를 복귀시킨다.
                 if note_saved:
                     display = f"[neutral] {display}"
+
+                # 긴 답변은 전체 낭독 대신 완료 멘트만 (짧은 답변·인사는 그대로 읽음).
+                # 본문은 채팅창에 그대로 표시되므로 사용자가 직접 읽는다.
+                tts_out = clean_text
+                if self._tts_brief_enabled and len(clean_text) > self._tts_brief_max_chars:
+                    if note_saved:
+                        tts_out = "업무 노트 저장이 완료되었어요. 내용을 확인해 주세요."
+                    elif markers:
+                        tts_out = "자료 확인이 완료되었어요. 내용을 확인해 주세요."
+                    else:
+                        tts_out = "답변 작성이 완료되었어요. 내용을 확인해 주세요."
+                    logger.debug(
+                        "TTS 요약 모드: 본문 %d자 → 완료 멘트로 대체", len(clean_text)
+                    )
+
                 yield SentenceOutput(
                     display_text=DisplayText(text=display, name="AI"),
-                    tts_text=clean_text,
+                    tts_text=tts_out,
                     actions=Actions(),
                 )
 

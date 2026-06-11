@@ -1,16 +1,40 @@
 # src/vector_search/rag.py
-"""RagService: Embedder + VectorStore 파사드 (M_07 §4.7, §6.3, §7)."""
+"""RagService: Embedder + VectorStore 파사드 (M_07 §4.7, §6.3, §7 + M_18 파이프라인)."""
 
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from .embedder import Embedder
 from .store import VectorStore
 from .types import RetrievalResult, SearchHit
 
+if TYPE_CHECKING:
+    from .reranker import Reranker
+
 logger = logging.getLogger(__name__)
+
+# RRF(Reciprocal Rank Fusion) 상수 — 관례값 60
+_RRF_K: int = 60
+
+
+def _rrf_fuse(vec_hits: list[SearchHit], fts_hits: list[SearchHit]) -> list[SearchHit]:
+    """벡터·FTS 결과를 RRF로 융합한다 (M_18 §3.3).
+
+    chunk_id 기준 1/(k+rank) 합산 후 내림차순. 동일 청크는 벡터 유래 SearchHit을
+    우선 보존한다 (cosine score 유지 — found 판정 의미 보존).
+    """
+    scores: dict[str, float] = {}
+    keep: dict[str, SearchHit] = {}
+    for rank, h in enumerate(vec_hits):
+        scores[h.chunk_id] = scores.get(h.chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+        keep.setdefault(h.chunk_id, h)
+    for rank, h in enumerate(fts_hits):
+        scores[h.chunk_id] = scores.get(h.chunk_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+        keep.setdefault(h.chunk_id, h)
+    ordered = sorted(scores.items(), key=lambda kv: -kv[1])
+    return [keep[cid] for cid, _ in ordered]
 
 
 class RagService:
@@ -22,6 +46,9 @@ class RagService:
         min_score:  "관련 없음" 판정 임계값. 기본 0.35 (스펙 §6.3.2).
                     conf.yaml의 `rag.min_score`로 덮어쓸 수 있다.
         top_k_max:  retrieve 호출의 top_k 상한. 기본 20. (JSON Schema와 일치)
+        reranker:   M_18 cross-encoder 리랭커. None이면 벡터 순서 그대로.
+        hybrid_enabled:    M_18 FTS(BM25) 융합 사용 여부.
+        rerank_candidates: 리랭커/융합에 넣을 벡터 후보 수. 기본 30.
     """
 
     def __init__(
@@ -30,12 +57,24 @@ class RagService:
         store: VectorStore,
         min_score: float = 0.35,
         top_k_max: int = 20,
+        reranker: "Reranker | None" = None,
+        hybrid_enabled: bool = False,
+        rerank_candidates: int = 30,
     ) -> None:
         self._embedder = embedder
         self._store = store
         self._min_score = min_score
         self._top_k_max = top_k_max
-        logger.info("RagService 초기화 완료: min_score=%.2f, top_k_max=%d", min_score, top_k_max)
+        self._reranker = reranker
+        self._hybrid_enabled = hybrid_enabled
+        self._rerank_candidates = rerank_candidates
+        logger.info(
+            "RagService 초기화 완료: min_score=%.2f, top_k_max=%d, reranker=%s, hybrid=%s",
+            min_score,
+            top_k_max,
+            "on" if reranker else "off",
+            "on" if hybrid_enabled else "off",
+        )
 
     def retrieve(
         self,
@@ -84,19 +123,40 @@ class RagService:
         # 4. 임베딩
         query_vec = self._embedder.embed_query(query)
 
-        # 5. 검색 (M_16: source 파라미터 전달)
-        hits = self._store.search(query_vec, top_k=top_k, category=category, source=source)
+        # 5. 검색 (M_16: source 파라미터 전달; M_18: 후보 확장 → 융합 → 리랭크)
+        use_rerank = self._reranker is not None
+        candidates_n = max(top_k, self._rerank_candidates) if use_rerank else top_k
+        vec_hits = self._store.search(
+            query_vec, top_k=candidates_n, category=category, source=source
+        )
+
+        candidates = vec_hits
+        if self._hybrid_enabled:
+            try:
+                fts_hits = self._store.search_text(
+                    query, top_k=candidates_n, category=category, source=source
+                )
+                candidates = _rrf_fuse(vec_hits, fts_hits)[:candidates_n]
+            except Exception as exc:
+                logger.warning("FTS 검색 실패 — 벡터 단독 진행: %s", exc)
+
+        if use_rerank and self._reranker is not None:
+            hits = self._reranker.rerank(query, candidates, top_k)
+        else:
+            hits = candidates[:top_k]
 
         # 6, 7. found 판정 및 no_match_reason 생성 (스펙 §6.3.2)
-        if len(hits) > 0 and hits[0].score >= self._min_score:
+        # M_18: found는 기존 의미 유지 — 벡터 검색 1위의 cosine score 기준.
+        # (리랭커/FTS는 순서만 바꾸고 "관련 문서 존재 여부" 판정을 바꾸지 않는다)
+        if len(vec_hits) > 0 and vec_hits[0].score >= self._min_score:
             found = True
             no_match_reason = None
         else:
             found = False
-            if len(hits) == 0:
+            if len(vec_hits) == 0:
                 no_match_reason = "등록된 문서에서 관련 내용을 찾지 못했습니다"
             else:
-                top_score = hits[0].score
+                top_score = vec_hits[0].score
                 no_match_reason = (
                     f"등록된 문서에서 관련 내용을 찾지 못했습니다 "
                     f"(최고 유사도 {top_score:.2f} < {self._min_score:.2f})"

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from collections.abc import Awaitable, Callable
@@ -107,8 +108,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             super().init_asr(asr_config)
         except Exception as exc:
             logger.warning(
-                "ASR 초기화 실패 (모델 미배치 등): %s. 음성 입력 없이 텍스트 채팅만 동작합니다.",
-                exc,
+                f"ASR 초기화 실패 (모델 미배치 등): {exc!r}. 음성 입력 없이 텍스트 채팅만 동작합니다."
             )
             self.asr_engine = None  # type: ignore[assignment]
 
@@ -158,9 +158,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 logger.info("TTS engine initialized via build_tts_engine")
             except TTSInitError as exc:
                 logger.warning(
-                    "TTSInitError: TTS engine init failed: %s. "
-                    "Text chat will continue without TTS.",
-                    exc,
+                    f"TTSInitError: TTS engine init failed: {exc!r}. "
+                    "Text chat will continue without TTS."
                 )
                 self.tts_engine = None  # type: ignore[assignment]
             self.character_config.tts_config = tts_config
@@ -169,9 +168,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 super().init_tts(tts_config)
             except Exception as exc:
                 logger.warning(
-                    "TTS 초기화 실패 (패키지/모델 미설치): %s. "
-                    "Text chat will continue without TTS.",
-                    exc,
+                    f"TTS 초기화 실패 (패키지/모델 미설치): {exc!r}. "
+                    "Text chat will continue without TTS."
                 )
                 self.tts_engine = None  # type: ignore[assignment]
 
@@ -347,7 +345,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     if _ic_custom and _ic_custom.strip():
                         _intent_prompt_override = _ic_custom
                 except Exception as _ic_exc:
-                    logger.debug("intent_classify override 조회 실패 (무시): %s", _ic_exc)
+                    logger.debug(f"intent_classify override 조회 실패 (무시): {_ic_exc!r}")
 
                 if intent_cfg.provider == IntentGateProviderKind.SAME_AS_CHAT:
                     # 메인 대화 에이전트의 complete_json을 재사용
@@ -360,9 +358,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=same_as_chat, model=%s, custom_prompt=%s)",
-                        self.app_config.ollama.model,
-                        "yes" if _intent_prompt_override else "no",
+                        f"(provider=same_as_chat, model={self.app_config.ollama.model}, "
+                        f"custom_prompt={'yes' if _intent_prompt_override else 'no'})"
                     )
                 elif intent_cfg.provider == IntentGateProviderKind.OLLAMA:
                     from agent.builder import build_chat_agent
@@ -389,9 +386,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=ollama, model=%s, custom_prompt=%s)",
-                        intent_cfg.ollama_model,
-                        "yes" if _intent_prompt_override else "no",
+                        f"(provider=ollama, model={intent_cfg.ollama_model}, "
+                        f"custom_prompt={'yes' if _intent_prompt_override else 'no'})"
                     )
                 elif intent_cfg.provider == IntentGateProviderKind.OPENAI:
                     from agent.builder import build_chat_agent
@@ -424,19 +420,18 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     )
                     logger.info(
                         "AppServiceContext.init_agent: IntentClassifier 배선 완료 "
-                        "(provider=openai, model=%s, custom_prompt=%s)",
-                        intent_cfg.openai_model,
-                        "yes" if _intent_prompt_override else "no",
+                        f"(provider=openai, model={intent_cfg.openai_model}, "
+                        f"custom_prompt={'yes' if _intent_prompt_override else 'no'})"
                     )
                 else:
                     self.intent_classifier = None
                     logger.warning(
-                        "AppServiceContext.init_agent: 알 수 없는 intent_gate.provider=%s → 비활성",
-                        intent_cfg.provider,
+                        "AppServiceContext.init_agent: "
+                        f"알 수 없는 intent_gate.provider={intent_cfg.provider} → 비활성"
                     )
             except Exception as exc:
                 logger.warning(
-                    "AppServiceContext.init_agent: IntentClassifier 조립 실패 (비활성): %s", exc
+                    f"AppServiceContext.init_agent: IntentClassifier 조립 실패 (비활성): {exc!r}"
                 )
                 self.intent_classifier = None
 
@@ -454,6 +449,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             rag_service=self.rag_service,
             intent_classifier=self.intent_classifier,  # M_16
             prompt_provider=_prompt_provider,  # M_17
+            tts_brief_enabled=self.app_config.tts_brief_enabled if self.app_config else True,
+            tts_brief_max_chars=self.app_config.tts_brief_max_chars if self.app_config else 80,
         )
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 
@@ -578,14 +575,40 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
             bge_model_dir = str(Path(app_config.paths.assets_dir) / "models" / "bge-m3")
             vector_store_dir = app_config.paths.vector_store_dir
+            # M_18: 리랭커 (모델 미배치 시 None — graceful degradation)
+            reranker = None
+            if app_config.rag_rerank_enabled:
+                try:
+                    from vector_search.reranker import Reranker
+
+                    reranker_dir = str(
+                        Path(app_config.paths.assets_dir) / "models" / "bge-reranker-v2-m3"
+                    )
+                    reranker = Reranker(model_dir=reranker_dir, device=app_config.rag_device)
+                except Exception as exc:
+                    logger.warning(f"리랭커 비활성 (모델 미배치 등): {exc}")
+
+            store = VectorStore(db_path=vector_store_dir)
             self.rag_service = RagService(
-                embedder=Embedder(model_dir=bge_model_dir),
-                store=VectorStore(db_path=vector_store_dir),
+                embedder=Embedder(
+                    model_dir=bge_model_dir,
+                    device=app_config.rag_device,
+                    batch_size=app_config.rag_embed_batch_size,
+                ),
+                store=store,
                 min_score=app_config.rag_min_score,
+                reranker=reranker,
+                hybrid_enabled=app_config.rag_hybrid_enabled,
+                rerank_candidates=app_config.rag_rerank_candidates,
             )
             logger.info(
-                "RagService 초기화 완료: model=%s, store=%s", bge_model_dir, vector_store_dir
+                f"RagService 초기화 완료: model={bge_model_dir}, store={vector_store_dir}, "
+                f"device={app_config.rag_device}, batch={app_config.rag_embed_batch_size}, "
+                f"reranker={'on' if reranker else 'off'}, hybrid={app_config.rag_hybrid_enabled}"
             )
+
+            # M_18: 인덱스 생성은 수 초 걸릴 수 있어 기동 비차단 백그라운드로
+            asyncio.get_running_loop().run_in_executor(None, store.ensure_indices)
         except Exception as exc:
             logger.warning(f"rag_service 초기화 실패 (search_docs 비활성화): {exc}")
             self.rag_service = None
@@ -616,8 +639,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         )
         self.tool_router_adapter = ToolRouterAdapter(self.tool_router)
         logger.info(
-            "ToolRouter/ToolRouterAdapter 조립 완료 (screenshot=%s)",
-            "available" if self.screenshot_service is not None else "unavailable",
+            "ToolRouter/ToolRouterAdapter 조립 완료 "
+            f"(screenshot={'available' if self.screenshot_service is not None else 'unavailable'})"
         )
 
         # M-10: IdleMonitor 초기화 (스펙 §13.1)
@@ -755,7 +778,7 @@ def _make_prompt_provider(
                 "knowledge_note": note,
             }
         except Exception as _exc:
-            logger.debug("prompt_provider 조회 실패 (무시): %s", _exc)
+            logger.debug(f"prompt_provider 조회 실패 (무시): {_exc!r}")
             return {}
 
     return _prompt_provider

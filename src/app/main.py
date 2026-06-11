@@ -41,15 +41,21 @@ def create_app(config_path: str = "") -> FastAPI:
     from .service_context import AppServiceContext
     from .server import AppWebSocketServer
 
-    from .hardware import detect as detect_hw, apply_to_config as hw_apply, log_summary as hw_log
+    from .hardware import (
+        detect as detect_hw,
+        apply_to_config as hw_apply,
+        apply_to_app_config as hw_apply_app,
+        log_summary as hw_log,
+    )
 
     # 1. 설정 로딩
     full_config = load_full_config(config_path)
 
-    # 1b. 하드웨어 자동 감지 → upstream ASR/TTS 설정 오버라이드
+    # 1b. 하드웨어 자동 감지 → upstream ASR/TTS + app RAG 설정 오버라이드
     hw = detect_hw()
     hw_log(hw)
     hw_apply(full_config.upstream, hw)
+    hw_apply_app(full_config.app, hw)
 
     # 2. URL 화이트리스트 검증 (ASR/TTS/LLM 로딩보다 먼저)
     enforce_private_url(full_config.app.ollama.base_url, field_name="OLLAMA_BASE_URL")

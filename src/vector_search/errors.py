@@ -16,3 +16,7 @@ class VectorStoreError(VectorSearchError):
 
 class RetrievalError(VectorSearchError):
     """RagService 상위 파사드에서 발생하는 조합 실패(예: embedder 결과 NaN)."""
+
+
+class RerankerError(VectorSearchError):
+    """bge-reranker 로드·추론 실패 (M_18)."""

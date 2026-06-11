@@ -170,6 +170,124 @@ def _chunk_segment(
     return result
 
 
+# 개조식 머리기호 패턴 (불릿/번호/한글 항목). 병합 청킹에서 항목 경계 인식용.
+_BULLET_RE = re.compile(
+    r"^\s*(?:"
+    r"[-*•·▪◦○●◯□■◻◼☐▶▷◆◇~]"  # 기호 불릿
+    r"|[\(（]?[0-9０-９]+[.)）]"  # 1) 1. (1)
+    r"|[\(（]?[①-⑳㉑-㉟]"  # 원숫자
+    r"|[\(（]?[가-힣][.)）]"  # 가. 나) (다)
+    r"|[ⓐ-ⓩ]|[a-zA-Z][.)]"  # a. b)
+    r")\s*"
+)
+
+
+def _split_oversized(text: str, chunk_chars: int) -> list[str]:
+    """단일 세그먼트가 chunk_chars를 초과할 때 문장→하드 분할로 잘게 나눈다."""
+    out: list[str] = []
+    cur: list[str] = []
+
+    def join_cur() -> str:
+        return " ".join(cur).strip()
+
+    for sentence in _split_sentences(text):
+        if len(sentence) > chunk_chars:
+            if cur:
+                out.append(join_cur())
+                cur = []
+            out.extend(_hard_split(sentence, chunk_chars))
+            continue
+        sep = 1 if cur else 0
+        if cur and len(join_cur()) + sep + len(sentence) > chunk_chars:
+            out.append(join_cur())
+            cur = []
+        cur.append(sentence)
+    if cur:
+        out.append(join_cur())
+    return [o for o in (s.strip() for s in out) if o]
+
+
+def chunk_meta_segments(
+    meta_segments: list[tuple[str, int | None]],
+    chunk_chars: int = 800,
+    overlap_chars: int = 100,
+    min_chunk_chars: int = 10,
+) -> list[tuple[str, int | None]]:
+    """(text, page) 메타 세그먼트들을 병합·청킹한다.
+
+    개조식 문서는 파서가 단락(불릿 한 줄)마다 세그먼트를 1건씩 내보내므로,
+    이를 그대로 청크로 쓰면 한 줄 = 한 청크가 되어 청크가 폭증한다(예: 3페이지 140청크).
+    이 함수는 **같은 page에 속한 인접 세그먼트를 chunk_chars까지 누적 병합**해
+    "한 소제목 아래 불릿 묶음"이 한 청크에 들어가도록 한다.
+
+    - page가 바뀌면 병합하지 않는다 → 출처 페이지 메타 보존.
+    - 줄 구조 유지를 위해 세그먼트는 "\n"으로 이어 붙인다(개조식 가독성).
+    - 단일 세그먼트가 chunk_chars를 넘으면 문장/하드 분할로 잘게 나눈다.
+    - overlap_chars > 0이면 직전 청크의 마지막 줄들을 overlap_chars 한도까지 다음 청크 앞에 재포함.
+    - 병합 후에도 min_chunk_chars 미만인 청크는 버린다.
+
+    Args:
+        meta_segments: (텍스트, 페이지|None) 튜플 리스트. 파서 출력 그대로.
+        chunk_chars:   청크 목표 크기(문자). 구조 문서는 300~500도 적합.
+        overlap_chars: 청크 간 오버랩 크기.
+        min_chunk_chars: 이보다 짧은 청크는 폐기.
+
+    Returns:
+        병합·청킹된 (텍스트, 페이지|None) 리스트. page는 입력 세그먼트의 값을 전파.
+    """
+    result: list[tuple[str, int | None]] = []
+    buf: list[str] = []
+    buf_page: int | None = None
+
+    def joined(lines: list[str]) -> str:
+        return "\n".join(lines).strip()
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            text = joined(buf)
+            if len(text) >= min_chunk_chars:
+                result.append((text, buf_page))
+            buf = []
+
+    for raw_text, seg_page in meta_segments:
+        seg_text = (raw_text or "").strip()
+        if not seg_text:
+            continue
+
+        # page 경계 → 병합 중단
+        if buf and seg_page != buf_page:
+            flush()
+
+        # 단일 세그먼트가 너무 큼 → 독립 분할
+        if len(seg_text) > chunk_chars:
+            flush()
+            for part in _split_oversized(seg_text, chunk_chars):
+                if len(part) >= min_chunk_chars:
+                    result.append((part, seg_page))
+            continue
+
+        # 추가 시 초과 → 현재 버퍼 flush 후 오버랩 재시드
+        if buf and len(joined(buf + [seg_text])) > chunk_chars:
+            prev = list(buf)
+            flush()
+            if overlap_chars > 0:
+                overlap_lines: list[str] = []
+                for line in reversed(prev):
+                    if len(joined([line, *overlap_lines])) <= overlap_chars:
+                        overlap_lines.insert(0, line)
+                    else:
+                        break
+                buf = overlap_lines
+
+        if not buf:
+            buf_page = seg_page
+        buf.append(seg_text)
+
+    flush()
+    return result
+
+
 def chunk_segments(
     segments: list[_Segment],
     chunk_chars: int,

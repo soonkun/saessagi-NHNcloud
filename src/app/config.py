@@ -56,6 +56,27 @@ class TtsConfig(BaseModel):
     melo: MeloTtsSubConfig = Field(default_factory=MeloTtsSubConfig)
     xtts: XttsV2SubConfig = Field(default_factory=XttsV2SubConfig)
 
+    @model_validator(mode="after")
+    def _resolve_relative_paths(self) -> "TtsConfig":
+        """SAESSAGI_ROOT 기준으로 상대경로를 절대경로로 변환 (PathsConfig와 동일 정책).
+
+        런처가 백엔드를 다른 cwd에서 실행하면 'assets/models/melotts-ko' 같은
+        상대경로가 빗나가 로컬 모델을 못 찾고 자동 다운로드 경로로 빠진다.
+        """
+        root = os.environ.get("SAESSAGI_ROOT")
+        if not root:
+            return self
+        base = Path(root)
+        if self.cache_dir and not Path(self.cache_dir).is_absolute():
+            self.cache_dir = str(base / self.cache_dir)
+        if self.speaker_refs_dir and not Path(self.speaker_refs_dir).is_absolute():
+            self.speaker_refs_dir = str(base / self.speaker_refs_dir)
+        if self.melo.model_dir and not Path(self.melo.model_dir).is_absolute():
+            self.melo.model_dir = str(base / self.melo.model_dir)
+        if self.xtts.model_dir and not Path(self.xtts.model_dir).is_absolute():
+            self.xtts.model_dir = str(base / self.xtts.model_dir)
+        return self
+
 
 # ---------------------------------------------------------------------------
 
@@ -239,6 +260,76 @@ class AppConfig(BaseModel):
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)
+    rag_device: str = Field(
+        default="auto",
+        description=(
+            "BGE-M3 임베딩 디바이스. 'auto'=CUDA>MPS>CPU 자동 감지, 'cuda'/'mps'/'cpu' 강제. "
+            "GPU 추론 실패 시 런타임에 CPU로 자동 fallback."
+        ),
+    )
+    rag_embed_batch_size: int = Field(
+        default=32,
+        ge=1,
+        le=256,
+        description=(
+            "BGE-M3 임베딩 배치 크기. hardware.py가 시작 시 VRAM 기준으로 자동 조정한다 "
+            "(SAESSAGI_NO_HW_ADAPT=1로 비활성화 가능)."
+        ),
+    )
+    rag_chunk_chars: int = Field(
+        default=800,
+        ge=100,
+        le=4000,
+        description=(
+            "문서 업로드 청크 크기(문자). 검색 품질 기준으로 정하는 값이며 하드웨어와 무관. "
+            "한국어 업무 문서 기준 500~1000 권장."
+        ),
+    )
+    rag_chunk_overlap: int = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        description="청크 간 오버랩 크기(문자). rag_chunk_chars보다 작아야 한다.",
+    )
+    rag_rerank_enabled: bool = Field(
+        default=True,
+        description=(
+            "M_18 cross-encoder 리랭커 사용 여부. 모델(assets/models/bge-reranker-v2-m3) "
+            "미배치 시 자동으로 꺼진다."
+        ),
+    )
+    rag_rerank_candidates: int = Field(
+        default=30,
+        ge=8,
+        le=100,
+        description="리랭커/하이브리드 융합에 넣을 벡터 검색 후보 수.",
+    )
+    rag_hybrid_enabled: bool = Field(
+        default=True,
+        description="M_18 하이브리드 검색(FTS BM25 + RRF 융합) 사용 여부.",
+    )
+    tts_brief_enabled: bool = Field(
+        default=True,
+        description=(
+            "긴 답변을 전부 음성으로 읽지 않고 '~ 완료되었어요. 내용을 확인해 주세요' "
+            "완료 멘트만 말한다. 짧은 답변(tts_brief_max_chars 이하)은 그대로 읽음."
+        ),
+    )
+    tts_brief_max_chars: int = Field(
+        default=80,
+        ge=20,
+        le=500,
+        description="이 길이(문자)를 넘는 답변은 완료 멘트로 대체. 기본 80자(약 8초 분량).",
+    )
+
+    @model_validator(mode="after")
+    def _validate_rag_chunk(self) -> "AppConfig":
+        if self.rag_chunk_overlap >= self.rag_chunk_chars:
+            raise ValueError(
+                f"rag_chunk_overlap({self.rag_chunk_overlap})은 "
+                f"rag_chunk_chars({self.rag_chunk_chars})보다 작아야 합니다"
+            )
+        return self
     screenshot_continuous_interval_sec: int = Field(default=5, ge=1, le=60)
     meeting_download_base_url: str = Field(
         default="http://127.0.0.1:12393",
@@ -360,8 +451,8 @@ def _migrate_meeting_minutes_prompt(app_config: "AppConfig") -> None:
         # in-memory만 갱신
         app_config.agent_prompts.meeting_minutes = old_val
         logger.info(
-            "M_17 마이그레이션: meeting_minutes_prompt → agent_prompts.meeting_minutes (길이=%d)",
-            len(old_val),
+            f"M_17 마이그레이션: meeting_minutes_prompt → agent_prompts.meeting_minutes "
+            f"(길이={len(old_val)})"
         )
 
 

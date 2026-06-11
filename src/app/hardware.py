@@ -30,12 +30,15 @@ class HardwareProfile:
     # 권장 TTS 설정
     tts_device: str
 
+    # 권장 RAG 임베딩 배치 크기 (BGE-M3). VRAM이 클수록 배치를 키워 처리량 확보.
+    embed_batch_size: int
+
 
 def _get_ram_gb() -> float:
     try:
         import psutil
 
-        return psutil.virtual_memory().total / (1024**3)
+        return float(psutil.virtual_memory().total) / (1024**3)
     except Exception:
         return 0.0
 
@@ -58,7 +61,7 @@ def _has_mps() -> bool:
     try:
         import torch
 
-        return torch.backends.mps.is_available()  # type: ignore[attr-defined]
+        return bool(torch.backends.mps.is_available())
     except Exception:
         return False
 
@@ -70,6 +73,17 @@ def detect() -> HardwareProfile:
     ram_gb = _get_ram_gb()
     has_cuda, cuda_vram_gb, cuda_device_name = _get_cuda_info()
     mps_ok = _has_mps()
+
+    # ── RAG 임베딩 배치 크기 결정 ────────────────────────────────────────────
+    # 청크 크기는 검색 품질 기준이라 하드웨어에 연동하지 않는다. 배치만 VRAM에 연동.
+    if has_cuda and cuda_vram_gb >= 16:
+        embed_batch_size = 128
+    elif has_cuda and cuda_vram_gb >= 6:
+        embed_batch_size = 64
+    elif has_cuda or mps_ok:
+        embed_batch_size = 32
+    else:
+        embed_batch_size = 16
 
     # ── Whisper 설정 결정 ────────────────────────────────────────────────────
     if has_cuda:
@@ -118,6 +132,7 @@ def detect() -> HardwareProfile:
         whisper_device=whisper_device,
         whisper_compute_type=whisper_compute_type,
         tts_device=tts_device,
+        embed_batch_size=embed_batch_size,
     )
 
 
@@ -157,6 +172,25 @@ def apply_to_config(upstream_config: Any, hw: HardwareProfile) -> None:
         logger.warning(f"HW adapt TTS 오버라이드 실패: {exc}")
 
 
+def apply_to_app_config(app_config: Any, hw: HardwareProfile) -> None:
+    """app_config의 RAG 임베딩 배치 크기를 하드웨어 프로파일에 맞게 오버라이드한다.
+
+    conf.yaml 값보다 우선 적용(ASR/TTS adapt와 동일 정책).
+    SAESSAGI_NO_HW_ADAPT=1 환경변수로 비활성화.
+    """
+    import os
+
+    if os.environ.get("SAESSAGI_NO_HW_ADAPT", "").strip() == "1":
+        logger.info("SAESSAGI_NO_HW_ADAPT=1 — RAG 하드웨어 자동 설정 비활성화")
+        return
+
+    try:
+        app_config.rag_embed_batch_size = hw.embed_batch_size
+        logger.info(f"HW adapt RAG: embed_batch_size={hw.embed_batch_size}")
+    except (AttributeError, ValueError) as exc:
+        logger.warning(f"HW adapt RAG 오버라이드 실패: {exc}")
+
+
 def log_summary(hw: HardwareProfile) -> None:
     """감지된 하드웨어 정보를 로그로 출력한다."""
     gpu_info = (
@@ -170,4 +204,5 @@ def log_summary(hw: HardwareProfile) -> None:
     logger.info(
         f"권장 설정: Whisper={hw.whisper_model}/{hw.whisper_device}"
         f"/{hw.whisper_compute_type} TTS_device={hw.tts_device}"
+        f" embed_batch={hw.embed_batch_size}"
     )
