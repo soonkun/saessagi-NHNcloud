@@ -279,6 +279,7 @@ function AddEventModal({
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={inputStyle}
             placeholder="이벤트 제목"
             autoFocus
@@ -316,6 +317,7 @@ function AddEventModal({
             type="number"
             value={duration}
             onChange={(e) => setDuration(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={inputStyle}
             min={1}
           />
@@ -326,6 +328,7 @@ function AddEventModal({
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={{ ...inputStyle, resize: "vertical", minHeight: 64 }}
             placeholder="선택 사항"
           />

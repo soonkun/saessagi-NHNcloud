@@ -345,6 +345,7 @@ export function MeetingView(): React.ReactElement {
           <textarea
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={{
               background: "var(--color-bg)", border: "1px solid var(--color-border)",
               borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
@@ -394,6 +395,7 @@ export function MeetingView(): React.ReactElement {
         <textarea
           value={step2Input}
           onChange={(e) => setStep2Input(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
           placeholder="녹취 텍스트 붙여넣기 (또는 1단계 결과 자동 입력)"
           style={{
             background: "var(--color-bg)", border: "1px solid var(--color-border)",
@@ -423,6 +425,7 @@ export function MeetingView(): React.ReactElement {
           <textarea
             value={meetingNotes}
             onChange={(e) => setMeetingNotes(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             style={{
               background: "var(--color-bg)", border: "1px solid var(--color-border)",
               borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
@@ -458,6 +461,7 @@ export function MeetingView(): React.ReactElement {
         <textarea
           value={step3Input}
           onChange={(e) => setStep3Input(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
           placeholder="회의록 내용 붙여넣기 (또는 2단계 결과 자동 입력)"
           style={{
             background: "var(--color-bg)", border: "1px solid var(--color-border)",

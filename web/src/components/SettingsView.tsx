@@ -610,6 +610,7 @@ export function SettingsView({
               type="text"
               value={openaiKey}
               onChange={(e) => setOpenaiKey(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
               onMouseDown={(e) => e.stopPropagation()}
               onCopy={(e) => e.preventDefault()}
               onCut={(e) => e.preventDefault()}
@@ -1193,6 +1194,7 @@ export function SettingsView({
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
+          onClick={() => window.electronAPI?.restoreFocus()}
           onKeyDown={(e) => {
             if (e.key === "Enter") handleSave();
           }}

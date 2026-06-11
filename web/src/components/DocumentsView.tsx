@@ -43,11 +43,18 @@ function isAllowed(file: File): boolean {
   return ALLOWED_EXTS.includes(ext) || ALLOWED_MIME.includes(file.type);
 }
 
+type UploadStatus = "waiting" | "uploading" | "processing" | "done" | "error";
+
 interface UploadItem {
+  id: string; // 진행률/제거를 인덱스가 아닌 id로 추적 (인덱스는 항목 제거 시 밀림)
   name: string;
-  progress: number; // 0-100, -1=error
+  progress: number; // 0-100 (전송 진행률)
+  status: UploadStatus; // 전송 100% 후 서버 파싱·임베딩 동안은 processing
   error?: string;
 }
+
+// 동시 업로드 제한 — 전 파일 동시 전송 시 서버가 대형 HWPX 파싱을 6개씩 떠안는다
+const UPLOAD_CONCURRENCY = 2;
 
 // ────────────────────────────────────────────────────────────
 // FolderRow
@@ -68,7 +75,12 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) {
+      // pet 모드에서 창이 setFocusable(false) 상태면 DOM focus()만으로는
+      // 키보드 입력이 전달되지 않는다 (E-23/E-27) — 창 포커스부터 복구.
+      window.electronAPI?.restoreFocus();
+      inputRef.current?.focus();
+    }
   }, [editing]);
 
   // 부모에서 이름이 바뀌면 인풋 값 동기화
@@ -147,6 +159,7 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
             ref={inputRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
             onKeyDown={(e) => {
               if (e.key === "Enter") void commitRename();
               if (e.key === "Escape") cancelRename();
@@ -252,7 +265,11 @@ export function DocumentsView(): React.ReactElement {
   }, [load]);
 
   useEffect(() => {
-    if (addingFolder) newFolderInputRef.current?.focus();
+    if (addingFolder) {
+      // pet 모드 setFocusable(false) 대응 — 창 포커스 복구 후 input focus (E-23/E-27)
+      window.electronAPI?.restoreFocus();
+      newFolderInputRef.current?.focus();
+    }
   }, [addingFolder]);
 
   // ── 파일 업로드 ──────────────────────────────────────────
@@ -263,29 +280,52 @@ export function DocumentsView(): React.ReactElement {
 
     const { setEmotion, setIsUploading } = useStore.getState();
     const folderId = targetFolderId || null;
-    const startIdx = uploads.length;
-    setUploads((prev) => [...prev, ...arr.map((f) => ({ name: f.name, progress: 0 }))]);
+    const items = arr.map((f) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file: f,
+    }));
+    setUploads((prev) => [
+      ...prev,
+      ...items.map(({ id, file }) => ({
+        id,
+        name: file.name,
+        progress: 0,
+        status: "waiting" as UploadStatus,
+      })),
+    ]);
     setIsUploading(true);
     setEmotion("study");
 
+    const patch = (id: string, p: Partial<UploadItem>): void =>
+      setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...p } : u)));
+
     let successCount = 0;
     try {
-      await Promise.all(
-        arr.map(async (file, i) => {
-          const idx = startIdx + i;
+      const queue = [...items];
+      async function worker(): Promise<void> {
+        for (;;) {
+          const item = queue.shift();
+          if (!item) return;
+          const { id, file } = item;
+          patch(id, { status: "uploading" });
           try {
             const doc = await uploadDocument(file, folderId, (pct) => {
-              setUploads((prev) => prev.map((u, j) => (j === idx ? { ...u, progress: pct } : u)));
+              // 전송 100% 이후에는 서버가 파싱·임베딩 중 (응답 대기)
+              patch(id, { progress: pct, status: pct >= 100 ? "processing" : "uploading" });
             });
             setDocs((prev) => [...prev, doc]);
-            setUploads((prev) => prev.filter((_, j) => j !== idx));
+            // 성공 행도 목록에 남긴다 — 파일별 성공/실패를 확인할 수 있어야 한다 (E-39)
+            patch(id, { progress: 100, status: "done" });
             invalidateDocsCache();
             successCount++;
           } catch (err) {
             const msg = err instanceof Error ? err.message : "업로드 실패";
-            setUploads((prev) => prev.map((u, j) => (j === idx ? { ...u, progress: -1, error: msg } : u)));
+            patch(id, { status: "error", error: msg });
           }
-        })
+        }
+      }
+      await Promise.all(
+        Array.from({ length: Math.min(UPLOAD_CONCURRENCY, items.length) }, () => worker())
       );
     } finally {
       setIsUploading(false);
@@ -378,14 +418,12 @@ export function DocumentsView(): React.ReactElement {
           `정말 진행하시겠습니까?`
       );
       if (!ok) return;
-      // 2차: 폴더 이름 직접 입력
-      const typed = prompt(
-        `확인을 위해 폴더 이름 '${folder.name}'을 정확히 입력하세요:`
+      // 2차: 최종 확인 — Electron은 window.prompt()를 지원하지 않고 예외를 던지므로
+      // (E-34: 확인 클릭 후 아무 일도 안 일어나는 버그) confirm 2단계로 대체.
+      const finalOk = confirm(
+        `마지막 확인입니다.\n\n'${folder.name}' 폴더와 문서 ${docCount}개를 영구 삭제합니다.`
       );
-      if (typed?.trim() !== folder.name) {
-        alert("폴더 이름이 일치하지 않아 취소되었습니다.");
-        return;
-      }
+      if (!finalOk) return;
     }
 
     try {
@@ -539,23 +577,71 @@ export function DocumentsView(): React.ReactElement {
       </div>
 
       {/* ── 업로드 진행 목록 ────────────────────────────────── */}
-      {uploads.length > 0 && (
-        <div style={{ padding: "6px 12px 0", flexShrink: 0 }}>
-          {uploads.map((u, i) => (
-            <div key={i} style={{ background: "var(--color-sidebar)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "6px 10px", marginBottom: 3 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, fontSize: 11 }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
-                <span style={{ color: u.progress === -1 ? "#e05050" : "var(--color-text-muted)", flexShrink: 0, marginLeft: 8 }}>
-                  {u.progress === -1 ? (u.error ?? "오류") : `${u.progress}%`}
+      {uploads.length > 0 && (() => {
+        const total = uploads.length;
+        const doneCount = uploads.filter((u) => u.status === "done").length;
+        const errorCount = uploads.filter((u) => u.status === "error").length;
+        const finished = doneCount + errorCount;
+        const allFinished = finished === total;
+        const overallPct = Math.round((finished / total) * 100);
+
+        const statusLabel = (u: UploadItem): { text: string; color: string } => {
+          switch (u.status) {
+            case "waiting": return { text: "대기", color: "var(--color-text-muted)" };
+            case "uploading": return { text: `${u.progress}%`, color: "var(--color-text-muted)" };
+            case "processing": return { text: "분석·임베딩 중…", color: "var(--color-accent)" };
+            case "done": return { text: "완료 ✓", color: "#4caf50" };
+            case "error": return { text: u.error ?? "오류", color: "#e05050" };
+          }
+        };
+        const barColor = (u: UploadItem): string =>
+          u.status === "error" ? "#e05050" : u.status === "done" ? "#4caf50" : "var(--color-accent)";
+        const barWidth = (u: UploadItem): number =>
+          u.status === "error" || u.status === "done" || u.status === "processing" ? 100 : u.progress;
+
+        return (
+          <div style={{ padding: "6px 12px 0", flexShrink: 0 }}>
+            {/* 전체 진행 헤더 */}
+            <div style={{ background: "var(--color-sidebar)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "6px 10px", marginBottom: 4 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, fontSize: 11 }}>
+                <span style={{ fontWeight: 600 }}>
+                  {allFinished ? "업로드 완료" : "업로드 중"} — {finished}/{total}
+                  {errorCount > 0 && <span style={{ color: "#e05050" }}> (실패 {errorCount})</span>}
                 </span>
+                {allFinished && (
+                  <button
+                    onClick={() => setUploads([])}
+                    style={{ background: "none", border: "1px solid var(--color-border)", borderRadius: 4, cursor: "pointer", color: "var(--color-text-muted)", fontSize: 10, padding: "1px 6px" }}
+                  >
+                    목록 지우기
+                  </button>
+                )}
               </div>
-              <div style={{ height: 2, background: "var(--color-border)", borderRadius: 1, overflow: "hidden" }}>
-                <div style={{ width: `${u.progress === -1 ? 100 : u.progress}%`, height: "100%", background: u.progress === -1 ? "#e05050" : "var(--color-accent)", transition: "width 0.2s" }} />
+              <div style={{ height: 4, background: "var(--color-border)", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ width: `${overallPct}%`, height: "100%", background: errorCount > 0 ? "#e0a050" : "var(--color-accent)", transition: "width 0.2s" }} />
               </div>
             </div>
-          ))}
-        </div>
-      )}
+
+            {/* 파일별 목록 — 스크롤 */}
+            <div style={{ maxHeight: 180, overflowY: "auto" }}>
+              {uploads.map((u) => {
+                const s = statusLabel(u);
+                return (
+                  <div key={u.id} style={{ background: "var(--color-sidebar)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "6px 10px", marginBottom: 3 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, fontSize: 11 }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
+                      <span style={{ color: s.color, flexShrink: 0, marginLeft: 8 }}>{s.text}</span>
+                    </div>
+                    <div style={{ height: 2, background: "var(--color-border)", borderRadius: 1, overflow: "hidden" }}>
+                      <div style={{ width: `${barWidth(u)}%`, height: "100%", background: barColor(u), transition: "width 0.2s" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── 툴바: 폴더 추가 ─────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 4px", gap: 6, flexShrink: 0 }}>
@@ -581,6 +667,7 @@ export function DocumentsView(): React.ReactElement {
             onChange={(e) => setNewFolderName(e.target.value)}
             placeholder="폴더 이름"
             disabled={isCreating}
+            onClick={() => window.electronAPI?.restoreFocus()}
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleCreateFolder();
               if (e.key === "Escape") { setAddingFolder(false); setNewFolderName(""); }

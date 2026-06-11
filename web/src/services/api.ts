@@ -93,7 +93,7 @@ export async function createFolder(name: string): Promise<RagFolder> {
 }
 
 export async function renameFolder(folderId: string, name: string): Promise<RagFolder> {
-  return apiFetch<RagFolder>(`/api/rag/folders/${folderId}`, {
+  return apiFetch<RagFolder>(`/api/rag/folders/${encodeURIComponent(folderId)}`, {
     method: "PATCH",
     body: JSON.stringify({ name }),
   });
@@ -104,7 +104,7 @@ export async function deleteFolder(
   deleteDocs: boolean = true
 ): Promise<void> {
   await apiFetch<unknown>(
-    `/api/rag/folders/${folderId}?delete_docs=${deleteDocs}`,
+    `/api/rag/folders/${encodeURIComponent(folderId)}?delete_docs=${deleteDocs}`,
     { method: "DELETE" }
   );
 }
@@ -165,7 +165,11 @@ export async function uploadDocument(
 }
 
 export async function deleteDocument(id: string): Promise<void> {
-  await apiFetch<unknown>(`/api/rag/documents/${id}`, { method: "DELETE" });
+  // doc_id는 파일명 기반이라 #·&·공백 등이 들어올 수 있음 — 인코딩 필수
+  // (#이 인코딩 없이 들어가면 URL fragment로 해석돼 doc_id가 잘린 채 전송됨)
+  await apiFetch<unknown>(`/api/rag/documents/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }
 
 export function getDocumentDownloadUrl(docId: string): string {
