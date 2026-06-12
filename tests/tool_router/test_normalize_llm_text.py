@@ -26,3 +26,31 @@ def test_escaped_underscore_and_trailing_quote() -> None:
 def test_clean_text_unchanged() -> None:
     raw = "## 상황\n정상 텍스트"
     assert _normalize_llm_text(raw) == raw
+
+
+# ── E-46: title 누락 자동 보정 ────────────────────────────────────────────────
+
+
+async def test_e46_missing_title_derived_from_summary(router) -> None:
+    """title 누락 시 summary 첫 줄로 보정되어 스키마 검증을 통과한다 (E-46).
+
+    knowledge 서비스가 없는 픽스처이므로 service_unavailable에 도달하면
+    invalid_arguments 단계(검증)를 통과했다는 증거다.
+    """
+    result = await router.dispatch(
+        "save_knowledge_note",
+        {
+            "summary": "## AI 시스템 구축 회의 결과\n상세 내용...",
+            "tags": ["회의"],
+        },
+    )
+    assert result.error_code != "invalid_arguments"
+
+
+async def test_e46_empty_summary_and_title_still_normalized(router) -> None:
+    """summary도 비면 기본 제목 '업무 노트'로 보정 — invalid_arguments는 아니다."""
+    result = await router.dispatch(
+        "save_knowledge_note",
+        {"summary": "내용", "title": "  "},
+    )
+    assert result.error_code != "invalid_arguments"

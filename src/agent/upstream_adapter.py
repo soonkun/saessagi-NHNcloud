@@ -62,6 +62,16 @@ _TOOL_STATUS_TEXT: dict[str, str] = {
     "take_screenshot": "화면을 확인하고 있어요…",
 }
 
+# 의도분류 직후 즉시 캐릭터 상태 전환 + 안내음 (고신뢰 분류에만, 사용자 요청 2026-06-12).
+# (감정 태그, 안내 멘트) — 턴 종료 시 [neutral]로 복귀한다.
+_INTENT_ANNOUNCE: dict[str, tuple[str, str]] = {
+    "note_save": ("note_writing", "업무 노트를 작성할게요!"),
+    "doc_query": ("study", "자료를 찾아볼게요!"),
+    "work_query": ("study", "확인해 볼게요!"),
+    "calendar_add": ("writing", "일정을 등록할게요!"),
+    "calendar_query": ("thinking", "일정을 확인해 볼게요!"),
+}
+
 
 def _format_rag_context(hits: list[dict[str, Any]]) -> str:
     """RAG 검색 결과를 LLM 주입용 텍스트로 포맷.
@@ -490,6 +500,22 @@ def _make_adapter_class() -> type:
                 self._last_routing = None
                 self._last_intent = None
 
+            # 의도분류 직후 즉시 캐릭터 전환 + 안내음 (고신뢰 분류에만) —
+            # 작업이 끝나면 마지막 메시지의 [neutral] 태그로 복귀한다.
+            announced = False
+            if (
+                self._last_intent in _INTENT_ANNOUNCE
+                and self._last_routing is not None
+                and not self._last_routing.autonomous
+            ):
+                _emo, _announce_msg = _INTENT_ANNOUNCE[self._last_intent]
+                announced = True
+                yield SentenceOutput(
+                    display_text=DisplayText(text=f"[{_emo}] {_announce_msg}", name="AI"),
+                    tts_text=_announce_msg,
+                    actions=Actions(),
+                )
+
             # 진행 상태 2: 문서 검색이 일어날 턴이면 알린다 (_augment 내부 조건과 동일 취지)
             will_search = self._rag_service is not None and (
                 has_attachment
@@ -513,7 +539,8 @@ def _make_adapter_class() -> type:
             yield _status_event("답변을 작성하고 있어요…")
 
             text_parts: list[str] = []
-            note_saved = False  # 이번 턴에 업무 노트 저장이 일어났는가
+            note_call_started = False  # save_knowledge_note 호출 시작 여부
+            note_saved = False  # 이번 턴에 업무 노트 저장이 "성공"했는가 (E-46: 결과 기준)
 
             async for event in self._agent.chat(input_data):
                 if isinstance(event, TextChunk):
@@ -534,14 +561,22 @@ def _make_adapter_class() -> type:
                     # [note_writing] 태그 → 프론트가 작성 중 캐릭터로 전환(대화 채널로 확실히
                     # 전달; tts에는 태그 미포함). 완료 메시지에 [neutral]로 복귀.
                     if event.name == "save_knowledge_note":
-                        note_saved = True
-                        _msg = "📝 업무 노트를 작성하고 있어요. 잠시만요…"
-                        yield SentenceOutput(
-                            display_text=DisplayText(text=f"[note_writing] {_msg}", name="AI"),
-                            tts_text=_msg,
-                            actions=Actions(),
-                        )
+                        note_call_started = True
+                        # 의도분류 시점에 이미 안내했으면 중복 안내 생략
+                        if not announced:
+                            _msg = "📝 업무 노트를 작성하고 있어요. 잠시만요…"
+                            yield SentenceOutput(
+                                display_text=DisplayText(
+                                    text=f"[note_writing] {_msg}", name="AI"
+                                ),
+                                tts_text=_msg,
+                                actions=Actions(),
+                            )
                 elif isinstance(event, ToolCallResult):
+                    # E-46: 저장 "성공"을 결과 기준으로 추적 — 호출했지만 검증 실패한
+                    # 턴(예: title 누락 → invalid_arguments)도 폴백 대상이 되도록.
+                    if event.name == "save_knowledge_note" and event.ok:
+                        note_saved = True
                     yield {
                         "type": "tool_call_status",
                         "status": "completed" if event.ok else "error",
@@ -558,6 +593,17 @@ def _make_adapter_class() -> type:
                     text_parts.append(f"[오류: {event.message}]")
 
             full_text = "".join(text_parts)
+
+            # E-45/E-46: 고신뢰 note_save 턴인데 "성공한" 저장이 없으면 강제 저장 예정.
+            # (미호출뿐 아니라 호출 후 invalid_arguments 등으로 실패한 경우 포함)
+            will_force_save = (
+                not note_saved
+                and self._tool_router is not None
+                and self._last_intent == "note_save"
+                and self._last_routing is not None
+                and not self._last_routing.autonomous
+            )
+
             if full_text:
                 # LLM이 낸 (깨졌을 수 있는) 마커 제거 후, 백엔드가 기록한
                 # 권위 마커를 display_text에만 부착 (tts_text는 마커 없이 깨끗하게).
@@ -568,8 +614,9 @@ def _make_adapter_class() -> type:
                     display = f"{clean_text} {marker_str}".strip() if clean_text else marker_str
                 else:
                     display = clean_text
-                # 노트 저장 완료 메시지엔 [neutral] 태그를 붙여 작성 중 캐릭터를 복귀시킨다.
-                if note_saved:
+                # 의도 안내·노트 작성으로 캐릭터 상태를 바꿨다면 작업 종료 시 [neutral] 복귀.
+                # 단, 직후 강제 저장 폴백이 돌 예정이면 폴백 완료 메시지가 복귀를 담당한다.
+                if (announced or note_call_started) and not will_force_save:
                     display = f"[neutral] {display}"
 
                 # 긴 답변은 전체 낭독 대신 완료 멘트만 (짧은 답변·인사는 그대로 읽음).
@@ -595,15 +642,10 @@ def _make_adapter_class() -> type:
             # 호출하지 않는 환각이 발생한다 (가짜 '[생성된 노트 요약]'까지 출력).
             # 게이트가 고신뢰(autonomous=False)로 note_save로 분류한 턴은 백엔드가
             # 저장을 보장한다.
-            if (
-                not note_saved
-                and self._tool_router is not None
-                and self._last_intent == "note_save"
-                and self._last_routing is not None
-                and not self._last_routing.autonomous
-            ):
+            if will_force_save:
                 logger.warning(
-                    "note_save 의도였으나 save_knowledge_note 미호출 — 강제 저장 폴백 (E-45)"
+                    "note_save 의도였으나 저장 성공 없음(미호출 또는 호출 실패) — "
+                    "강제 저장 폴백 (E-45/E-46)"
                 )
                 yield _status_event("업무 노트를 저장하고 있어요…")
                 fallback_out: Any = None

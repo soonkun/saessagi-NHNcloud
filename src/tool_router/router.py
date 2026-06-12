@@ -136,6 +136,19 @@ class ToolRouter:
                 error_code="invalid_arguments",
             )
 
+        # (2b) save_knowledge_note: LLM이 필수 title을 누락하는 사례 자동 보정 (E-46).
+        # title 없이 거부하면 저장이 통째로 증발한다 — summary 첫 줄에서 유도한다.
+        if name == "save_knowledge_note" and not str(arguments.get("title", "") or "").strip():
+            summary = str(arguments.get("summary", "") or "")
+            first_line = next(
+                (ln.strip().lstrip("#*->•· ").strip() for ln in summary.splitlines() if ln.strip()),
+                "",
+            )
+            arguments["title"] = first_line[:40] or "업무 노트"
+            logger.info(
+                "save_knowledge_note: title 누락 — summary 첫 줄로 보정: %r", arguments["title"]
+            )
+
         # (3) JSON Schema 검증 (미리 컴파일된 Validator 재사용)
         validator = self._validators[name]
         errors = sorted(validator.iter_errors(arguments), key=lambda e: e.absolute_path)
@@ -426,7 +439,7 @@ class ToolRouter:
         """create_meeting_minutes 핸들러."""
         from meeting_minutes.tool import handle_create_meeting_minutes
 
-        return await handle_create_meeting_minutes(  # type: ignore[no-any-return]
+        return await handle_create_meeting_minutes(
             self._meeting_minutes, args, avatar_state=self._avatar_state
         )
 
@@ -476,7 +489,7 @@ class ToolRouter:
         related_docs_info = self._knowledge.resolve_related_docs(  # type: ignore[union-attr]
             list(note.related_docs)
         )
-        filenames = [d["filename"] for d in related_docs_info if d.get("filename")]
+        filenames = [str(d["filename"]) for d in related_docs_info if d.get("filename")]
         filenames_text = ", ".join(filenames) if filenames else ""
 
         logger.info(
