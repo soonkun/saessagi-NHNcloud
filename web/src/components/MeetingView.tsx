@@ -146,6 +146,35 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
   const [transcript, setTranscript] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // 드래그 앤 드롭 (drag counter로 중첩 처리 — DocumentsView와 동일 패턴).
+  // 펫 모드 투명창에서는 OS 파일 드래그 이벤트가 전달되지 않아 동작하지 않는다
+  // (FRONTEND_CONSTRAINTS §1) — 데스크톱(window) 모드 전용.
+  const [dragging, setDragging] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  function onDragEnter(e: React.DragEvent): void {
+    e.preventDefault();
+    dragCounterRef.current += 1;
+    setDragging(true);
+  }
+
+  function onDragOver(e: React.DragEvent): void {
+    e.preventDefault(); // 드롭 허용을 위해 필수
+  }
+
+  function onDragLeave(): void {
+    dragCounterRef.current -= 1;
+    if (dragCounterRef.current === 0) setDragging(false);
+  }
+
+  function onDrop(e: React.DragEvent): void {
+    e.preventDefault();
+    dragCounterRef.current = 0;
+    setDragging(false);
+    const f = e.dataTransfer.files?.[0];
+    if (f && isAudioFile(f)) setAudioFile(f);
+  }
+
   // ── Step 2: 회의록 ────────────────────────────────────────
   const [step2Input, setStep2Input] = useState("");
   const [pages, setPages] = useState<1 | 2>(1);
@@ -315,15 +344,22 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
 
         <div
           onClick={() => fileInputRef.current?.click()}
+          onDragEnter={onDragEnter}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
           style={{
-            border: `2px dashed ${audioFile ? "#4caf84" : "var(--color-border)"}`,
+            border: `2px dashed ${dragging ? "var(--color-accent)" : audioFile ? "#4caf84" : "var(--color-border)"}`,
             borderRadius: 8, padding: "14px 12px", textAlign: "center",
-            cursor: "pointer", background: audioFile ? "rgba(76,175,132,0.06)" : "transparent",
+            cursor: "pointer",
+            background: dragging ? "rgba(201,100,66,0.08)" : audioFile ? "rgba(76,175,132,0.06)" : "transparent",
             transition: "all 0.15s", flexShrink: 0,
           }}
         >
           <FileAudio size={22} style={{ marginBottom: 4, color: audioFile ? "#4caf84" : "var(--color-text-muted)" }} />
-          {audioFile ? (
+          {dragging ? (
+            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent)" }}>여기에 놓아주세요</p>
+          ) : audioFile ? (
             <>
               <p style={{ fontSize: 12, fontWeight: 600, color: "#4caf84" }}>{audioFile.name}</p>
               <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
@@ -331,7 +367,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
               </p>
             </>
           ) : (
-            <p style={{ fontSize: 12, fontWeight: 600 }}>클릭하여 오디오 파일 선택</p>
+            <p style={{ fontSize: 12, fontWeight: 600 }}>클릭 또는 파일을 끌어다 놓아 오디오 선택</p>
           )}
           <input ref={fileInputRef} type="file" accept={AUDIO_TYPES.join(",")} style={{ display: "none" }} onChange={onFileChange} />
         </div>

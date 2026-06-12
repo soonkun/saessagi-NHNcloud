@@ -26,6 +26,18 @@ export function App(): React.ReactElement {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  // 드롭존 밖에 파일을 떨어뜨려도 Chromium이 file://로 내비게이션하지 않도록
+  // 전역 차단. 각 드롭존의 onDrop은 버블링 전에 처리되므로 영향 없음.
+  useEffect(() => {
+    const prevent = (e: DragEvent): void => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
   const clickthroughRef = useRef<ClickthroughHandle | null>(null);
   const charSizeRef = useRef(charSize);
   charSizeRef.current = charSize;
