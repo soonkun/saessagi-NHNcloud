@@ -239,14 +239,14 @@ class HwpxWriter:
         ph_nodes: dict[str, dict[str, Any]],
     ) -> None:
         """draft 내용을 root XML 트리에 채워 넣는다."""
-        # 1. 단순 placeholder 치환
+        # 1. 단순 placeholder 치환 (빈 값은 공문서 관행에 맞게 보정 — E-41)
         _set_para_text(ph_nodes["{{TITLE}}"]["node"], ns, draft.title)
-        date_dept = f"{draft.date} {draft.department}"
+        date_dept = f"{draft.date} {draft.department}".strip()
         _set_para_text(ph_nodes["{{DATE_DEPT}}"]["node"], ns, date_dept)
-        _set_para_text(
-            ph_nodes["{{DT_PLACE}}"]["node"], ns, f"○ 일시·장소 : {draft.datetime_place}"
-        )
-        _set_para_text(ph_nodes["{{ATTENDEES}}"]["node"], ns, f"○ 참 석 자 : {draft.attendees_str}")
+        dt_place = draft.datetime_place.strip() or draft.date
+        _set_para_text(ph_nodes["{{DT_PLACE}}"]["node"], ns, f"○ 일시·장소 : {dt_place}")
+        attendees = draft.attendees_str.strip() or "-"
+        _set_para_text(ph_nodes["{{ATTENDEES}}"]["node"], ns, f"○ 참 석 자 : {attendees}")
 
         # 2. summary_items clone 삽입 (SUMMARY_O/DASH/STAR)
         self._insert_items(
@@ -283,6 +283,28 @@ class HwpxWriter:
                     parent.remove(node)
                     logger.debug(f"placeholder {ph_key} 원본 노드 제거")
 
+        # 6. 빈 섹션의 고아 헤더 제거 — detail_items가 없으면 '세부내용' 헤더가
+        #    내용 없이 남아 문서가 어색해진다 (E-41)
+        if not draft.detail_items:
+            self._remove_section_header(root, ns, "세부내용")
+        if not draft.next_steps:
+            self._remove_section_header(root, ns, "향후계획")
+
+    @staticmethod
+    def _remove_section_header(
+        root: etree._Element, ns: dict[str, str], header_text: str
+    ) -> None:
+        """본문에서 header_text를 담은 짧은 섹션 헤더 단락을 제거한다."""
+        for p in root.findall(".//hp:p", ns):
+            text = _get_full_text(p, ns).strip()
+            # 양식에 따라 헤더에 부가 문구가 붙어 있을 수 있어 포함 매칭 (단, 짧은 단락만)
+            if header_text in text and len(text) <= len(header_text) + 20:
+                parent = p.getparent()
+                if parent is not None:
+                    parent.remove(p)
+                    logger.debug(f"빈 섹션 헤더 제거: {header_text}")
+                return
+
     def _insert_items(
         self,
         items: tuple[Any, ...],
@@ -314,12 +336,18 @@ class HwpxWriter:
             o_parent.insert(insert_idx, o_node)
             insert_idx += 1
 
-            # - 단락들 삽입
+            # - 단락들 삽입.
+            # LLM이 detail(*)을 여러 개 만들려고 동일한 - 텍스트의 sub를 복제하는
+            # 경우가 있어, 직전과 같은 - 텍스트면 단락을 중복 삽입하지 않고
+            # *만 이어 붙인다 (E-41).
+            prev_dash_text: str | None = None
             for sub in item.subs:
-                dash_node = copy.deepcopy(dash_template)
-                _set_para_text(dash_node, ns, f"  - {sub.text}")
-                o_parent.insert(insert_idx, dash_node)
-                insert_idx += 1
+                if sub.text != prev_dash_text:
+                    dash_node = copy.deepcopy(dash_template)
+                    _set_para_text(dash_node, ns, f"  - {sub.text}")
+                    o_parent.insert(insert_idx, dash_node)
+                    insert_idx += 1
+                    prev_dash_text = sub.text
 
                 # * 단락 삽입 (detail이 있는 경우)
                 if sub.detail:

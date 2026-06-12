@@ -157,8 +157,8 @@ class GemmaChatAgent:
                 model=model,
                 base_url=openai_url,
                 llm_api_key=llm_api_key,
-                organization_id=None,  # type: ignore[arg-type]
-                project_id=None,  # type: ignore[arg-type]
+                organization_id=None,
+                project_id=None,
                 temperature=temperature,
             )
         else:
@@ -448,18 +448,6 @@ class GemmaChatAgent:
             ValueError: 응답이 유효한 JSON이 아닌 경우.
             asyncio.TimeoutError: timeout_seconds 초과.
         """
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            "response_format": {"type": "json_object"},
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "stream": False,
-        }
-
         logger.info(
             f"complete_json 호출: model={self.model}, max_tokens={max_tokens}, "
             f"temperature={temperature}, timeout={timeout_seconds}s"
@@ -467,12 +455,14 @@ class GemmaChatAgent:
 
         async with asyncio.timeout(timeout_seconds):
             response = await self._llm.client.chat.completions.create(
-                model=payload["model"],
-                messages=payload["messages"],  # type: ignore[arg-type]
-                max_tokens=payload["max_tokens"],
-                temperature=payload["temperature"],
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 response_format={"type": "json_object"},
                 stream=False,
+                **self._completion_params(max_tokens, temperature),
             )
 
         content = response.choices[0].message.content or ""
@@ -511,13 +501,30 @@ class GemmaChatAgent:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=max_tokens,
-                temperature=temperature,
                 stream=False,
+                **self._completion_params(max_tokens, temperature),
             )
         content = response.choices[0].message.content or ""
         logger.debug(f"complete_text 응답 길이: {len(content)}자")
         return content.strip()
+
+    def _completion_params(self, max_tokens: int, temperature: float) -> dict[str, Any]:
+        """모델별 completion 파라미터 호환 처리.
+
+        GPT-5/o-시리즈는 (1) max_tokens를 거부하고(max_completion_tokens 필요)
+        (2) temperature도 1.0만 허용 — 이전엔 400 에러로 회의록 생성이 통째로 실패.
+        (3) 추론 토큰이 출력 예산을 잠식해 응답이 빈 문자열이 되므로,
+        정형 문서 작업엔 reasoning_effort=low + 예산 헤드룸이 필요하다 (E-41).
+        """
+        model = (self.model or "").lower()
+        if model.startswith("gpt-5"):
+            return {
+                "max_completion_tokens": max_tokens + 4096,  # 추론 토큰 헤드룸
+                "reasoning_effort": "low",
+            }
+        if model.startswith(("o1", "o3", "o4")):
+            return {"max_completion_tokens": max_tokens + 4096}
+        return {"max_tokens": max_tokens, "temperature": temperature}
 
     async def aclose(self) -> None:
         """리소스 정리. openai AsyncClient를 닫는다."""

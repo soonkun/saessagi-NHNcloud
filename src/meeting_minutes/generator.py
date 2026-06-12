@@ -91,6 +91,50 @@ def _check_length_violations(draft_dict: dict[str, Any], pages: PageCount) -> li
     return violations
 
 
+def _normalize_raw_draft(raw: dict[str, Any]) -> dict[str, Any]:
+    """LLM 응답의 흔한 형식 일탈을 스키마 검증 전에 정규화한다 (E-41).
+
+    - 빈 text + detail만 있는 sub: 직전 sub의 추가 *로 취급 — 직전 sub의 text를
+      복제해 살린다 (HwpxWriter가 연속 동일 - 텍스트를 병합).
+    - text·detail 모두 빈 sub, text 빈 item: 제거.
+    """
+    if not isinstance(raw, dict):
+        return raw
+
+    for key in ("summary_items", "detail_items"):
+        items = raw.get(key)
+        if not isinstance(items, list):
+            continue
+        cleaned_items: list[Any] = []
+        for item in items:
+            if not isinstance(item, dict) or not str(item.get("text", "")).strip():
+                continue
+            subs = item.get("subs")
+            if isinstance(subs, list):
+                cleaned_subs: list[Any] = []
+                for sub in subs:
+                    if not isinstance(sub, dict):
+                        continue
+                    text = str(sub.get("text", "")).strip()
+                    detail = str(sub.get("detail", "") or "").strip()
+                    if not text and detail and cleaned_subs:
+                        sub = {**sub, "text": cleaned_subs[-1]["text"]}
+                    elif not text:
+                        continue
+                    cleaned_subs.append(sub)
+                item = {**item, "subs": cleaned_subs}
+            cleaned_items.append(item)
+        raw[key] = cleaned_items
+
+    next_steps = raw.get("next_steps")
+    if isinstance(next_steps, list):
+        raw["next_steps"] = [
+            s for s in next_steps if isinstance(s, dict) and str(s.get("text", "")).strip()
+        ]
+
+    return raw
+
+
 def _dict_to_draft(raw: dict[str, Any], pages: PageCount) -> MeetingDraft:
     """검증된 raw dict를 MeetingDraft dataclass로 변환."""
     summary_items = tuple(
@@ -306,26 +350,46 @@ class MeetingDraftGenerator:
         if pages == 2:
             volume_instruction = (
                 "분량 목표: A4 2페이지 분량. 논의 흐름, 쟁점, 근거, 세부 결정 사항까지 상세히 기술하세요. "
-                "항목당 2~4개의 세부 내용을 포함하세요."
+                "주요내용 ○ 항목 합계 8~9개."
             )
         else:
             volume_instruction = (
                 "분량 목표: A4 1페이지 분량. 핵심 논의 사항과 결정 사항 위주로 간결하게 정리하세요. "
-                "항목당 1~2개의 핵심 내용만 포함하세요."
+                "주요내용 ○ 항목 합계 3~4개."
             )
 
+        # 사용자 커스텀 지침(M_17)을 2단계에도 적용한다 — 기존엔 3단계(JSON 생성)에만
+        # 적용돼 사용자가 "설정한 기준이 동작하지 않는다"고 느꼈다 (E-41).
+        # 커스텀 지침에는 JSON 출력 규칙이 포함될 수 있으므로 출력 형식만 오버라이드.
+        base_rules = self._custom_system_prompt.strip() or SYSTEM_PROMPT
+        step2_system = (
+            f"{base_rules}\n\n"
+            "## 이번 작업의 출력 형식 (위 JSON 규칙보다 우선)\n"
+            "이번에는 JSON이 아니라 사람이 읽고 수정할 수 있는 개조식 보고서 텍스트를 출력합니다.\n"
+            "위의 위계·글자수·톤 규칙(특히 개조식 종결: -음/-함/명사형)은 그대로 적용하되,\n"
+            "아래 레이아웃의 plain text로만 출력하세요 (마크다운 기호 ​#, **, ``` 금지):\n\n"
+            "회의 제목\n"
+            "○ 일시·장소 : YYYY.MM.DD. HH:MM / 장소 (녹취에 없으면 날짜만)\n"
+            "○ 참 석 자 : 이름1, 이름2 (녹취에 없으면 생략)\n"
+            "\n"
+            "[주요내용]\n"
+            "○ 주요 논의·결정 사항 (개조식)\n"
+            " - 부연 설명 (필요 시)\n"
+            "  * 구체적 근거·일정·수치 (가능하면)\n"
+            "\n"
+            "[향후계획]\n"
+            "○ 향후 조치 사항 (M.DD.)\n"
+        )
+
         user_prompt = (
-            f"다음 내용을 바탕으로 공식 회의록을 작성하세요.\n"
+            f"다음 회의 녹취록을 개조식 회의 결과 보고 텍스트로 정리하세요.\n"
             f"{volume_instruction}\n"
-            "회의 주제, 일시(녹취에 있으면), 참석자(있으면), 주요 논의 사항, 결정 사항, 향후 계획을 포함하세요.\n\n"
-            f"내용:\n'''\n{transcript}\n'''"
+            "녹취록에 나온 수치·날짜·담당자는 빠뜨리지 말고 반영하세요.\n\n"
+            f"녹취록:\n'''\n{transcript}\n'''"
         )
         try:
             result = await self._agent.complete_text(
-                system_prompt=(
-                    "당신은 회의 녹취록을 읽고 공식 회의록을 작성하는 전문가입니다. "
-                    "한국어로 명확하고 체계적으로 작성하세요."
-                ),
+                system_prompt=step2_system,
                 user_prompt=user_prompt,
                 max_tokens=3000 if pages == 2 else 2048,
                 temperature=0.3,
@@ -411,8 +475,9 @@ class MeetingDraftGenerator:
                     raise MeetingDraftError(f"LLM 호출 실패: {type(exc).__name__}: {exc}") from exc
                 continue
 
-            # JSON Schema 검증
+            # 형식 일탈 정규화 후 JSON Schema 검증
             assert raw is not None
+            raw = _normalize_raw_draft(raw)
             schema_errors = sorted(self._validator.iter_errors(raw), key=lambda e: e.absolute_path)
             if schema_errors:
                 first = schema_errors[0]
