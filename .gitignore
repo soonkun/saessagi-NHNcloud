@@ -30,6 +30,8 @@ upstream/
 
 # Upstream 런타임 파일들이 프로젝트 루트로 흘러들어올 때 무시
 avatars/
+# 단, 앱 캐릭터 이미지(web/public/avatars)는 위 패턴의 오인 매치 — 추적한다
+!web/public/avatars/
 backgrounds/
 characters/
 live2d-models/
