@@ -5,6 +5,7 @@
 import { useEffect, useRef } from "react";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
+import { ko } from "@blocknote/core/locales";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 
@@ -19,7 +20,8 @@ export default function NoteRichEditor({
   theme,
   onChangeMarkdown,
 }: NoteRichEditorProps): React.ReactElement {
-  const editor = useCreateBlockNote();
+  // 슬래시 메뉴·툴바·placeholder 전부 한국어 (BlockNote 내장 ko 로케일)
+  const editor = useCreateBlockNote({ dictionary: ko });
   const loadedRef = useRef(false);
   // 초기 replaceBlocks도 onChange를 발화시키므로, 로드 완료 전 변경은 무시해
   // 노트를 열자마자 dirty가 되는 것을 막는다.
