@@ -37,6 +37,14 @@ const NoteRichEditor = lazy(() => import("./NoteRichEditor"));
 
 type SubTab = "edit" | "preview" | "graph";
 
+// "2026-06-12T18:42:05" → "2026.06.12 18:42"
+function fmtDateTime(iso?: string): string {
+  if (!iso) return "";
+  const date = iso.slice(0, 10).replace(/-/g, ".");
+  const time = iso.slice(11, 16);
+  return time ? `${date} ${time}` : date;
+}
+
 export function NotesView({ desktop = false }: { desktop?: boolean }): React.ReactElement {
   const externalSelectedSlug = useStore((s) => s.selectedNoteSlug);
   const setExternalSelectedSlug = useStore((s) => s.setSelectedNoteSlug);
@@ -505,7 +513,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               />
               <RelatedDocsSection note={current} />
               <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
-                slug: <code>{current.slug}</code> · 작성 {current.created?.slice(0, 10)} · 수정 {current.updated?.slice(0, 10)}
+                slug: <code>{current.slug}</code> · 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
               </div>
             </div>
           )}
@@ -546,7 +554,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   }}
                 />
                 <div style={{ fontSize: 10, color: "var(--color-text-muted)", padding: "2px 0 8px" }}>
-                  slug: <code>{current.slug}</code> · 작성 {current.created?.slice(0, 10)} · 수정 {current.updated?.slice(0, 10)}
+                  slug: <code>{current.slug}</code> · 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
                 </div>
                 <RelatedDocsSection note={current} />
               </div>
@@ -569,8 +577,11 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
           {current && subTab === "preview" && (
             <div style={{ padding: 20, overflow: "auto", flex: 1, fontSize: 13, lineHeight: 1.6 }}>
               <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
-              <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 14 }}>
+              <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 4 }}>
                 {current.tags.join(" · ") || "태그 없음"}
+              </div>
+              <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 14 }}>
+                작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
               </div>
               <RelatedDocsSection note={current} />
 
