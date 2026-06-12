@@ -81,7 +81,8 @@ def tmp_conf(tmp_path: Path) -> Path:
             },
         },
     }
-    conf.write_text(yaml.dump(raw, allow_unicode=True))
+    # encoding 미지정 시 Windows에서 cp949로 저장돼 라우트의 utf-8 읽기가 깨진다
+    conf.write_text(yaml.dump(raw, allow_unicode=True), encoding="utf-8")
     return conf
 
 
@@ -143,7 +144,7 @@ def test_N2_post_meeting_minutes_saves_and_applies(
     assert data["applied"] == "set_custom_prompt"
 
     # conf.yaml에 저장됐는지 확인
-    raw = yaml.safe_load(tmp_conf.read_text()) or {}
+    raw = yaml.safe_load(tmp_conf.read_text(encoding="utf-8")) or {}
     assert raw.get("app", {}).get("agent_prompts", {}).get("meeting_minutes") == "X"
 
     # set_custom_prompt 호출 확인
@@ -164,7 +165,7 @@ def test_N3_post_doc_query_answer_no_reinit(client: TestClient, ctx: Any, tmp_co
     ctx.init_agent.assert_not_called()
 
     # conf.yaml에 저장됐는지 확인
-    raw = yaml.safe_load(tmp_conf.read_text()) or {}
+    raw = yaml.safe_load(tmp_conf.read_text(encoding="utf-8")) or {}
     assert raw.get("app", {}).get("agent_prompts", {}).get("doc_query_answer") == "자료는 표로 정리"
 
 
@@ -186,7 +187,7 @@ def test_N4_post_persona_reinitializes_agent(client: TestClient, ctx: Any, tmp_c
     assert ctx.character_config.persona_prompt == "너는 친절한 비서다"
 
     # conf.yaml에 저장됐는지 확인
-    raw = yaml.safe_load(tmp_conf.read_text()) or {}
+    raw = yaml.safe_load(tmp_conf.read_text(encoding="utf-8")) or {}
     assert raw.get("app", {}).get("agent_prompts", {}).get("persona") == "너는 친절한 비서다"
     assert raw.get("character_config", {}).get("persona_prompt") == "너는 친절한 비서다"
 
@@ -256,7 +257,7 @@ def test_E3_migration_old_meeting_minutes_prompt(
         "app": {"meeting_minutes_prompt": "구 지침"},
         "character_config": {"persona_prompt": "기본"},
     }
-    tmp_conf.write_text(yaml.dump(raw, allow_unicode=True))
+    tmp_conf.write_text(yaml.dump(raw, allow_unicode=True), encoding="utf-8")
     monkeypatch.setenv("SAESSAGI_CONF", str(tmp_conf))
 
     from app.config import AppConfig
@@ -314,7 +315,7 @@ def test_A1_unknown_key_returns_422(client: TestClient) -> None:
 
 def test_A2_persona_empty_returns_422(client: TestClient, tmp_conf: Path) -> None:
     """A-2: POST persona 빈 문자열 → 422, conf.yaml 무변경."""
-    original = tmp_conf.read_text()
+    original = tmp_conf.read_text(encoding="utf-8")
     resp = client.post(
         "/api/settings/prompts",
         json={"key": "persona", "prompt": "   "},
@@ -322,12 +323,12 @@ def test_A2_persona_empty_returns_422(client: TestClient, tmp_conf: Path) -> Non
     assert resp.status_code == 422
     assert "페르소나는 비울 수 없습니다" in resp.json()["detail"]
     # conf.yaml 무변경 확인
-    assert tmp_conf.read_text() == original
+    assert tmp_conf.read_text(encoding="utf-8") == original
 
 
 def test_A3_intent_classify_missing_labels_returns_422(client: TestClient, tmp_conf: Path) -> None:
     """A-3: POST intent_classify (6라벨 누락) → 422, 저장 안 함."""
-    original = tmp_conf.read_text()
+    original = tmp_conf.read_text(encoding="utf-8")
     resp = client.post(
         "/api/settings/prompts",
         json={"key": "intent_classify", "prompt": "JSON만 출력해"},
@@ -336,7 +337,7 @@ def test_A3_intent_classify_missing_labels_returns_422(client: TestClient, tmp_c
     detail = resp.json()["detail"]
     assert "의도 분류 프롬프트 검증 실패" in detail
     # conf.yaml 무변경 확인
-    assert tmp_conf.read_text() == original
+    assert tmp_conf.read_text(encoding="utf-8") == original
 
 
 # ── Critic MAJOR-4: persona 안전성 (construct_system_prompt 실제 호출) ─────────
@@ -389,11 +390,11 @@ async def test_MAJOR4_persona_with_injection_attempt_notes_still_present() -> No
 
 def test_MAJOR4_persona_empty_422(client: TestClient, tmp_conf: Path) -> None:
     """Critic MAJOR-4: persona 빈값 → 422 (A-2 재확인, mock 없이)."""
-    original = tmp_conf.read_text()
+    original = tmp_conf.read_text(encoding="utf-8")
     resp = client.post(
         "/api/settings/prompts",
         json={"key": "persona", "prompt": ""},
     )
     assert resp.status_code == 422
     # conf.yaml 무변경
-    assert tmp_conf.read_text() == original
+    assert tmp_conf.read_text(encoding="utf-8") == original
