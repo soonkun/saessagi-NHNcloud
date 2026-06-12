@@ -122,6 +122,21 @@ def _strip_llm_markers(text: str) -> str:
     return cleaned.strip()
 
 
+def _extract_attached_doc_ids(text: str) -> list[str]:
+    """사용자 메시지 prefix `[첨부 자료: filename (doc_id: xxx); ...]`에서 doc_id 추출.
+
+    doc_id는 원본 파일명 기반이라 공백을 포함할 수 있다 — 닫는 괄호(`)`) 전까지
+    전부 캡처해야 한다. 공백에서 끊으면 'AI 이삭이 ... .pptx_xxxx'가 'AI'로
+    잘려 첨부 청크 주입이 0건이 된다 (E-44).
+    """
+    ids: list[str] = []
+    for m in re.finditer(r"doc_id:\s*([^)\]]+)", text):
+        doc_id = m.group(1).strip()
+        if doc_id and doc_id not in ids:
+            ids.append(doc_id)
+    return ids
+
+
 def _make_adapter_class() -> type:
     """동적으로 BasicMemoryAgentAdapter 클래스를 생성해 mypy Any 서브클래싱 에러 우회."""
     from open_llm_vtuber.agent.agents.agent_interface import AgentInterface
@@ -174,15 +189,8 @@ def _make_adapter_class() -> type:
 
         @staticmethod
         def _extract_attached_doc_ids(text: str) -> list[str]:
-            """사용자 메시지 prefix `[첨부 자료: filename (doc_id: xxx); ...]`에서 doc_id 추출."""
-            ids: list[str] = []
-            import re as _re
-
-            for m in _re.finditer(r"doc_id:\s*([^\s\)\];,]+)", text):
-                doc_id = m.group(1).strip().rstrip(")]")
-                if doc_id and doc_id not in ids:
-                    ids.append(doc_id)
-            return ids
+            """모듈 레벨 _extract_attached_doc_ids 위임 (테스트 용이성)."""
+            return _extract_attached_doc_ids(text)
 
         def _fetch_attached_chunks(
             self, doc_ids: list[str], per_doc_limit: int = 5
@@ -566,9 +574,7 @@ def _make_adapter_class() -> type:
                         tts_out = "자료 확인이 완료되었어요. 내용을 확인해 주세요."
                     else:
                         tts_out = "답변 작성이 완료되었어요. 내용을 확인해 주세요."
-                    logger.debug(
-                        "TTS 요약 모드: 본문 %d자 → 완료 멘트로 대체", len(clean_text)
-                    )
+                    logger.debug("TTS 요약 모드: 본문 %d자 → 완료 멘트로 대체", len(clean_text))
 
                 yield SentenceOutput(
                     display_text=DisplayText(text=display, name="AI"),

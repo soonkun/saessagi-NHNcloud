@@ -5,6 +5,24 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-44: 공백 포함 파일명 첨부 시 노트가 내용 없이 작성됨 — doc_id 추출이 공백에서 절단 (2026-06-12)
+
+**증상**: pptx를 채팅에 첨부하고 업무 보고하면 노트가 생성되고 임베딩도 정상으로 보이는데, 노트 본문이 자료 내용을 전혀 반영하지 못함 ("(자료 내용에서 핵심 추출하여 작성 예정)" 같은 자리표시자까지 등장). "pptx를 못 읽는 건가?"로 보고됨.
+**원인** (로그 `data/logs/app-2026-06-12.log` 1571줄로 확정):
+1. pptx 파싱·임베딩은 정상 — 24세그먼트/8,393자 추출, 스토어에 25청크 존재.
+2. `upstream_adapter._extract_attached_doc_ids()`의 정규식 `[^\s\)\];,]+`가 **공백에서 캡처를 중단** → `AI 이삭이 서비스 고도화...pptx_d340e9cd`가 `'AI'`로 잘림 → `get_chunks_by_doc_id('AI')` 0건 → LLM이 첨부 내용 없이 노트 작성. 공백 없는 파일명(회의결과보고서_xxx.hwpx)은 정상 주입(chunks=2)된 것이 대조 증거.
+3. (부수) gemma가 tool 인자 JSON에서 `\n`을 이중 이스케이프 → 노트 본문에 literal `\n`·`\_`·말미 `\"` 잔재.
+**수정**:
+- doc_id 추출을 모듈 레벨 함수로 분리하고 정규식을 `doc_id:\s*([^)\]]+)`로 교체 — 닫는 괄호까지 캡처 (프론트 prefix 형식 `filename (doc_id: xxx); ...` 기준).
+- `_normalize_llm_text()` 신설 — save_knowledge_note summary의 literal `\n`(실제 줄바꿈 부재 시)·`\_`·말미 `\"` 복원.
+- 회귀 테스트 9건 추가 (tests/agent/test_attached_doc_ids.py, tests/tool_router/test_normalize_llm_text.py).
+**검증**: 사고 당시 메시지 형식 그대로 추출 → 전체 doc_id 반환, 실제 LanceDB에서 24청크 조회 성공 (기존 0건).
+**교훈**:
+1. ID에 사용자 유래 문자열(파일명)을 쓰면 **공백·괄호·한글이 들어온다** — 구분자 기반 파싱은 헛점이 생기니 구조적 경계(닫는 괄호)로 캡처할 것. E-33(파일명 `#` URL 절단)과 같은 계열.
+2. "임베딩 됐고 노트도 생성됐다"는 겉보기 성공이 내용 전달을 보장하지 않는다 — 첨부 주입은 반드시 `첨부 청크 자동 주입: chunks=N` 로그의 **N>0**으로 확인할 것.
+
+---
+
 ## E-43: 결과보고서 생성 하드 실패 — subs maxItems=2 스키마 과잉 제약 (2026-06-12)
 
 **증상**: 3단계 결과보고서 생성이 "LLM 응답이 JSON Schema를 위반했습니다 (max_retries 소진): JSON Schema 위반 at detail_items/0/subs: [...] is too long" 오류로 실패.

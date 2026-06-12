@@ -33,6 +33,22 @@ def _service_unavail(tool_name: str) -> ToolResult:
     )
 
 
+def _normalize_llm_text(text: str) -> str:
+    """LLM tool 인자 문자열의 흔한 이스케이프 일탈을 복원한다 (E-44).
+
+    gemma가 JSON 문자열 안에서 \\n을 이중 이스케이프해 literal '\\n' 두 글자가
+    본문에 남거나, 마크다운 밑줄 이스케이프('\\_')·말미 '\\"' 잔재가 섞인다.
+    """
+    # 실제 줄바꿈이 하나도 없고 literal \n만 있으면 이스케이프 깨진 것
+    if "\\n" in text and "\n" not in text:
+        text = text.replace("\\n", "\n")
+    text = text.replace("\\_", "_")
+    text = text.rstrip()
+    if text.endswith('\\"'):
+        text = text[:-2].rstrip()
+    return text
+
+
 class ToolRouter:
     """Gemma tool_call → 로컬 파이썬 핸들러 디스패처.
 
@@ -428,7 +444,7 @@ class ToolRouter:
     async def _handle_save_knowledge_note(self, args: dict[str, Any]) -> ToolResult:
         """save_knowledge_note 핸들러 — 업무 지식 노트 저장."""
         title: str = args["title"]
-        summary: str = args["summary"]
+        summary: str = _normalize_llm_text(args["summary"])
         tags: list[str] = args.get("tags", []) or []
         related_docs: list[str] = args.get("related_docs", []) or []
 
