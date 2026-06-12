@@ -451,6 +451,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             prompt_provider=_prompt_provider,  # M_17
             tts_brief_enabled=self.app_config.tts_brief_enabled if self.app_config else True,
             tts_brief_max_chars=self.app_config.tts_brief_max_chars if self.app_config else 80,
+            tool_router=self.tool_router,  # E-45: note_save 의도 강제 저장 폴백
         )
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 

@@ -162,6 +162,7 @@ def _make_adapter_class() -> type:
             prompt_provider: Callable[[], Mapping[str, str]] | None = None,  # M_17
             tts_brief_enabled: bool = True,
             tts_brief_max_chars: int = 80,
+            tool_router: Any = None,  # ToolRouter | None — note_save 강제 폴백용 (E-45)
         ) -> None:
             super().__init__()
             self._agent = agent
@@ -172,11 +173,15 @@ def _make_adapter_class() -> type:
             # 긴 답변은 전체 낭독 대신 완료 멘트만 말한다 (사용자 요청 2026-06-11)
             self._tts_brief_enabled = tts_brief_enabled
             self._tts_brief_max_chars = tts_brief_max_chars
+            # E-45: LLM이 도구 호출을 건너뛴 note_save 턴의 강제 저장 경로
+            self._tool_router = tool_router
             self._pending_tasks: set[asyncio.Task[None]] = set()
             # 직전 턴에서 실제 주입한 RAG 문서의 권위 마커 (chat에서 display_text에 부착)
             self._last_cited_markers: list[str] = []
             # M_16: 직전 분류 결과 캐시 (턴 단위, 동일 턴 내 재분류 금지)
             self._last_routing: Any = None  # RoutingDecision | None
+            # E-45: 직전 분류의 intent 라벨 (RoutingDecision에는 없음)
+            self._last_intent: str | None = None
 
         @staticmethod
         def _should_trigger_rag(text: str) -> bool:
@@ -464,6 +469,7 @@ def _make_adapter_class() -> type:
                         prompt_overrides=_overrides,
                     )
                     self._last_routing = _decision
+                    self._last_intent = _result.intent
                     logger.info(
                         "IntentGate: intent=%s conf=%.2f source=%s "
                         "inject_rag=%s rag_source=%s autonomous=%s",
@@ -479,8 +485,10 @@ def _make_adapter_class() -> type:
                 except Exception as _exc:
                     logger.warning("IntentGate 분류 실패 (무시): %s", _exc)
                     self._last_routing = None
+                    self._last_intent = None
             else:
                 self._last_routing = None
+                self._last_intent = None
 
             # 진행 상태 2: 문서 검색이 일어날 턴이면 알린다 (_augment 내부 조건과 동일 취지)
             will_search = self._rag_service is not None and (
@@ -581,6 +589,97 @@ def _make_adapter_class() -> type:
                     tts_text=tts_out,
                     actions=Actions(),
                 )
+
+            # ── E-45: note_save 의도인데 LLM이 도구 호출을 건너뛴 턴 — 강제 저장 ──
+            # gemma가 "노트로 저장해 두었어요"라고 말만 하고 save_knowledge_note를
+            # 호출하지 않는 환각이 발생한다 (가짜 '[생성된 노트 요약]'까지 출력).
+            # 게이트가 고신뢰(autonomous=False)로 note_save로 분류한 턴은 백엔드가
+            # 저장을 보장한다.
+            if (
+                not note_saved
+                and self._tool_router is not None
+                and self._last_intent == "note_save"
+                and self._last_routing is not None
+                and not self._last_routing.autonomous
+            ):
+                logger.warning(
+                    "note_save 의도였으나 save_knowledge_note 미호출 — 강제 저장 폴백 (E-45)"
+                )
+                yield _status_event("업무 노트를 저장하고 있어요…")
+                fallback_out: Any = None
+                try:
+                    fallback_out = await self._force_save_note(user_text_for_classify, full_text)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("노트 강제 저장 폴백 실패 (무시): %s", exc)
+                if fallback_out is not None:
+                    yield fallback_out
+
+        async def _force_save_note(self, user_text: str, reply_text: str) -> Any:
+            """LLM이 도구 호출 없이 끝낸 note_save 턴의 강제 노트 저장 (E-45).
+
+            이번 턴 답변(reply_text)에는 첨부 자료 내용이 이미 반영돼 있으므로,
+            그것을 노트 JSON으로 변환해 ToolRouter로 직접 저장한다.
+            성공 시 사용자에게 보낼 SentenceOutput, 실패 시 None 반환.
+            """
+            from open_llm_vtuber.agent.output_types import Actions, DisplayText, SentenceOutput
+
+            schema: dict[str, Any] = {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "summary", "tags"],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 7000},
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1, "maxLength": 30},
+                        "maxItems": 3,
+                    },
+                },
+            }
+            reply_core = _strip_llm_markers(reply_text)[:4000]
+            raw = await self._agent.complete_json(
+                system_prompt=(
+                    "사용자의 업무 보고와 비서가 작성한 정리 답변을 업무 노트 JSON으로 변환합니다. "
+                    "summary는 한국어 markdown으로 '## 상황 / ## 절차 / ## 사용 자료 / ## 교훈' "
+                    "구조를 따르고, 답변에 있는 수치·날짜·결정 사항을 빠짐없이 보존하세요. "
+                    "JSON만 출력하세요."
+                ),
+                user_prompt=(
+                    f"사용자 보고:\n'''\n{user_text[:1500]}\n'''\n\n"
+                    f"비서가 작성한 정리 답변:\n'''\n{reply_core}\n'''"
+                ),
+                json_schema=schema,
+                max_tokens=2048,
+                temperature=0.2,
+                timeout_seconds=120.0,
+            )
+            args: dict[str, Any] = {
+                "title": (str(raw.get("title", "")).strip() or "업무 노트")[:100],
+                "summary": str(raw.get("summary", "")).strip()[:8000],
+                "tags": [str(t)[:30] for t in (raw.get("tags") or []) if str(t).strip()][:3],
+                "related_docs": _extract_attached_doc_ids(user_text),
+            }
+            if not args["summary"]:
+                logger.warning("강제 저장 폴백: summary 생성 실패 — 중단")
+                return None
+            result = await self._tool_router.dispatch("save_knowledge_note", args)
+            if not getattr(result, "ok", False):
+                logger.warning("강제 저장 폴백: dispatch 실패 — %s", getattr(result, "error", None))
+                return None
+            payload = result.payload or {}
+            slug = payload.get("slug", "")
+            title = payload.get("title", args["title"])
+            marker = payload.get("note_marker", f"[[note:{slug}]]" if slug else "")
+            logger.info("노트 강제 저장 폴백 성공: slug=%s (E-45)", slug)
+            msg = f"업무 노트 '{title}'(으)로 저장해 두었어요."
+            return SentenceOutput(
+                display_text=DisplayText(text=f"[neutral] {msg} {marker}".strip(), name="AI"),
+                tts_text=msg,
+                actions=Actions(),
+            )
 
         def handle_interrupt(self, heard_response: str) -> None:
             """동기 인터페이스 요구. asyncio 태스크로 스케줄."""
