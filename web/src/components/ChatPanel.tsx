@@ -308,14 +308,14 @@ export function ChatContent({
             flexShrink: 0,
           }}
         />
-        <span style={{ color: "var(--color-text-muted)", fontSize: 12 }}>
+        <span style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>
           {STATUS_LABEL[aiStatus] ?? ""}
         </span>
         {llmInfo && (
           <span
             title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
             style={{
-              fontSize: 11,
+              fontSize: "var(--fs-11)",
               fontWeight: 600,
               padding: "2px 7px",
               borderRadius: 10,
@@ -334,7 +334,7 @@ export function ChatContent({
         {voiceActive && (
           <span
             className="status-blink"
-            style={{ fontSize: 12, color: "#e74c3c", marginLeft: "auto" }}
+            style={{ fontSize: "var(--fs-12)", color: "#e74c3c", marginLeft: "auto" }}
           >
             ● 녹음 중
           </span>
@@ -377,7 +377,7 @@ export function ChatContent({
                 color: "var(--color-text-muted)",
                 textAlign: "center",
                 marginTop: 40,
-                fontSize: 13,
+                fontSize: "var(--fs-13)",
               }}
             >
               안녕하세요! 무엇을 도와드릴까요?
@@ -407,7 +407,7 @@ export function ChatContent({
                     ? "var(--color-msg-human)"
                     : "var(--color-msg-ai)",
                 border: "1px solid var(--color-border)",
-                fontSize: 13,
+                fontSize: "var(--fs-13)",
                 lineHeight: 1.5,
                 wordBreak: "break-word",
               }}
@@ -448,7 +448,7 @@ export function ChatContent({
                             alignItems: "center",
                             gap: 4,
                             padding: "2px 8px",
-                            fontSize: 11,
+                            fontSize: "var(--fs-11)",
                             borderRadius: 10,
                             background: "rgba(255,255,255,0.12)",
                             border: "1px solid rgba(255,255,255,0.2)",
@@ -476,7 +476,7 @@ export function ChatContent({
                     ),
                     table: ({ children }) => (
                       <div style={{ overflowX: "auto", margin: "6px 0" }}>
-                        <table style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+                        <table style={{ borderCollapse: "collapse", fontSize: "var(--fs-12)", width: "100%" }}>
                           {children}
                         </table>
                       </div>
@@ -492,12 +492,12 @@ export function ChatContent({
                       </td>
                     ),
                     pre: ({ children }) => (
-                      <pre style={{ background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: 12, margin: "6px 0", fontFamily: "monospace" }}>
+                      <pre style={{ background: "rgba(0,0,0,0.3)", borderRadius: 6, padding: "8px 10px", overflowX: "auto", fontSize: "var(--fs-12)", margin: "6px 0", fontFamily: "monospace" }}>
                         {children}
                       </pre>
                     ),
                     code: ({ children }) => (
-                      <code style={{ background: "rgba(255,255,255,0.08)", borderRadius: 3, padding: "1px 4px", fontSize: 12, fontFamily: "monospace" }}>
+                      <code style={{ background: "rgba(255,255,255,0.08)", borderRadius: 3, padding: "1px 4px", fontSize: "var(--fs-12)", fontFamily: "monospace" }}>
                         {children}
                       </code>
                     ),
@@ -548,7 +548,7 @@ export function ChatContent({
                         alignItems: "center",
                         gap: 4,
                         padding: "2px 8px",
-                        fontSize: 11,
+                        fontSize: "var(--fs-11)",
                         borderRadius: 10,
                         background: "rgba(255,180,80,0.18)",
                         border: "1px solid rgba(255,180,80,0.5)",
@@ -577,7 +577,7 @@ export function ChatContent({
                         alignItems: "center",
                         gap: 4,
                         padding: "2px 8px",
-                        fontSize: 11,
+                        fontSize: "var(--fs-11)",
                         borderRadius: 10,
                         background: "rgba(100,140,220,0.18)",
                         border: "1px solid rgba(100,140,220,0.4)",
@@ -608,7 +608,7 @@ export function ChatContent({
                 borderRadius: "12px 12px 12px 4px",
                 background: "var(--color-msg-ai)",
                 border: "1px dashed var(--color-border)",
-                fontSize: 13,
+                fontSize: "var(--fs-13)",
                 lineHeight: 1.5,
                 color: "var(--color-text-muted)",
                 fontStyle: "italic",
@@ -645,7 +645,7 @@ export function ChatContent({
                 alignItems: "center",
                 gap: 4,
                 padding: "2px 4px 2px 8px",
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 borderRadius: 10,
                 background: "rgba(100,140,220,0.18)",
                 border: "1px solid rgba(100,140,220,0.4)",
@@ -691,7 +691,7 @@ export function ChatContent({
                 alignItems: "center",
                 gap: 4,
                 padding: "2px 8px",
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 borderRadius: 10,
                 background: it.error ? "rgba(231,76,60,0.18)" : "rgba(200,200,200,0.12)",
                 border: `1px solid ${it.error ? "rgba(231,76,60,0.5)" : "rgba(200,200,200,0.3)"}`,
@@ -710,7 +710,7 @@ export function ChatContent({
               >
                 {it.filename}
               </span>
-              <span style={{ fontSize: 10 }}>
+              <span style={{ fontSize: "var(--fs-10)" }}>
                 {it.error ? "실패" : `${it.progress}%`}
               </span>
             </span>
@@ -753,7 +753,7 @@ export function ChatContent({
                   color: "#fff",
                   border: "1px solid rgba(255,255,255,0.2)",
                   cursor: "pointer",
-                  fontSize: 10,
+                  fontSize: "var(--fs-11)",
                   lineHeight: 1,
                   display: "flex",
                   alignItems: "center",
@@ -838,7 +838,7 @@ export function ChatContent({
             borderRadius: 8,
             color: "var(--color-text)",
             padding: "7px 12px",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             outline: "none",
           }}
         />
@@ -926,7 +926,7 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
               background: "transparent",
               color: chatTab === id ? "var(--color-accent)" : "var(--color-text-muted)",
               cursor: "pointer",
-              fontSize: 12,
+              fontSize: "var(--fs-12)",
               fontWeight: chatTab === id ? 600 : 400,
               transition: "color 0.15s",
               flexShrink: 0,

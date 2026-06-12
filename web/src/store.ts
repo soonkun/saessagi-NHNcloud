@@ -70,6 +70,19 @@ function loadTheme(): ThemeMode {
   return localStorage.getItem("saessagi_theme") === "light" ? "light" : "dark";
 }
 
+// UI 글씨 크기 배율 (CSS zoom). 캐릭터(Live2D)에는 적용하지 않음.
+export const UI_SCALE_OPTIONS = [
+  { label: "작게", value: 0.9 },
+  { label: "보통", value: 1 },
+  { label: "크게", value: 1.15 },
+  { label: "아주 크게", value: 1.3 },
+] as const;
+
+function loadUiScale(): number {
+  const raw = parseFloat(localStorage.getItem("saessagi_ui_scale") ?? "1");
+  return UI_SCALE_OPTIONS.some((o) => o.value === raw) ? raw : 1;
+}
+
 function loadLlmInfo(): LlmInfo | null {
   try {
     const raw = localStorage.getItem("saessagi_llm_info");
@@ -131,6 +144,7 @@ interface UiSlice {
   selectedNoteSlug: string | null;
   notesRevision: number;
   theme: ThemeMode;
+  uiScale: number;
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
@@ -140,6 +154,7 @@ interface UiSlice {
   setSelectedNoteSlug: (slug: string | null) => void;
   bumpNotesRevision: () => void;
   setTheme: (theme: ThemeMode) => void;
+  setUiScale: (scale: number) => void;
   setWsUrl: (url: string) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string) => void;
@@ -233,6 +248,7 @@ export const useStore = create<AppStore>((set) => ({
   selectedNoteSlug: null as string | null,
   notesRevision: 0,
   theme: loadTheme(),
+  uiScale: loadUiScale(),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
@@ -247,6 +263,10 @@ export const useStore = create<AppStore>((set) => ({
   },
   setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
   bumpNotesRevision: () => set((state) => ({ notesRevision: state.notesRevision + 1 })),
+  setUiScale: (scale) => {
+    try { localStorage.setItem("saessagi_ui_scale", String(scale)); } catch { /* ignore */ }
+    set({ uiScale: scale });
+  },
   setTheme: (theme) => {
     try { localStorage.setItem("saessagi_theme", theme); } catch { /* ignore */ }
     set({ theme });

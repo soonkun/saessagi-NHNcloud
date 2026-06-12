@@ -27,6 +27,12 @@ export function App(): React.ReactElement {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  // 글씨 크기 배율 → --ui-scale (index.css의 --fs-* 토큰이 비례 확대)
+  const uiScale = useStore((s) => s.uiScale);
+  useEffect(() => {
+    document.documentElement.style.setProperty("--ui-scale", String(uiScale));
+  }, [uiScale]);
+
   // 드롭존 밖에 파일을 떨어뜨려도 Chromium이 file://로 내비게이션하지 않도록
   // 전역 차단. 각 드롭존의 onDrop은 버블링 전에 처리되므로 영향 없음.
   useEffect(() => {

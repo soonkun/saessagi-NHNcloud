@@ -14,6 +14,30 @@
   --color-border: #373a40;
 }
 
+/* ── 타이포 스케일 ──────────────────────────────────────────
+   글씨 크기 조절 기능: --ui-scale을 App.tsx가 설정(0.9~1.3)하면 모든
+   --fs-* 토큰이 비례 확대된다. zoom은 ForceGraph2D 캔버스 히트테스트와
+   충돌 이력(E-DesktopView 주석)이 있어 사용하지 않는다. */
+:root {
+  --ui-scale: 1;
+  --fs-10: calc(10px * var(--ui-scale));
+  --fs-11: calc(11px * var(--ui-scale));
+  --fs-12: calc(12px * var(--ui-scale));
+  --fs-13: calc(13px * var(--ui-scale));
+  --fs-14: calc(14px * var(--ui-scale));
+  --fs-15: calc(15px * var(--ui-scale));
+  --fs-16: calc(16px * var(--ui-scale));
+  --fs-18: calc(18px * var(--ui-scale));
+  --fs-20: calc(20px * var(--ui-scale));
+  --fs-26: calc(26px * var(--ui-scale));
+  --fs-28: calc(28px * var(--ui-scale));
+}
+
+/* Notion 스타일 노트 에디터 본문도 같은 배율로 */
+.bn-editor {
+  font-size: calc(15px * var(--ui-scale)) !important;
+}
+
 :root[data-theme="light"] {
   --color-bg: #f8f9fb;
   --color-sidebar: #ffffff;

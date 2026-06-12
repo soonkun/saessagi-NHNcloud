@@ -125,7 +125,7 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
           border: "none",
           cursor: "pointer",
           color: "var(--color-text)",
-          fontSize: 13,
+          fontSize: "var(--fs-13)",
           fontWeight: 600,
           textAlign: "left",
           padding: 0,
@@ -145,7 +145,7 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {folder.name}
             </span>
-            <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: 11, color: "var(--color-text-muted)", flexShrink: 0 }}>
+            <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: "var(--fs-11)", color: "var(--color-text-muted)", flexShrink: 0 }}>
               {docCount}
             </span>
           </>
@@ -166,7 +166,7 @@ function FolderRow({ folder, isOpen, docCount, onToggle, onRename, onDelete }: F
             }}
             style={{
               flex: 1,
-              fontSize: 13,
+              fontSize: "var(--fs-13)",
               background: "var(--color-panel)",
               border: "1px solid var(--color-accent)",
               borderRadius: 3,
@@ -465,7 +465,7 @@ export function DocumentsView(): React.ReactElement {
       <div style={{ padding: "10px 12px 0", flexShrink: 0 }}>
         {/* 업로드 대상 폴더 선택 — 커스텀 드롭다운 (native select는 pet 모드에서 두 번 클릭 필요 문제) */}
         <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
-          <span style={{ fontSize: 11, color: "var(--color-text-muted)", flexShrink: 0 }}>
+          <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", flexShrink: 0 }}>
             업로드 위치
           </span>
           <div ref={dropRef} style={{ flex: 1, position: "relative" }}>
@@ -480,7 +480,7 @@ export function DocumentsView(): React.ReactElement {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                fontSize: 12,
+                fontSize: "var(--fs-12)",
                 background: "var(--color-sidebar, #1a1a1a)",
                 border: "1px solid var(--color-border)",
                 borderRadius: 4,
@@ -523,7 +523,7 @@ export function DocumentsView(): React.ReactElement {
                       width: "100%",
                       textAlign: "left",
                       padding: "5px 8px",
-                      fontSize: 12,
+                      fontSize: "var(--fs-12)",
                       background: targetFolderId === opt.id ? "var(--color-accent, #c96442)" : "transparent",
                       color: targetFolderId === opt.id ? "#fff" : "var(--color-text)",
                       border: "none",
@@ -556,13 +556,13 @@ export function DocumentsView(): React.ReactElement {
           }}
         >
           <Upload size={18} style={{ marginBottom: 4, color: "var(--color-text-muted)" }} />
-          <p style={{ fontWeight: 600, fontSize: 12, marginBottom: 1 }}>
+          <p style={{ fontWeight: 600, fontSize: "var(--fs-12)", marginBottom: 1 }}>
             클릭하여 파일 선택, 또는 파일 끌어다 놓기
             <span style={{ color: "var(--color-accent)", marginLeft: 4 }}>
               → {targetFolderName}
             </span>
           </p>
-          <p style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+          <p style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
             .txt · .md · .pdf · .docx · .pptx · .hwpx
           </p>
           <input
@@ -603,7 +603,7 @@ export function DocumentsView(): React.ReactElement {
           <div style={{ padding: "6px 12px 0", flexShrink: 0 }}>
             {/* 전체 진행 헤더 */}
             <div style={{ background: "var(--color-sidebar)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "6px 10px", marginBottom: 4 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, fontSize: 11 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4, fontSize: "var(--fs-11)" }}>
                 <span style={{ fontWeight: 600 }}>
                   {allFinished ? "업로드 완료" : "업로드 중"} — {finished}/{total}
                   {errorCount > 0 && <span style={{ color: "#e05050" }}> (실패 {errorCount})</span>}
@@ -611,7 +611,7 @@ export function DocumentsView(): React.ReactElement {
                 {allFinished && (
                   <button
                     onClick={() => setUploads([])}
-                    style={{ background: "none", border: "1px solid var(--color-border)", borderRadius: 4, cursor: "pointer", color: "var(--color-text-muted)", fontSize: 10, padding: "1px 6px" }}
+                    style={{ background: "none", border: "1px solid var(--color-border)", borderRadius: 4, cursor: "pointer", color: "var(--color-text-muted)", fontSize: "var(--fs-11)", padding: "1px 6px" }}
                   >
                     목록 지우기
                   </button>
@@ -628,7 +628,7 @@ export function DocumentsView(): React.ReactElement {
                 const s = statusLabel(u);
                 return (
                   <div key={u.id} style={{ background: "var(--color-sidebar)", border: "1px solid var(--color-border)", borderRadius: 6, padding: "6px 10px", marginBottom: 3 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, fontSize: 11 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3, fontSize: "var(--fs-11)" }}>
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{u.name}</span>
                       <span style={{ color: s.color, flexShrink: 0, marginLeft: 8 }}>{s.text}</span>
                     </div>
@@ -645,13 +645,13 @@ export function DocumentsView(): React.ReactElement {
 
       {/* ── 툴바: 폴더 추가 ─────────────────────────────────── */}
       <div style={{ display: "flex", alignItems: "center", padding: "8px 12px 4px", gap: 6, flexShrink: 0 }}>
-        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--color-text-muted)", flex: 1 }}>
+        <span style={{ fontSize: "var(--fs-11)", fontWeight: 600, color: "var(--color-text-muted)", flex: 1 }}>
           문서 탐색기
         </span>
         <button
           onClick={() => { setAddingFolder(true); setNewFolderName(""); }}
           title="새 폴더 만들기"
-          style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid var(--color-border)", borderRadius: 4, cursor: "pointer", color: "var(--color-text-muted)", fontSize: 11, padding: "3px 7px" }}
+          style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "1px solid var(--color-border)", borderRadius: 4, cursor: "pointer", color: "var(--color-text-muted)", fontSize: "var(--fs-11)", padding: "3px 7px" }}
         >
           <FolderPlus size={13} />
           새 폴더
@@ -672,7 +672,7 @@ export function DocumentsView(): React.ReactElement {
               if (e.key === "Enter") void handleCreateFolder();
               if (e.key === "Escape") { setAddingFolder(false); setNewFolderName(""); }
             }}
-            style={{ flex: 1, fontSize: 12, background: "var(--color-panel)", border: "1px solid var(--color-accent)", borderRadius: 4, color: "var(--color-text)", padding: "4px 8px", opacity: isCreating ? 0.5 : 1 }}
+            style={{ flex: 1, fontSize: "var(--fs-12)", background: "var(--color-panel)", border: "1px solid var(--color-accent)", borderRadius: 4, color: "var(--color-text)", padding: "4px 8px", opacity: isCreating ? 0.5 : 1 }}
           />
           <button
             onClick={() => void handleCreateFolder()}
@@ -693,12 +693,12 @@ export function DocumentsView(): React.ReactElement {
       {/* ── 폴더 트리 ───────────────────────────────────────── */}
       <div style={{ flex: 1, overflowY: "auto", padding: "0 12px 12px" }}>
         {loading && (
-          <div style={{ color: "var(--color-text-muted)", fontSize: 12, padding: "10px 4px" }}>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)", padding: "10px 4px" }}>
             불러오는 중...
           </div>
         )}
         {!loading && folders.length === 0 && docs.length === 0 && uploads.length === 0 && (
-          <div style={{ color: "var(--color-text-muted)", fontSize: 12, padding: "10px 4px" }}>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)", padding: "10px 4px" }}>
             새 폴더를 만들고 문서를 업로드하세요.
           </div>
         )}
@@ -720,7 +720,7 @@ export function DocumentsView(): React.ReactElement {
               {isOpen && (
                 <div style={{ paddingLeft: 24 }}>
                   {folderDocs.length === 0 ? (
-                    <div style={{ fontSize: 11, color: "var(--color-text-muted)", padding: "4px 6px", fontStyle: "italic" }}>
+                    <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", padding: "4px 6px", fontStyle: "italic" }}>
                       문서 없음
                     </div>
                   ) : (
@@ -739,7 +739,7 @@ export function DocumentsView(): React.ReactElement {
           <div style={{ marginBottom: 1 }}>
             <button
               onClick={() => toggleFolder("__unclassified__")}
-              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: "none", cursor: "pointer", color: "var(--color-text)", padding: "5px 4px", borderRadius: 4, fontSize: 13, fontWeight: 600, textAlign: "left" }}
+              style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: "none", cursor: "pointer", color: "var(--color-text)", padding: "5px 4px", borderRadius: 4, fontSize: "var(--fs-13)", fontWeight: 600, textAlign: "left" }}
             >
               {!collapsed["__unclassified__"]
                 ? <ChevronDown size={14} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
@@ -750,7 +750,7 @@ export function DocumentsView(): React.ReactElement {
                 : <Folder size={15} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
               }
               <span>미분류</span>
-              <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: 11, color: "var(--color-text-muted)" }}>
+              <span style={{ marginLeft: "auto", fontWeight: 400, fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 {unclassifiedDocs.length}
               </span>
             </button>
@@ -775,7 +775,7 @@ export function DocumentsView(): React.ReactElement {
 function DocRow({ doc, onDelete }: { doc: RagDocument; onDelete: (id: string) => Promise<void> }) {
   return (
     <div
-      style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 6px", borderRadius: 4, fontSize: 12 }}
+      style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 6px", borderRadius: 4, fontSize: "var(--fs-12)" }}
       className="doc-row"
     >
       <FileText size={13} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
@@ -783,7 +783,7 @@ function DocRow({ doc, onDelete }: { doc: RagDocument; onDelete: (id: string) =>
         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {doc.filename}
         </div>
-        <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+        <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
           청크 {doc.chunk_count}개
           {doc.uploaded_at ? ` · ${new Date(doc.uploaded_at).toLocaleDateString("ko-KR")}` : ""}
         </div>

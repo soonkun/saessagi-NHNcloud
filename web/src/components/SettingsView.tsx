@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useStore } from "../store";
+import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
 import { speakMeloTTS } from "../services/tts";
@@ -158,13 +158,13 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 8,
   color: "var(--color-text)",
   padding: "8px 12px",
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
   outline: "none",
   width: "100%",
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
   color: "var(--color-text-muted)",
   marginBottom: 6,
   display: "block",
@@ -191,7 +191,7 @@ type SettingsSection =
   | "about";
 
 const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
-  { id: "theme", label: "화면 테마" },
+  { id: "theme", label: "화면 (테마·글씨 크기)" },
   { id: "llm", label: "LLM" },
   { id: "intent", label: "의도 분류기" },
   { id: "prompts", label: "지침 관리" },
@@ -275,6 +275,8 @@ export function SettingsView({
   const setLlmInfo = useStore((s) => s.setLlmInfo);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const uiScale = useStore((s) => s.uiScale);
+  const setUiScale = useStore((s) => s.setUiScale);
 
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
@@ -483,7 +485,7 @@ export function SettingsView({
   const providerBtnStyle = (active: boolean): React.CSSProperties => ({
     flex: 1,
     padding: "8px 10px",
-    fontSize: 13,
+    fontSize: "var(--fs-13)",
     fontWeight: active ? 700 : 400,
     background: active ? "var(--color-accent)" : "transparent",
     border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
@@ -497,7 +499,7 @@ export function SettingsView({
   function renderTheme(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
           화면 테마
         </h3>
         <div style={{ display: "flex", gap: 8 }}>
@@ -516,7 +518,7 @@ export function SettingsView({
               style={{
                 flex: 1,
                 padding: "8px 10px",
-                fontSize: 13,
+                fontSize: "var(--fs-13)",
                 fontWeight: theme === id ? 700 : 400,
                 background:
                   theme === id ? "var(--color-accent)" : "transparent",
@@ -532,7 +534,7 @@ export function SettingsView({
         </div>
         <p
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-11)",
             color: "var(--color-text-muted)",
             marginTop: 6,
             lineHeight: 1.5,
@@ -541,6 +543,45 @@ export function SettingsView({
           전체 UI 색상이 즉시 전환됩니다. 선택은 기기에 저장돼 다음 실행
           시에도 유지됩니다.
         </p>
+
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: "20px 0 12px" }}>
+          글씨 크기
+        </h3>
+        <div style={{ display: "flex", gap: 8 }}>
+          {UI_SCALE_OPTIONS.map(({ label, value }) => (
+            <button
+              key={value}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                setUiScale(value);
+              }}
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                fontSize: "var(--fs-13)",
+                fontWeight: uiScale === value ? 700 : 400,
+                background:
+                  uiScale === value ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${uiScale === value ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: uiScale === value ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            marginTop: 6,
+            lineHeight: 1.5,
+          }}
+        >
+          펫 모드 패널·데스크톱 모드 전체 글씨가 즉시 조절됩니다.
+        </p>
       </>
     );
   }
@@ -548,7 +589,7 @@ export function SettingsView({
   function renderLlm(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
           LLM 설정
         </h3>
         <label style={labelStyle}>LLM 공급자</label>
@@ -594,7 +635,7 @@ export function SettingsView({
             </select>
             <p
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 color: "var(--color-text-muted)",
                 marginTop: 6,
                 lineHeight: 1.5,
@@ -632,7 +673,7 @@ export function SettingsView({
             <OpenaiModelSelect value={openaiModel} onChange={setOpenaiModel} />
             <p
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 color: "var(--color-text-muted)",
                 marginTop: 6,
                 lineHeight: 1.5,
@@ -660,7 +701,7 @@ export function SettingsView({
             color: "var(--color-text)",
             cursor: llmSaving ? "not-allowed" : "pointer",
             padding: "7px 16px",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             width: "100%",
             opacity: llmSaving ? 0.6 : 1,
           }}
@@ -678,12 +719,12 @@ export function SettingsView({
   function renderIntent(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
           의도 분류기
         </h3>
         <p
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-11)",
             color: "var(--color-text-muted)",
             marginBottom: 12,
             lineHeight: 1.5,
@@ -711,7 +752,7 @@ export function SettingsView({
               style={{
                 flex: 1,
                 padding: "8px 10px",
-                fontSize: 13,
+                fontSize: "var(--fs-13)",
                 fontWeight: igEnabled === id ? 700 : 400,
                 background:
                   igEnabled === id ? "var(--color-accent)" : "transparent",
@@ -746,7 +787,7 @@ export function SettingsView({
                   style={{
                     flex: 1,
                     padding: "7px 6px",
-                    fontSize: 12,
+                    fontSize: "var(--fs-12)",
                     fontWeight: igProvider === id ? 700 : 400,
                     background:
                       igProvider === id ? "var(--color-accent)" : "transparent",
@@ -787,7 +828,7 @@ export function SettingsView({
                 </select>
                 <p
                   style={{
-                    fontSize: 11,
+                    fontSize: "var(--fs-11)",
                     color: "var(--color-text-muted)",
                     marginBottom: 8,
                     lineHeight: 1.5,
@@ -808,7 +849,7 @@ export function SettingsView({
                 />
                 <p
                   style={{
-                    fontSize: 11,
+                    fontSize: "var(--fs-11)",
                     color: "var(--color-text-muted)",
                     marginTop: 6,
                     marginBottom: 8,
@@ -836,7 +877,7 @@ export function SettingsView({
             color: igSaved ? "#fff" : "var(--color-text)",
             cursor: igSaving ? "not-allowed" : "pointer",
             padding: "7px 16px",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             width: "100%",
             opacity: igSaving ? 0.6 : 1,
           }}
@@ -897,13 +938,13 @@ export function SettingsView({
                   marginBottom: 6,
                 }}
               >
-                <span style={{ fontWeight: 600, fontSize: 13 }}>
+                <span style={{ fontWeight: 600, fontSize: "var(--fs-13)" }}>
                   {info.label}
                 </span>
                 {info.is_custom === true && (
                   <span
                     style={{
-                      fontSize: 10,
+                      fontSize: "var(--fs-11)",
                       fontWeight: 700,
                       background: "var(--color-accent)",
                       color: "#fff",
@@ -918,7 +959,7 @@ export function SettingsView({
                   <>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: "var(--fs-11)",
                         fontWeight: 700,
                         background: "#c0392b",
                         color: "#fff",
@@ -930,7 +971,7 @@ export function SettingsView({
                     </span>
                     <span
                       style={{
-                        fontSize: 10,
+                        fontSize: "var(--fs-11)",
                         fontWeight: 700,
                         background: "#7b2c2c",
                         color: "#ffcccc",
@@ -946,7 +987,7 @@ export function SettingsView({
               {isHigh && (
                 <p
                   style={{
-                    fontSize: 11,
+                    fontSize: "var(--fs-11)",
                     color: "#c0392b",
                     marginBottom: 8,
                     lineHeight: 1.5,
@@ -985,7 +1026,7 @@ export function SettingsView({
               {errorMsg && (
                 <p
                   style={{
-                    fontSize: 11,
+                    fontSize: "var(--fs-11)",
                     color: "#c0392b",
                     marginTop: 4,
                   }}
@@ -1008,7 +1049,7 @@ export function SettingsView({
                       color: "var(--color-text-muted)",
                       cursor: "pointer",
                       padding: "7px 8px",
-                      fontSize: 11,
+                      fontSize: "var(--fs-11)",
                     }}
                   >
                     기본값으로 복원
@@ -1027,7 +1068,7 @@ export function SettingsView({
                     color: isSaved ? "#fff" : "var(--color-text)",
                     cursor: isSaving ? "not-allowed" : "pointer",
                     padding: "7px 10px",
-                    fontSize: 12,
+                    fontSize: "var(--fs-12)",
                     opacity: isSaving ? 0.6 : 1,
                   }}
                 >
@@ -1044,7 +1085,7 @@ export function SettingsView({
   function renderVoice(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
           음성 선택
         </h3>
 
@@ -1060,7 +1101,7 @@ export function SettingsView({
               style={{
                 flex: 1,
                 padding: "7px 10px",
-                fontSize: 12,
+                fontSize: "var(--fs-12)",
                 fontWeight: ttsEngine === eng ? 700 : 400,
                 background:
                   ttsEngine === eng ? "var(--color-accent)" : "transparent",
@@ -1076,7 +1117,7 @@ export function SettingsView({
         </div>
         <p
           style={{
-            fontSize: 11,
+            fontSize: "var(--fs-11)",
             color: "var(--color-text-muted)",
             marginBottom: 16,
             lineHeight: 1.5,
@@ -1122,7 +1163,7 @@ export function SettingsView({
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <span
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 color: "var(--color-text-muted)",
                 minWidth: 28,
               }}
@@ -1140,7 +1181,7 @@ export function SettingsView({
             />
             <span
               style={{
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 color: "var(--color-text-muted)",
                 minWidth: 28,
               }}
@@ -1152,7 +1193,7 @@ export function SettingsView({
             style={{
               display: "flex",
               justifyContent: "space-between",
-              fontSize: 11,
+              fontSize: "var(--fs-11)",
               color: "var(--color-text-muted)",
               marginTop: 4,
               padding: "0 38px",
@@ -1174,7 +1215,7 @@ export function SettingsView({
             color: "var(--color-text)",
             cursor: "pointer",
             padding: "7px 16px",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             width: "100%",
           }}
         >
@@ -1187,7 +1228,7 @@ export function SettingsView({
   function renderConnection(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
           WebSocket 연결
         </h3>
         <label style={labelStyle}>서버 주소</label>
@@ -1211,7 +1252,7 @@ export function SettingsView({
             color: "#fff",
             cursor: "pointer",
             padding: "8px 18px",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             fontWeight: 600,
           }}
         >
@@ -1224,12 +1265,12 @@ export function SettingsView({
   function renderAbout(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
           정보
         </h3>
         <p
           style={{
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             color: "var(--color-text-muted)",
             lineHeight: 1.7,
           }}
@@ -1249,7 +1290,7 @@ export function SettingsView({
       intent: renderIntent(),
       prompts: (
         <>
-          <h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 12 }}>
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
             지침 관리 (에이전트별)
           </h3>
           {renderPromptsContent(true)}
@@ -1274,7 +1315,7 @@ export function SettingsView({
         >
           <div
             style={{
-              fontSize: 11,
+              fontSize: "var(--fs-11)",
               fontWeight: 700,
               color: "var(--color-text-muted)",
               padding: "0 12px 10px",
@@ -1305,7 +1346,7 @@ export function SettingsView({
                     ? "var(--color-accent)"
                     : "var(--color-text)",
                 cursor: "pointer",
-                fontSize: 14,
+                fontSize: "var(--fs-14)",
                 fontWeight: activeSection === id ? 600 : 400,
                 textAlign: "left",
                 transition: "background 0.12s",
@@ -1337,7 +1378,7 @@ export function SettingsView({
     <div
       style={{ padding: 20, maxWidth: 560, overflowY: "auto", height: "100%" }}
     >
-      <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 18 }}>설정</h2>
+      <h2 style={{ fontWeight: 700, fontSize: "var(--fs-20)", marginBottom: 18 }}>설정</h2>
 
       <section style={petCardStyle}>{renderTheme()}</section>
 
@@ -1368,10 +1409,10 @@ export function SettingsView({
             marginBottom: promptsOpen ? 14 : 0,
           }}
         >
-          <h3 style={{ fontWeight: 600, fontSize: 15, margin: 0 }}>
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-15)", margin: 0 }}>
             지침 관리 (에이전트별)
           </h3>
-          <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
+          <span style={{ fontSize: "var(--fs-13)", color: "var(--color-text-muted)" }}>
             {promptsOpen ? "▲ 접기" : "▼ 펼치기"}
           </span>
         </button>

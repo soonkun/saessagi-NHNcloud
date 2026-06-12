@@ -256,7 +256,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               borderRadius: 6,
               color: "var(--color-text)",
               padding: "5px 8px 5px 22px",
-              fontSize: 12,
+              fontSize: "var(--fs-12)",
               outline: "none",
               minWidth: 0,
             }}
@@ -306,19 +306,19 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               borderRadius: 6,
               color: "var(--color-text)",
               padding: "5px 8px 5px 22px",
-              fontSize: 12,
+              fontSize: "var(--fs-12)",
               outline: "none",
             }}
           />
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "0 6px 8px" }}>
           {loading && notes.length === 0 && (
-            <div style={{ padding: 12, fontSize: 11, color: "var(--color-text-muted)" }}>
+            <div style={{ padding: 12, fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
               로딩 중...
             </div>
           )}
           {!loading && filtered.length === 0 && (
-            <div style={{ padding: 12, fontSize: 11, color: "var(--color-text-muted)" }}>
+            <div style={{ padding: 12, fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
               {notes.length === 0 ? "노트가 없습니다." : "검색 결과 없음"}
             </div>
           )}
@@ -337,7 +337,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
             >
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: "var(--fs-12)",
                   fontWeight: 600,
                   color: "var(--color-text)",
                   overflow: "hidden",
@@ -347,10 +347,10 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               >
                 {n.title}
               </div>
-              <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginTop: 2 }}>
                 {n.tags.length > 0 ? n.tags.join(" · ") : "태그 없음"}
               </div>
-              <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 {n.updated ? n.updated.slice(0, 10) : ""}
               </div>
             </div>
@@ -392,7 +392,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   background: "transparent",
                   color: subTab === id ? "var(--color-accent)" : "var(--color-text-muted)",
                   cursor: "pointer",
-                  fontSize: 12,
+                  fontSize: "var(--fs-12)",
                   fontWeight: subTab === id ? 600 : 400,
                 }}
               >
@@ -404,7 +404,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
           {current && subTab !== "graph" && (
             <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
               {savedAt && Date.now() - savedAt < 2500 && (
-                <span style={{ fontSize: 11, color: "var(--color-accent)" }}>저장됨 ✓</span>
+                <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>저장됨 ✓</span>
               )}
               <button
                 onClick={() => void saveCurrent()}
@@ -420,7 +420,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   color: dirty ? "#fff" : "var(--color-text-muted)",
                   cursor: dirty ? "pointer" : "default",
                   padding: "4px 10px",
-                  fontSize: 11,
+                  fontSize: "var(--fs-11)",
                   fontWeight: 600,
                 }}
               >
@@ -437,7 +437,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   color: confirmingDelete ? "#fff" : "var(--color-text-muted)",
                   cursor: "pointer",
                   padding: "4px 8px",
-                  fontSize: 11,
+                  fontSize: "var(--fs-11)",
                   fontWeight: confirmingDelete ? 700 : 400,
                   display: "flex",
                   alignItems: "center",
@@ -470,7 +470,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   borderRadius: 6,
                   color: "var(--color-text)",
                   padding: "7px 10px",
-                  fontSize: 14,
+                  fontSize: "var(--fs-14)",
                   fontWeight: 600,
                   outline: "none",
                 }}
@@ -486,7 +486,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   borderRadius: 6,
                   color: "var(--color-text)",
                   padding: "6px 10px",
-                  fontSize: 12,
+                  fontSize: "var(--fs-12)",
                   outline: "none",
                 }}
                 placeholder="태그 (쉼표 구분): 회계, 출장"
@@ -503,7 +503,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   borderRadius: 6,
                   color: "var(--color-text)",
                   padding: "10px 12px",
-                  fontSize: 13,
+                  fontSize: "var(--fs-13)",
                   lineHeight: 1.6,
                   fontFamily: "monospace",
                   outline: "none",
@@ -512,7 +512,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                 }}
               />
               <RelatedDocsSection note={current} />
-              <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 slug: <code>{current.slug}</code> · 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
               </div>
             </div>
@@ -533,7 +533,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                     border: "none",
                     color: "var(--color-text)",
                     padding: 0,
-                    fontSize: 28,
+                    fontSize: "var(--fs-28)",
                     fontWeight: 700,
                     outline: "none",
                   }}
@@ -549,18 +549,18 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                     border: "none",
                     color: "var(--color-text-muted)",
                     padding: "6px 0 2px",
-                    fontSize: 12,
+                    fontSize: "var(--fs-12)",
                     outline: "none",
                   }}
                 />
-                <div style={{ fontSize: 10, color: "var(--color-text-muted)", padding: "2px 0 8px" }}>
+                <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", padding: "2px 0 8px" }}>
                   slug: <code>{current.slug}</code> · 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
                 </div>
                 <RelatedDocsSection note={current} />
               </div>
               <Suspense
                 fallback={
-                  <div style={{ padding: "12px 46px", fontSize: 12, color: "var(--color-text-muted)" }}>
+                  <div style={{ padding: "12px 46px", fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
                     에디터 로딩 중...
                   </div>
                 }
@@ -575,12 +575,12 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
             </div>
           )}
           {current && subTab === "preview" && (
-            <div style={{ padding: 20, overflow: "auto", flex: 1, fontSize: 13, lineHeight: 1.6 }}>
-              <h2 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
-              <div style={{ fontSize: 11, color: "var(--color-text-muted)", marginBottom: 4 }}>
+            <div style={{ padding: 20, overflow: "auto", flex: 1, fontSize: "var(--fs-13)", lineHeight: 1.6 }}>
+              <h2 style={{ fontSize: "var(--fs-18)", fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 4 }}>
                 {current.tags.join(" · ") || "태그 없음"}
               </div>
-              <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginBottom: 14 }}>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 14 }}>
                 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
               </div>
               <RelatedDocsSection note={current} />
@@ -618,7 +618,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
             </div>
           )}
           {subTab === "graph" && (
-            <Suspense fallback={<div style={{ padding: 20, fontSize: 12, color: "var(--color-text-muted)" }}>그래프 로딩 중...</div>}>
+            <Suspense fallback={<div style={{ padding: 20, fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>그래프 로딩 중...</div>}>
               {graph ? (
                 <NotesGraph
                   data={graph}
@@ -628,7 +628,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   }}
                 />
               ) : (
-                <div style={{ padding: 20, fontSize: 12, color: "var(--color-text-muted)" }}>
+                <div style={{ padding: 20, fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
                   그래프 데이터 로딩 중...
                 </div>
               )}
@@ -657,15 +657,15 @@ function EmptyHint({ isEmptyAtAll }: { isEmptyAtAll: boolean }): React.ReactElem
         }}
       >
         <BookOpen size={44} style={{ opacity: 0.35 }} />
-        <div style={{ fontSize: 15, fontWeight: 600, color: "var(--color-text)" }}>
+        <div style={{ fontSize: "var(--fs-15)", fontWeight: 600, color: "var(--color-text)" }}>
           노트가 비어 있습니다
         </div>
-        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+        <div style={{ fontSize: "var(--fs-13)", lineHeight: 1.6 }}>
           새싹이와 채팅하면서 자료를 첨부하고<br />
           <span style={{ color: "var(--color-accent)" }}>"오늘 ⟨이 자료⟩로 ⟨이 업무⟩ 처리했어요"</span><br />
           라고 말해보세요. AI가 알아서 정리해 저장합니다.
         </div>
-        <div style={{ fontSize: 11, opacity: 0.7 }}>
+        <div style={{ fontSize: "var(--fs-11)", opacity: 0.7 }}>
           채팅 입력 영역의 📎 버튼으로 자료를 첨부할 수 있습니다.
         </div>
       </div>
@@ -674,7 +674,7 @@ function EmptyHint({ isEmptyAtAll }: { isEmptyAtAll: boolean }): React.ReactElem
   return (
     <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--color-text-muted)", flexDirection: "column", gap: 8 }}>
       <BookOpen size={36} style={{ opacity: 0.4 }} />
-      <div style={{ fontSize: 13 }}>왼쪽에서 노트를 선택해 주세요</div>
+      <div style={{ fontSize: "var(--fs-13)" }}>왼쪽에서 노트를 선택해 주세요</div>
     </div>
   );
 }
@@ -696,7 +696,7 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
     >
       <div
         style={{
-          fontSize: 11,
+          fontSize: "var(--fs-11)",
           fontWeight: 600,
           color: "var(--color-text-muted)",
           marginBottom: 6,
@@ -722,7 +722,7 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
                   alignItems: "center",
                   gap: 4,
                   padding: "3px 8px",
-                  fontSize: 11,
+                  fontSize: "var(--fs-11)",
                   borderRadius: 8,
                   background: "transparent",
                   border: "1px dashed var(--color-border)",
@@ -746,7 +746,7 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
                 alignItems: "center",
                 gap: 4,
                 padding: "3px 8px",
-                fontSize: 11,
+                fontSize: "var(--fs-11)",
                 borderRadius: 8,
                 background: "rgba(100,140,220,0.18)",
                 border: "1px solid rgba(100,140,220,0.4)",

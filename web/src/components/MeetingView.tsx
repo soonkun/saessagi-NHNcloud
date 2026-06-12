@@ -70,7 +70,7 @@ function ProgressLog({ steps }: { steps: string[] }) {
     }}>
       {steps.map((s, i) => (
         <div key={i} style={{
-          fontSize: 11,
+          fontSize: "var(--fs-11)",
           color: i === steps.length - 1 ? "var(--color-accent)" : "var(--color-text-muted)",
           display: "flex", alignItems: "center", gap: 5,
         }}>
@@ -84,7 +84,7 @@ function ProgressLog({ steps }: { steps: string[] }) {
 function ErrorBox({ msg }: { msg: string }) {
   return (
     <div style={{
-      color: "#e05050", fontSize: 12, padding: "8px 12px",
+      color: "#e05050", fontSize: "var(--fs-12)", padding: "8px 12px",
       background: "rgba(224,80,80,0.1)", border: "1px solid rgba(224,80,80,0.3)",
       borderRadius: 8,
     }}>
@@ -99,11 +99,11 @@ function StepHeader({ n, title }: { n: number; title: string }) {
       <div style={{
         width: 22, height: 22, borderRadius: "50%",
         background: "var(--color-accent)", color: "#fff",
-        fontSize: 11, fontWeight: 700,
+        fontSize: "var(--fs-11)", fontWeight: 700,
         display: "flex", alignItems: "center", justifyContent: "center",
         flexShrink: 0,
       }}>{n}</div>
-      <span style={{ fontWeight: 700, fontSize: 14 }}>{title}</span>
+      <span style={{ fontWeight: 700, fontSize: "var(--fs-14)" }}>{title}</span>
     </div>
   );
 }
@@ -133,7 +133,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
     background: "var(--color-bg)", border: "1px solid var(--color-border)",
     borderRadius: 6, color: "var(--color-text)",
     padding: desktop ? "10px 12px" : "8px 10px",
-    fontSize: desktop ? 13 : 11, outline: "none", resize: "vertical",
+    fontSize: desktop ? "var(--fs-13)" : "var(--fs-12)", outline: "none", resize: "vertical",
     minHeight: desktop ? 240 : petMinHeight,
     lineHeight: 1.6,
   });
@@ -303,7 +303,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       background: disabled ? "var(--color-border)" : accent ? "var(--color-accent)" : "rgba(201,100,66,0.15)",
       color: disabled ? "var(--color-text-muted)" : accent ? "#fff" : "var(--color-accent)",
       cursor: disabled ? "default" : "pointer",
-      fontSize: 13, fontWeight: 600,
+      fontSize: "var(--fs-13)", fontWeight: 600,
       display: "flex", alignItems: "center", gap: 6,
     }}>{label}</button>
   );
@@ -329,7 +329,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
               border: "1px solid var(--color-border)",
               background: "transparent",
               color: "var(--color-text-muted)",
-              cursor: "pointer", fontSize: 12,
+              cursor: "pointer", fontSize: "var(--fs-12)",
             }}
           >
             <RotateCcw size={13} />
@@ -358,11 +358,11 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
         >
           <FileAudio size={22} style={{ marginBottom: 4, color: audioFile ? "#4caf84" : "var(--color-text-muted)" }} />
           {dragging ? (
-            <p style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent)" }}>여기에 놓아주세요</p>
+            <p style={{ fontSize: "var(--fs-12)", fontWeight: 600, color: "var(--color-accent)" }}>여기에 놓아주세요</p>
           ) : audioFile ? (
             <>
               <p style={{
-                fontSize: 12, fontWeight: 600, color: "#4caf84",
+                fontSize: "var(--fs-12)", fontWeight: 600, color: "#4caf84",
                 display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
               }}>
                 {audioFile.name}
@@ -381,14 +381,14 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
                   </button>
                 )}
               </p>
-              <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
+              <p style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 {(audioFile.size / 1024 / 1024).toFixed(1)} MB — 클릭해서 변경
               </p>
             </>
           ) : (
             <>
-              <p style={{ fontSize: 12, fontWeight: 600 }}>클릭하여 파일 선택, 또는 파일 끌어다 놓기</p>
-              <p style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>
+              <p style={{ fontSize: "var(--fs-12)", fontWeight: 600 }}>클릭하여 파일 선택, 또는 파일 끌어다 놓기</p>
+              <p style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginTop: 2 }}>
                 {AUDIO_TYPES.join(" · ")}
               </p>
             </>
@@ -426,7 +426,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
             onClick={() => { setStep2Input(transcript); }}
             style={{
               alignSelf: "flex-end", background: "transparent", border: "none",
-              color: "var(--color-accent)", fontSize: 12, cursor: "pointer",
+              color: "var(--color-accent)", fontSize: "var(--fs-12)", cursor: "pointer",
               display: "flex", alignItems: "center", gap: 4, fontWeight: 600,
             }}
           >
@@ -440,20 +440,20 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       {/* ── STEP 2: 회의록 ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <StepHeader n={2} title="회의록 작성 (텍스트 요약)" />
-        <p style={{ fontSize: 11, color: "var(--color-text-muted)", margin: 0 }}>
+        <p style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", margin: 0 }}>
           1단계 결과 또는 직접 입력한 녹취 텍스트를 회의록으로 정리합니다.
         </p>
 
         {/* 분량 선택 — 결과보고서 페이지 수 결정 */}
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>결과보고서 분량</span>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>결과보고서 분량</span>
           {([1, 2] as const).map((n) => (
             <button key={n} onClick={() => setPages(n)} style={{
               padding: "4px 12px", borderRadius: 6,
               border: `1px solid ${pages === n ? "var(--color-accent)" : "var(--color-border)"}`,
               background: pages === n ? "rgba(201,100,66,0.15)" : "transparent",
               color: pages === n ? "var(--color-accent)" : "var(--color-text-muted)",
-              cursor: "pointer", fontSize: 12, fontWeight: pages === n ? 600 : 400,
+              cursor: "pointer", fontSize: "var(--fs-12)", fontWeight: pages === n ? 600 : 400,
             }}>{n}페이지</button>
           ))}
         </div>
@@ -496,7 +496,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
             onClick={() => { setStep3Input(meetingNotes); }}
             style={{
               alignSelf: "flex-end", background: "transparent", border: "none",
-              color: "var(--color-accent)", fontSize: 12, cursor: "pointer",
+              color: "var(--color-accent)", fontSize: "var(--fs-12)", cursor: "pointer",
               display: "flex", alignItems: "center", gap: 4, fontWeight: 600,
             }}
           >
@@ -510,7 +510,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       {/* ── STEP 3: 결과보고서 ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <StepHeader n={3} title={`결과보고서 (.hwpx · ${pages}페이지)`} />
-        <p style={{ fontSize: 11, color: "var(--color-text-muted)", margin: 0 }}>
+        <p style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", margin: 0 }}>
           2단계 회의록 또는 직접 입력한 내용을 공문서 양식으로 변환합니다.
         </p>
 
@@ -541,7 +541,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
               display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
               background: "rgba(76,175,132,0.15)", border: "1px solid #4caf84",
               borderRadius: 8, color: "#4caf84", padding: "10px",
-              textDecoration: "none", fontSize: 14, fontWeight: 600,
+              textDecoration: "none", fontSize: "var(--fs-14)", fontWeight: 600,
             }}
           >
             <Download size={15} />보고서 다운로드 (.hwpx)

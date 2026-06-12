@@ -102,14 +102,14 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
       {/* 월 네비게이션 */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
         <button onClick={prevMonth} style={miniNavBtn}><ChevronLeft size={14} /></button>
-        <span style={{ fontSize: 13, fontWeight: 600 }}>{viewYear}년 {viewMonth + 1}월</span>
+        <span style={{ fontSize: "var(--fs-13)", fontWeight: 600 }}>{viewYear}년 {viewMonth + 1}월</span>
         <button onClick={nextMonth} style={miniNavBtn}><ChevronRight size={14} /></button>
       </div>
 
       {/* 요일 헤더 */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
         {WEEK_DAYS_SHORT.map((d, i) => (
-          <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 600, padding: "2px 0",
+          <div key={d} style={{ textAlign: "center", fontSize: "var(--fs-11)", fontWeight: 600, padding: "2px 0",
             color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)" }}>{d}</div>
         ))}
       </div>
@@ -129,7 +129,7 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
                 padding: "5px 2px",
                 border: "none",
                 borderRadius: 6,
-                fontSize: 12,
+                fontSize: "var(--fs-12)",
                 cursor: "pointer",
                 background: isSelected ? "var(--color-accent)" : "transparent",
                 color: isSelected ? "#fff"
@@ -174,7 +174,7 @@ const pickerInputStyle: React.CSSProperties = {
   borderRadius: 6,
   color: "var(--color-text)",
   padding: "7px 10px",
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
 };
 
 const miniNavBtn: React.CSSProperties = {
@@ -271,11 +271,11 @@ function AddEventModal({
         </div>
 
         {error && (
-          <div style={{ color: "#e05050", fontSize: 13 }}>{error}</div>
+          <div style={{ color: "#e05050", fontSize: "var(--fs-13)" }}>{error}</div>
         )}
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>제목 *</span>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>제목 *</span>
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -287,7 +287,7 @@ function AddEventModal({
         </label>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>시작 일시</span>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>시작 일시</span>
           <div style={{ display: "flex", gap: 6 }}>
             <DatePicker value={dateStr} onChange={setDateStr} />
             <select
@@ -312,7 +312,7 @@ function AddEventModal({
         </div>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>기간 (분)</span>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>기간 (분)</span>
           <input
             type="number"
             value={duration}
@@ -324,7 +324,7 @@ function AddEventModal({
         </label>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "var(--color-text-muted)" }}>설명</span>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>설명</span>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
@@ -351,7 +351,7 @@ const inputStyle: React.CSSProperties = {
   borderRadius: 6,
   color: "var(--color-text)",
   padding: "7px 10px",
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
   outline: "none",
   width: "100%",
 };
@@ -363,7 +363,7 @@ const cancelBtnStyle: React.CSSProperties = {
   color: "var(--color-text)",
   cursor: "pointer",
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
 };
 
 const saveBtnStyle: React.CSSProperties = {
@@ -373,7 +373,7 @@ const saveBtnStyle: React.CSSProperties = {
   color: "#fff",
   cursor: "pointer",
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--fs-13)",
   fontWeight: 600,
 };
 
@@ -475,7 +475,7 @@ export function CalendarView(): React.ReactElement {
           <button onClick={prevMonth} style={navBtnStyle}>
             <ChevronLeft size={18} />
           </button>
-          <h2 style={{ fontWeight: 700, fontSize: 18 }}>
+          <h2 style={{ fontWeight: 700, fontSize: "var(--fs-18)" }}>
             {year}년 {MONTH_KO[month]}
           </h2>
           <button onClick={nextMonth} style={navBtnStyle}>
@@ -497,7 +497,7 @@ export function CalendarView(): React.ReactElement {
               key={d}
               style={{
                 textAlign: "center",
-                fontSize: 12,
+                fontSize: "var(--fs-12)",
                 color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)",
                 padding: "4px 0",
                 fontWeight: 600,
@@ -565,7 +565,7 @@ export function CalendarView(): React.ReactElement {
                 >
                   <div
                     style={{
-                      fontSize: 12,
+                      fontSize: "var(--fs-12)",
                       fontWeight: isToday ? 800 : 600,
                       color: isToday && !isSelected ? "var(--color-accent)" : dayColor,
                       display: "flex",
@@ -575,7 +575,7 @@ export function CalendarView(): React.ReactElement {
                   >
                     {day}
                     {isToday && (
-                      <span style={{ fontSize: 9, color: "var(--color-accent)", fontWeight: 700 }}>오늘</span>
+                      <span style={{ fontSize: "var(--fs-10)", color: "var(--color-accent)", fontWeight: 700 }}>오늘</span>
                     )}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 2 }}>
@@ -584,7 +584,7 @@ export function CalendarView(): React.ReactElement {
                         key={ev.id}
                         title={`${ev.start.slice(11, 16)} · ${ev.title}`}
                         style={{
-                          fontSize: 10.5,
+                          fontSize: "var(--fs-11)",
                           padding: "2px 5px",
                           borderRadius: 4,
                           background: "rgba(100,140,220,0.18)",
@@ -602,7 +602,7 @@ export function CalendarView(): React.ReactElement {
                       </div>
                     ))}
                     {dayEvents.length > 3 && (
-                      <div style={{ fontSize: 10, color: "var(--color-text-muted)", marginLeft: 4 }}>
+                      <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginLeft: 4 }}>
                         +{dayEvents.length - 3}건
                       </div>
                     )}
@@ -627,7 +627,7 @@ export function CalendarView(): React.ReactElement {
                   color: dayColor,
                   cursor: "pointer",
                   position: "relative",
-                  fontSize: 13,
+                  fontSize: "var(--fs-13)",
                   fontWeight: isToday || isSelected ? 700 : 400,
                   transition: "background 0.1s",
                 }}
@@ -653,7 +653,7 @@ export function CalendarView(): React.ReactElement {
         </div>
 
         {loading && (
-          <div style={{ color: "var(--color-text-muted)", textAlign: "center", marginTop: 20, fontSize: 13 }}>
+          <div style={{ color: "var(--color-text-muted)", textAlign: "center", marginTop: 20, fontSize: "var(--fs-13)" }}>
             불러오는 중...
           </div>
         )}
@@ -677,7 +677,7 @@ export function CalendarView(): React.ReactElement {
             marginBottom: 16,
           }}
         >
-          <h3 style={{ fontWeight: 600, fontSize: 15 }}>{selectedDate}</h3>
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-15)" }}>{selectedDate}</h3>
           <button
             onClick={() => setShowModal(true)}
             style={{
@@ -690,7 +690,7 @@ export function CalendarView(): React.ReactElement {
               display: "flex",
               alignItems: "center",
               gap: 4,
-              fontSize: 12,
+              fontSize: "var(--fs-12)",
             }}
           >
             <Plus size={14} />
@@ -699,7 +699,7 @@ export function CalendarView(): React.ReactElement {
         </div>
 
         {selectedEvents.length === 0 ? (
-          <div style={{ color: "var(--color-text-muted)", fontSize: 13 }}>
+          <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-13)" }}>
             이벤트 없음
           </div>
         ) : (

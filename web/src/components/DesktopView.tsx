@@ -79,7 +79,7 @@ export function DesktopView(): React.ReactElement {
         // 데스크탑 가독성 향상 — base font-size 키움.
         // 자식 컴포넌트에서 em 단위를 쓰면 비례 확대, px 단위는 그대로.
         // (이전엔 zoom:1.5 사용했으나 ForceGraph2D 등 canvas hit testing과 충돌해 변경)
-        fontSize: 16,
+        fontSize: "var(--fs-16)",
       }}
     >
       {/* 상단 타이틀 바 — 드래그 영역 + 창 제어 버튼 */}
@@ -104,7 +104,7 @@ export function DesktopView(): React.ReactElement {
           style={{
             flex: 1,
             textAlign: "center",
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
             color: "var(--color-text-muted)",
             userSelect: "none",
           }}
@@ -188,11 +188,11 @@ export function DesktopView(): React.ReactElement {
             />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>새싹이</div>
+            <div style={{ fontSize: "var(--fs-15)", fontWeight: 700 }}>새싹이</div>
             {llmInfo && (
               <div
                 style={{
-                  fontSize: 12,
+                  fontSize: "var(--fs-12)",
                   color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -225,7 +225,7 @@ export function DesktopView(): React.ReactElement {
                 borderRadius: 8,
                 color: chatTab === id ? "var(--color-accent)" : "var(--color-text)",
                 cursor: "pointer",
-                fontSize: 15,
+                fontSize: "var(--fs-15)",
                 fontWeight: chatTab === id ? 600 : 400,
                 textAlign: "left",
                 transition: "background 0.12s",
@@ -261,7 +261,7 @@ export function DesktopView(): React.ReactElement {
               color: "var(--color-text-muted)",
               cursor: "pointer",
               padding: "8px 10px",
-              fontSize: 13,
+              fontSize: "var(--fs-13)",
             }}
           >
             <PanelLeftClose size={14} />
@@ -434,12 +434,12 @@ function WelcomeHero(): React.ReactElement {
             e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
           }}
         />
-        <h1 style={{ fontSize: 26, fontWeight: 700, margin: 0 }}>
+        <h1 style={{ fontSize: "var(--fs-26)", fontWeight: 700, margin: 0 }}>
           안녕하세요, 새싹이예요
         </h1>
         <p
           style={{
-            fontSize: 14,
+            fontSize: "var(--fs-14)",
             color: "var(--color-text-muted)",
             margin: 0,
             textAlign: "center",
@@ -472,14 +472,14 @@ function WelcomeHero(): React.ReactElement {
               padding: "14px 16px",
             }}
           >
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+            <div style={{ fontSize: "var(--fs-13)", fontWeight: 600, marginBottom: 6 }}>
               <LayoutGrid
                 size={13}
                 style={{ marginRight: 6, verticalAlign: "-2px", opacity: 0.6 }}
               />
               {p.title}
             </div>
-            <div style={{ fontSize: 12, color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+            <div style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
               {p.body}
             </div>
           </div>

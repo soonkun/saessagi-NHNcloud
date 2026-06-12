@@ -180,7 +180,7 @@ export default function NotesGraph({ data, onNodeClick }: Props): React.ReactEle
             justifyContent: "center",
             height: "100%",
             color: palette.labelDim,
-            fontSize: 13,
+            fontSize: "var(--fs-13)",
           }}
         >
           노트가 없습니다.
@@ -329,7 +329,7 @@ export default function NotesGraph({ data, onNodeClick }: Props): React.ReactEle
           position: "absolute",
           left: 12,
           bottom: 12,
-          fontSize: 10,
+          fontSize: "var(--fs-11)",
           color: palette.labelDim,
           background: theme === "dark" ? "rgba(22,24,28,0.7)" : "rgba(255,255,255,0.85)",
           border: `1px solid var(--color-border)`,
