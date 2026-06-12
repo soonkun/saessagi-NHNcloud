@@ -294,7 +294,7 @@ export function DocumentsView(): React.ReactElement {
       })),
     ]);
     setIsUploading(true);
-    setEmotion("study");
+    setEmotion("uploading"); // 책장 포털에 책을 꽂는 새싹이 — RAG 등록 전용
 
     const patch = (id: string, p: Partial<UploadItem>): void =>
       setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...p } : u)));

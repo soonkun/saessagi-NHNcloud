@@ -10,6 +10,7 @@ export type Emotion =
   | "study"
   | "writing"
   | "note_writing"
+  | "uploading"
   | "worried";
 
 export type AiStatus = "idle" | "thinking" | "speaking";

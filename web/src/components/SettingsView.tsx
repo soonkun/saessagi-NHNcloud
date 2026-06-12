@@ -275,8 +275,10 @@ export function SettingsView({
   const setLlmInfo = useStore((s) => s.setLlmInfo);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
-  const uiScale = useStore((s) => s.uiScale);
+  // 현재 모드(펫/데스크톱)의 글씨 크기 — 모드별 별도 저장
+  const uiScale = useStore((s) => (s.windowMode === "pet" ? s.uiScalePet : s.uiScaleDesktop));
   const setUiScale = useStore((s) => s.setUiScale);
+  const windowModeForScale = useStore((s) => s.windowMode);
 
   const [draft, setDraft] = useState(wsUrl);
   const [saved, setSaved] = useState(false);
@@ -580,7 +582,8 @@ export function SettingsView({
             lineHeight: 1.5,
           }}
         >
-          펫 모드 패널·데스크톱 모드 전체 글씨가 즉시 조절됩니다.
+          {windowModeForScale === "pet" ? "펫" : "데스크톱"} 모드의 글씨 크기입니다 — 펫/데스크톱
+          모드에 각각 따로 저장됩니다.
         </p>
       </>
     );

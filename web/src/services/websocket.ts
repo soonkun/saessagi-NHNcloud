@@ -228,6 +228,7 @@ const EMOTION_MAP: Record<string, Emotion> = {
   worried_v2: "worried",
   writing: "writing",
   note_writing: "note_writing",
+  uploading: "uploading",
   neutral: "neutral",
 };
 

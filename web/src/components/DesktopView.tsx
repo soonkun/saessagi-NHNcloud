@@ -28,9 +28,9 @@ import type { ChatTab } from "../types";
 const SIDEBAR_TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
   { id: "chat", label: "새싹이", Icon: MessageCircle },
   { id: "calendar", label: "일정표", Icon: Calendar },
+  { id: "notes", label: "업무 노트", Icon: BookOpen },
   { id: "documents", label: "문서", Icon: FolderOpen },
   { id: "meeting", label: "회의록", Icon: FileAudio },
-  { id: "notes", label: "업무 노트", Icon: BookOpen },
   { id: "settings", label: "설정", Icon: Settings },
 ];
 

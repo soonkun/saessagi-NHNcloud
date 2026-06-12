@@ -28,7 +28,8 @@ export function App(): React.ReactElement {
   }, [theme]);
 
   // 글씨 크기 배율 → --ui-scale (index.css의 --fs-* 토큰이 비례 확대)
-  const uiScale = useStore((s) => s.uiScale);
+  // 펫/데스크톱 모드별로 별도 저장된 값을 현재 모드에 따라 적용
+  const uiScale = useStore((s) => (s.windowMode === "pet" ? s.uiScalePet : s.uiScaleDesktop));
   useEffect(() => {
     document.documentElement.style.setProperty("--ui-scale", String(uiScale));
   }, [uiScale]);

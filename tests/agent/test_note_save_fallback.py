@@ -250,3 +250,31 @@ async def test_intent_announce_emits_character_state() -> None:
     assert "자료를 찾아볼게요" in first.tts_text
     # 마지막 본문 메시지엔 [neutral] 복귀 태그
     assert "[neutral]" in sentence_outs[-1].display_text.text
+
+
+@pytest.mark.asyncio
+async def test_calendar_added_tts_message() -> None:
+    """add_event 성공 턴의 긴 답변 TTS는 '말씀하신 일정을 등록했어요'로 분기한다."""
+    from src.agent.events import EndOfTurn, TextChunk, ToolCallResult, ToolCallStart
+
+    long_reply = "네! 일정을 등록했어요. " + "상세 내용 안내. " * 20  # 80자 초과
+
+    async def _fake_chat(input_data: BatchInput) -> AsyncIterator[Any]:
+        yield ToolCallStart(tool_id="t1", name="add_event", arguments="{}")
+        yield ToolCallResult(tool_id="t1", name="add_event", ok=True, content="ok")
+        yield TextChunk(text=long_reply)
+        yield EndOfTurn()
+
+    agent = MagicMock()
+    agent.chat = _fake_chat
+    agent.aclose = AsyncMock()
+
+    adapter = BasicMemoryAgentAdapter(
+        agent,
+        intent_classifier=_make_classifier("calendar_add"),
+        tool_router=_make_tool_router(ok=True),
+    )
+    outs = await _collect(adapter, "내일 3시에 예산 회의 일정 잡아줘")
+    sentence_outs = [o for o in outs if hasattr(o, "tts_text")]
+    final = sentence_outs[-1]
+    assert "말씀하신 일정을 등록했어요" in final.tts_text

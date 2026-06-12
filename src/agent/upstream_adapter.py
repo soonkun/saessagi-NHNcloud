@@ -541,6 +541,7 @@ def _make_adapter_class() -> type:
             text_parts: list[str] = []
             note_call_started = False  # save_knowledge_note 호출 시작 여부
             note_saved = False  # 이번 턴에 업무 노트 저장이 "성공"했는가 (E-46: 결과 기준)
+            calendar_added = False  # add_event가 "성공"했는가 — 완료 멘트 분기용
 
             async for event in self._agent.chat(input_data):
                 if isinstance(event, TextChunk):
@@ -577,6 +578,8 @@ def _make_adapter_class() -> type:
                     # 턴(예: title 누락 → invalid_arguments)도 폴백 대상이 되도록.
                     if event.name == "save_knowledge_note" and event.ok:
                         note_saved = True
+                    if event.name == "add_event" and event.ok:
+                        calendar_added = True
                     yield {
                         "type": "tool_call_status",
                         "status": "completed" if event.ok else "error",
@@ -625,6 +628,8 @@ def _make_adapter_class() -> type:
                 if self._tts_brief_enabled and len(clean_text) > self._tts_brief_max_chars:
                     if note_saved:
                         tts_out = "업무 노트 저장이 완료되었어요. 내용을 확인해 주세요."
+                    elif calendar_added:
+                        tts_out = "말씀하신 일정을 등록했어요. 내용을 확인해 주세요."
                     elif markers:
                         tts_out = "자료 확인이 완료되었어요. 내용을 확인해 주세요."
                     else:

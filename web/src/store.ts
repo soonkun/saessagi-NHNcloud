@@ -78,8 +78,11 @@ export const UI_SCALE_OPTIONS = [
   { label: "아주 크게", value: 1.3 },
 ] as const;
 
-function loadUiScale(): number {
-  const raw = parseFloat(localStorage.getItem("saessagi_ui_scale") ?? "1");
+// 글씨 크기는 펫/데스크톱 모드별로 따로 저장한다 (화면 크기·시야 거리가 달라서).
+// 구버전 단일 키(saessagi_ui_scale)는 마이그레이션 폴백으로만 읽는다.
+function loadUiScaleFor(key: string): number {
+  const legacy = localStorage.getItem("saessagi_ui_scale");
+  const raw = parseFloat(localStorage.getItem(key) ?? legacy ?? "1");
   return UI_SCALE_OPTIONS.some((o) => o.value === raw) ? raw : 1;
 }
 
@@ -144,7 +147,8 @@ interface UiSlice {
   selectedNoteSlug: string | null;
   notesRevision: number;
   theme: ThemeMode;
-  uiScale: number;
+  uiScalePet: number; // 펫 모드 글씨 크기 배율
+  uiScaleDesktop: number; // 데스크톱 모드 글씨 크기 배율 (별도 저장)
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
@@ -171,7 +175,7 @@ function nextId(): string {
   return `msg_${Date.now()}_${++_msgCounter}`;
 }
 
-export const useStore = create<AppStore>((set) => ({
+export const useStore = create<AppStore>((set, get) => ({
   // Chat
   messages: [],
   aiStatus: "idle",
@@ -248,7 +252,8 @@ export const useStore = create<AppStore>((set) => ({
   selectedNoteSlug: null as string | null,
   notesRevision: 0,
   theme: loadTheme(),
-  uiScale: loadUiScale(),
+  uiScalePet: loadUiScaleFor("saessagi_ui_scale_pet"),
+  uiScaleDesktop: loadUiScaleFor("saessagi_ui_scale_desktop"),
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
@@ -264,8 +269,11 @@ export const useStore = create<AppStore>((set) => ({
   setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
   bumpNotesRevision: () => set((state) => ({ notesRevision: state.notesRevision + 1 })),
   setUiScale: (scale) => {
-    try { localStorage.setItem("saessagi_ui_scale", String(scale)); } catch { /* ignore */ }
-    set({ uiScale: scale });
+    // 현재 모드의 글씨 크기만 변경 — 펫/데스크톱 별도 저장
+    const isPet = get().windowMode === "pet";
+    const key = isPet ? "saessagi_ui_scale_pet" : "saessagi_ui_scale_desktop";
+    try { localStorage.setItem(key, String(scale)); } catch { /* ignore */ }
+    set(isPet ? { uiScalePet: scale } : { uiScaleDesktop: scale });
   },
   setTheme: (theme) => {
     try { localStorage.setItem("saessagi_theme", theme); } catch { /* ignore */ }
