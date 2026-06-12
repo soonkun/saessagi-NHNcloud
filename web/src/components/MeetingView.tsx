@@ -124,8 +124,19 @@ function downloadTextFile(text: string, filename: string) {
 // ────────────────────────────────────────────────────────────
 // MeetingView
 // ────────────────────────────────────────────────────────────
-export function MeetingView(): React.ReactElement {
+export function MeetingView({ desktop = false }: { desktop?: boolean }): React.ReactElement {
   const setMeetingGenerating = useStore((s) => s.setMeetingGenerating);
+
+  // 데스크톱 모드에서는 본문 확인·수정이 가능하도록 입력 박스를 크게,
+  // 펫 모드(ChatPanel)에서는 기존의 컴팩트한 크기를 유지한다.
+  const textareaStyle = (petMinHeight: number): React.CSSProperties => ({
+    background: "var(--color-bg)", border: "1px solid var(--color-border)",
+    borderRadius: 6, color: "var(--color-text)",
+    padding: desktop ? "10px 12px" : "8px 10px",
+    fontSize: desktop ? 13 : 11, outline: "none", resize: "vertical",
+    minHeight: desktop ? 240 : petMinHeight,
+    lineHeight: 1.6,
+  });
 
   // ── Step 1: 전사 ──────────────────────────────────────────
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -346,12 +357,7 @@ export function MeetingView(): React.ReactElement {
             value={transcript}
             onChange={(e) => setTranscript(e.target.value)}
             onClick={() => window.electronAPI?.restoreFocus()}
-            style={{
-              background: "var(--color-bg)", border: "1px solid var(--color-border)",
-              borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
-              fontSize: 11, outline: "none", resize: "vertical", minHeight: 80,
-              lineHeight: 1.6,
-            }}
+            style={textareaStyle(80)}
           />
         )}
 
@@ -395,14 +401,9 @@ export function MeetingView(): React.ReactElement {
         <textarea
           value={step2Input}
           onChange={(e) => setStep2Input(e.target.value)}
-            onClick={() => window.electronAPI?.restoreFocus()}
+          onClick={() => window.electronAPI?.restoreFocus()}
           placeholder="녹취 텍스트 붙여넣기 (또는 1단계 결과 자동 입력)"
-          style={{
-            background: "var(--color-bg)", border: "1px solid var(--color-border)",
-            borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
-            fontSize: 11, outline: "none", resize: "vertical", minHeight: 80,
-            lineHeight: 1.6,
-          }}
+          style={textareaStyle(80)}
         />
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -426,12 +427,7 @@ export function MeetingView(): React.ReactElement {
             value={meetingNotes}
             onChange={(e) => setMeetingNotes(e.target.value)}
             onClick={() => window.electronAPI?.restoreFocus()}
-            style={{
-              background: "var(--color-bg)", border: "1px solid var(--color-border)",
-              borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
-              fontSize: 11, outline: "none", resize: "vertical", minHeight: 100,
-              lineHeight: 1.6,
-            }}
+            style={textareaStyle(100)}
           />
         )}
 
@@ -461,14 +457,9 @@ export function MeetingView(): React.ReactElement {
         <textarea
           value={step3Input}
           onChange={(e) => setStep3Input(e.target.value)}
-            onClick={() => window.electronAPI?.restoreFocus()}
+          onClick={() => window.electronAPI?.restoreFocus()}
           placeholder="회의록 내용 붙여넣기 (또는 2단계 결과 자동 입력)"
-          style={{
-            background: "var(--color-bg)", border: "1px solid var(--color-border)",
-            borderRadius: 6, color: "var(--color-text)", padding: "8px 10px",
-            fontSize: 11, outline: "none", resize: "vertical", minHeight: 80,
-            lineHeight: 1.6,
-          }}
+          style={textareaStyle(80)}
         />
 
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>

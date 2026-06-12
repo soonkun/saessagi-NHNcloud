@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
@@ -25,9 +26,12 @@ from .types import DetailItem, MeetingDraft, NextStepItem, PageCount, SubItem, S
 ProgressCallback = Callable[[str, str], Awaitable[None]]
 
 # 이 글자 수 이하면 LLM에 직접 전달. 초과하면 청크 분할 → 요약 → 합산.
-_TRANSCRIPT_DIRECT_MAX_CHARS = 2500
-# 청크 한 개의 최대 글자 수
-_CHUNK_SIZE_CHARS = 2000
+# 기준: Ollama 런타임 컨텍스트 32K 토큰(gemma4 8B, RTX 4090) — 한국어 1자≈1토큰
+# 최악 가정으로 20,000자 + 시스템 프롬프트 + 출력 4K 토큰이 안전하게 수용된다.
+# 분할 요약은 구간당 글머리 몇 줄로 압축돼 수치·맥락 손실이 크므로 가급적 직접 전달.
+_TRANSCRIPT_DIRECT_MAX_CHARS = 20_000
+# 청크 한 개의 최대 글자 수 (직접 전달 한도 초과 시에만 사용)
+_CHUNK_SIZE_CHARS = 8_000
 
 logger = logging.getLogger(__name__)
 
@@ -132,18 +136,40 @@ def _normalize_raw_draft(raw: dict[str, Any]) -> dict[str, Any]:
             s for s in next_steps if isinstance(s, dict) and str(s.get("text", "")).strip()
         ]
 
+    # 주요내용(detail_items) 비움 방지 — LLM이 모든 ○를 summary_items(개요)에
+    # 몰아넣으면 보고서에서 '주요내용' 카테고리 헤더가 통째로 사라진다.
+    # 첫 항목(회의 목적)만 개요에 남기고 나머지를 주요내용으로 이동한다.
+    summary_list = raw.get("summary_items")
+    detail_list = raw.get("detail_items")
+    if (
+        isinstance(summary_list, list)
+        and isinstance(detail_list, list)
+        and not detail_list
+        and len(summary_list) > 1
+    ):
+        raw["detail_items"] = summary_list[1:]
+        raw["summary_items"] = summary_list[:1]
+
     return raw
+
+
+def _strip_marker(text: str) -> str:
+    """LLM이 규칙을 어기고 text 앞에 붙인 위계 기호(○/-/* 등)를 제거한다.
+
+    HwpxWriter가 위계 기호를 직접 붙이므로 여기 남아 있으면 '○ ○'처럼 중복된다.
+    """
+    return re.sub(r"^[\s○◦•·\-–—*]+", "", text).strip()
 
 
 def _dict_to_draft(raw: dict[str, Any], pages: PageCount) -> MeetingDraft:
     """검증된 raw dict를 MeetingDraft dataclass로 변환."""
     summary_items = tuple(
         SummaryItem(
-            text=item["text"].strip(),
+            text=_strip_marker(item["text"]),
             subs=tuple(
                 SubItem(
-                    text=sub["text"].strip(),
-                    detail=sub.get("detail", "").strip() or None,
+                    text=_strip_marker(sub["text"]),
+                    detail=_strip_marker(sub.get("detail", "")) or None,
                 )
                 for sub in item.get("subs", [])
             ),
@@ -152,11 +178,11 @@ def _dict_to_draft(raw: dict[str, Any], pages: PageCount) -> MeetingDraft:
     )
     detail_items = tuple(
         DetailItem(
-            text=item["text"].strip(),
+            text=_strip_marker(item["text"]),
             subs=tuple(
                 SubItem(
-                    text=sub["text"].strip(),
-                    detail=sub.get("detail", "").strip() or None,
+                    text=_strip_marker(sub["text"]),
+                    detail=_strip_marker(sub.get("detail", "")) or None,
                 )
                 for sub in item.get("subs", [])
             ),
@@ -165,7 +191,7 @@ def _dict_to_draft(raw: dict[str, Any], pages: PageCount) -> MeetingDraft:
     )
     next_steps = tuple(
         NextStepItem(
-            text=step["text"].strip(),
+            text=_strip_marker(step["text"]),
             date=step.get("date", ""),
         )
         for step in raw.get("next_steps", [])
@@ -191,8 +217,6 @@ def _split_into_chunks(text: str, chunk_size: int) -> list[str]:
     우선순위: 줄바꿈 → 문장 종결부(. ! ?) → 강제 글자수 분할.
     STT 결과처럼 줄바꿈이 없는 긴 텍스트도 처리한다.
     """
-    import re
-
     # 줄바꿈 기준 1차 분할
     lines = text.splitlines(keepends=True)
 
@@ -267,7 +291,7 @@ class MeetingDraftGenerator:
                 system_prompt=CHUNK_SUMMARY_SYSTEM_PROMPT,
                 user_prompt=user_prompt,
                 json_schema=CHUNK_BULLETS_SCHEMA,
-                max_tokens=512,
+                max_tokens=1024,
                 temperature=0.1,
                 timeout_seconds=90.0,
             )
@@ -303,14 +327,15 @@ class MeetingDraftGenerator:
         """청크 하나를 플레인 텍스트 글머리로 요약. JSON 모드 없이 호출."""
         user_prompt = (
             f"다음은 회의 녹취의 {idx + 1}/{total} 구간입니다.\n"
-            "핵심 내용을 5~8개의 짧은 글머리로 요약하세요. 각 항목은 한 줄로 작성하세요.\n\n"
+            "핵심 내용을 8~12개의 짧은 글머리로 요약하세요. 각 항목은 한 줄로 작성하고, "
+            "수치·날짜·담당자는 빠뜨리지 마세요.\n\n"
             f"녹취 구간:\n'''\n{chunk}\n'''"
         )
         try:
             text = await self._agent.complete_text(
                 system_prompt="회의 녹취록 일부를 읽고 핵심 내용을 글머리로 요약하는 역할입니다. 간결하게 작성하세요.",
                 user_prompt=user_prompt,
-                max_tokens=512,
+                max_tokens=1024,
                 temperature=0.2,
                 timeout_seconds=120.0,
             )
@@ -369,8 +394,10 @@ class MeetingDraftGenerator:
             "위의 위계·글자수·톤 규칙(특히 개조식 종결: -음/-함/명사형)은 그대로 적용하되,\n"
             "아래 레이아웃의 plain text로만 출력하세요 (마크다운 기호 ​#, **, ``` 금지):\n\n"
             "회의 제목\n"
+            "[개요]\n"
             "○ 일시·장소 : YYYY.MM.DD. HH:MM / 장소 (녹취에 없으면 날짜만)\n"
             "○ 참 석 자 : 이름1, 이름2 (녹취에 없으면 생략)\n"
+            "○ 회의 목적·배경 (개조식 한 줄)\n"
             "\n"
             "[주요내용]\n"
             "○ 주요 논의·결정 사항 (개조식)\n"

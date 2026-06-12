@@ -283,17 +283,16 @@ class HwpxWriter:
                     parent.remove(node)
                     logger.debug(f"placeholder {ph_key} 원본 노드 제거")
 
-        # 6. 빈 섹션의 고아 헤더 제거 — detail_items가 없으면 '세부내용' 헤더가
-        #    내용 없이 남아 문서가 어색해진다 (E-41)
+        # 6. 빈 섹션의 고아 헤더 제거 — detail_items가 없으면 '주요내용' 헤더가
+        #    내용 없이 남아 문서가 어색해진다 (E-41). generator의 normalize가
+        #    detail_items를 채워 넣으므로 실제로 비는 경우는 ○가 1개뿐일 때 정도.
         if not draft.detail_items:
-            self._remove_section_header(root, ns, "세부내용")
+            self._remove_section_header(root, ns, "주요내용")
         if not draft.next_steps:
             self._remove_section_header(root, ns, "향후계획")
 
     @staticmethod
-    def _remove_section_header(
-        root: etree._Element, ns: dict[str, str], header_text: str
-    ) -> None:
+    def _remove_section_header(root: etree._Element, ns: dict[str, str], header_text: str) -> None:
         """본문에서 header_text를 담은 짧은 섹션 헤더 단락을 제거한다."""
         for p in root.findall(".//hp:p", ns):
             text = _get_full_text(p, ns).strip()

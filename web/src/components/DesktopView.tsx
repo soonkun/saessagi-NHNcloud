@@ -335,7 +335,7 @@ export function DesktopView(): React.ReactElement {
             minHeight: 0,
           }}
         >
-          <MeetingView />
+          <MeetingView desktop />
         </div>
         <div
           style={{
