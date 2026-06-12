@@ -126,6 +126,13 @@ def _normalize_raw_draft(raw: dict[str, Any]) -> dict[str, Any]:
                     elif not text:
                         continue
                     cleaned_subs.append(sub)
+                # 스키마 한도(4) 초과 subs는 잘라낸다 — 재시도 후 하드 실패보다
+                # 일부 부연 생략이 낫다 (E-43)
+                if len(cleaned_subs) > 4:
+                    logger.warning(
+                        f"subs {len(cleaned_subs)}개 → 4개로 절단 (item={item.get('text', '')[:20]!r})"
+                    )
+                    cleaned_subs = cleaned_subs[:4]
                 item = {**item, "subs": cleaned_subs}
             cleaned_items.append(item)
         raw[key] = cleaned_items

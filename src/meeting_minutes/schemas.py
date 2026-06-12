@@ -67,7 +67,11 @@ MEETING_DRAFT_SCHEMA: dict[str, Any] = {
                 "subs": {
                     "type": "array",
                     "items": {"$ref": "#/$defs/Sub"},
-                    "maxItems": 2,
+                    # 공문서 관행상 ○당 - 는 2개 권장이지만, 회의가 선택지 3~4개를
+                    # 비교하는 경우 LLM이 subs를 3개 이상 만드는 것이 자연스럽다.
+                    # 2로 강제하면 재시도 후 하드 실패(E-43) — 스키마는 4까지 허용하고
+                    # 분량 권장은 프롬프트로만 유도한다.
+                    "maxItems": 4,
                     "default": [],
                 },
             },
