@@ -346,7 +346,7 @@ export function DesktopView(): React.ReactElement {
             minHeight: 0,
           }}
         >
-          <NotesView />
+          <NotesView desktop />
         </div>
         {chatTab === "settings" && <SettingsView desktop />}
       </main>

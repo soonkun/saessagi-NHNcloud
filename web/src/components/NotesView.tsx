@@ -32,12 +32,15 @@ import { invalidateNotesCache } from "../services/websocket";
 
 // 그래프 라이브러리는 노트 탭에 진입한 후 그래프 sub-탭을 처음 클릭할 때만 로드
 const NotesGraph = lazy(() => import("./NotesGraph"));
+// Notion 스타일 블록 에디터 — 데스크톱 모드 편집 탭에서만 로드 (CR-16)
+const NoteRichEditor = lazy(() => import("./NoteRichEditor"));
 
 type SubTab = "edit" | "preview" | "graph";
 
-export function NotesView(): React.ReactElement {
+export function NotesView({ desktop = false }: { desktop?: boolean }): React.ReactElement {
   const externalSelectedSlug = useStore((s) => s.selectedNoteSlug);
   const setExternalSelectedSlug = useStore((s) => s.setSelectedNoteSlug);
+  const theme = useStore((s) => s.theme);
   // 채팅으로 노트가 생성되면 bump됨 → 목록 자동 새로고침 트리거
   const notesRevision = useStore((s) => s.notesRevision);
 
@@ -53,7 +56,8 @@ export function NotesView(): React.ReactElement {
       setExternalSelectedSlug(null);
     }
   }, [externalSelectedSlug, selectedSlug, setExternalSelectedSlug]);
-  const [subTab, setSubTab] = useState<SubTab>("edit");
+  // 펫 모드는 간단 확인 위주 → 기본 '미리보기', 데스크톱은 바로 편집
+  const [subTab, setSubTab] = useState<SubTab>(desktop ? "edit" : "preview");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -445,7 +449,7 @@ export function NotesView(): React.ReactElement {
           {!current && subTab !== "graph" && (
             <EmptyHint isEmptyAtAll={notes.length === 0} />
           )}
-          {current && subTab === "edit" && (
+          {current && subTab === "edit" && !desktop && (
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10, flex: 1, overflow: "auto" }}>
               <input
                 data-note-title-input
@@ -503,6 +507,63 @@ export function NotesView(): React.ReactElement {
               <div style={{ fontSize: 10, color: "var(--color-text-muted)" }}>
                 slug: <code>{current.slug}</code> · 작성 {current.created?.slice(0, 10)} · 수정 {current.updated?.slice(0, 10)}
               </div>
+            </div>
+          )}
+          {current && subTab === "edit" && desktop && (
+            <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "auto" }}>
+              {/* Notion 스타일 헤더 — 테두리 없는 큰 제목 + 옅은 태그 줄 */}
+              <div style={{ padding: "24px 46px 0" }}>
+                <input
+                  data-note-title-input
+                  value={editTitle}
+                  onChange={(e) => { setEditTitle(e.target.value); setDirty(true); }}
+                  onClick={() => window.electronAPI?.restoreFocus()}
+                  placeholder="제목 없음"
+                  style={{
+                    width: "100%",
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--color-text)",
+                    padding: 0,
+                    fontSize: 28,
+                    fontWeight: 700,
+                    outline: "none",
+                  }}
+                />
+                <input
+                  value={editTags}
+                  onChange={(e) => { setEditTags(e.target.value); setDirty(true); }}
+                  onClick={() => window.electronAPI?.restoreFocus()}
+                  placeholder="태그 추가 (쉼표 구분)"
+                  style={{
+                    width: "100%",
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--color-text-muted)",
+                    padding: "6px 0 2px",
+                    fontSize: 12,
+                    outline: "none",
+                  }}
+                />
+                <div style={{ fontSize: 10, color: "var(--color-text-muted)", padding: "2px 0 8px" }}>
+                  slug: <code>{current.slug}</code> · 작성 {current.created?.slice(0, 10)} · 수정 {current.updated?.slice(0, 10)}
+                </div>
+                <RelatedDocsSection note={current} />
+              </div>
+              <Suspense
+                fallback={
+                  <div style={{ padding: "12px 46px", fontSize: 12, color: "var(--color-text-muted)" }}>
+                    에디터 로딩 중...
+                  </div>
+                }
+              >
+                <NoteRichEditor
+                  key={current.slug}
+                  markdown={editContent}
+                  theme={theme === "dark" ? "dark" : "light"}
+                  onChangeMarkdown={(md) => { setEditContent(md); setDirty(true); }}
+                />
+              </Suspense>
             </div>
           )}
           {current && subTab === "preview" && (
