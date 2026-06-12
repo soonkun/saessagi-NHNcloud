@@ -9,7 +9,7 @@ const WITH_EVENTS: Array<(events: CalendarEvent[]) => string> = [
   (ev) => `좋은 하루예요! 오늘 일정 알려드릴게요. ${_list(ev)}`,
   (ev) => `어서오세요! 오늘 ${ev.length}개 일정이 있어요. ${_list(ev)}`,
   (ev) => `반가워요! 오늘은 바쁜 날이네요. ${_list(ev)} 화이팅!`,
-  (ev) => `안녕하세요! 오늘 ${_fmt(ev[0])}에 ${ev[0].title} 일정 있는 날이에요. 잘 부탁드려요!`,
+  (ev) => `안녕하세요! 오늘 ${_fmt(ev[0])}에 ${ev[0].title} 일정이 있어요. 잊지 않게 챙겨드릴게요!`,
 ];
 
 const WITHOUT_EVENTS: string[] = [
@@ -17,7 +17,7 @@ const WITHOUT_EVENTS: string[] = [
   "좋은 하루예요! 오늘은 특별한 일정이 없네요. 무엇을 도와드릴까요?",
   "어서오세요! 오늘은 일정이 비어있어요. 집중 작업하기 딱 좋은 날이에요!",
   "반가워요! 오늘은 여유로운 날이에요. 새로운 일을 시작해보는 건 어떨까요?",
-  "안녕하세요! 오늘은 일정이 없어요. 편안하게 업무 보내세요~",
+  "안녕하세요! 오늘은 일정이 없어요. 편안한 하루 보내세요~",
 ];
 
 function _fmt(ev: CalendarEvent): string {

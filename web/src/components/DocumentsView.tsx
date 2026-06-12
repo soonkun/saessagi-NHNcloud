@@ -557,7 +557,7 @@ export function DocumentsView(): React.ReactElement {
         >
           <Upload size={18} style={{ marginBottom: 4, color: "var(--color-text-muted)" }} />
           <p style={{ fontWeight: 600, fontSize: 12, marginBottom: 1 }}>
-            클릭하여 파일 선택
+            클릭하여 파일 선택, 또는 파일 끌어다 놓기
             <span style={{ color: "var(--color-accent)", marginLeft: 4 }}>
               → {targetFolderName}
             </span>

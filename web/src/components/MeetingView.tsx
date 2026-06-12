@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { FileAudio, Download, Loader, ChevronRight, RotateCcw } from "lucide-react";
+import { FileAudio, Download, Loader, ChevronRight, RotateCcw, X } from "lucide-react";
 import { API_BASE } from "../services/api";
 import { useStore } from "../store";
 import { speak } from "../services/tts";
@@ -361,13 +361,37 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
             <p style={{ fontSize: 12, fontWeight: 600, color: "var(--color-accent)" }}>여기에 놓아주세요</p>
           ) : audioFile ? (
             <>
-              <p style={{ fontSize: 12, fontWeight: 600, color: "#4caf84" }}>{audioFile.name}</p>
+              <p style={{
+                fontSize: 12, fontWeight: 600, color: "#4caf84",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}>
+                {audioFile.name}
+                {step1Status !== "loading" && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setAudioFile(null); }}
+                    title="파일 선택 취소"
+                    style={{
+                      display: "inline-flex", alignItems: "center", justifyContent: "center",
+                      width: 18, height: 18, padding: 0, borderRadius: "50%",
+                      border: "1px solid var(--color-border)", background: "var(--color-bg)",
+                      color: "var(--color-text-muted)", cursor: "pointer", flexShrink: 0,
+                    }}
+                  >
+                    <X size={11} />
+                  </button>
+                )}
+              </p>
               <p style={{ fontSize: 11, color: "var(--color-text-muted)" }}>
                 {(audioFile.size / 1024 / 1024).toFixed(1)} MB — 클릭해서 변경
               </p>
             </>
           ) : (
-            <p style={{ fontSize: 12, fontWeight: 600 }}>클릭 또는 파일을 끌어다 놓아 오디오 선택</p>
+            <>
+              <p style={{ fontSize: 12, fontWeight: 600 }}>클릭하여 파일 선택, 또는 파일 끌어다 놓기</p>
+              <p style={{ fontSize: 10, color: "var(--color-text-muted)", marginTop: 2 }}>
+                {AUDIO_TYPES.join(" · ")}
+              </p>
+            </>
           )}
           <input ref={fileInputRef} type="file" accept={AUDIO_TYPES.join(",")} style={{ display: "none" }} onChange={onFileChange} />
         </div>
