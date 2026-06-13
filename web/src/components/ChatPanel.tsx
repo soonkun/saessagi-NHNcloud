@@ -109,6 +109,9 @@ export function ChatContent({
   const [uploadingItems, setUploadingItems] = useState<
     { key: string; filename: string; progress: number; error?: string }[]
   >([]);
+  // 동시 업로드 카운터 — 펫 캐릭터 emotion("uploading" 영상) 전환/복귀 제어.
+  // 마지막 업로드가 끝날 때만 neutral로 되돌려, 연속 첨부 중 깜빡임을 막는다.
+  const activeUploadsRef = useRef(0);
   // 첨부 이미지 (clipboard paste 또는 향후 드래그) — 비전 LLM에 직접 전달
   const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
 
@@ -235,6 +238,11 @@ export function ChatContent({
   async function uploadOneFile(file: File): Promise<void> {
     const key = `${Date.now()}_${file.name}`;
     setUploadingItems((prev) => [...prev, { key, filename: file.name, progress: 0 }]);
+    // 책장 포털에 책을 꽂는 새싹이 영상 — RAG 등록 동안 펫 캐릭터 자리에 재생
+    if (activeUploadsRef.current === 0) {
+      useStore.getState().setEmotion("uploading");
+    }
+    activeUploadsRef.current += 1;
     try {
       // 채팅에서 첨부한 파일은 "업무노트" 폴더로 자동 분류 (백엔드가 폴더 없으면 생성)
       const doc = await uploadDocument(file, null, (pct) => {
@@ -253,6 +261,13 @@ export function ChatContent({
       setTimeout(() => {
         setUploadingItems((prev) => prev.filter((it) => it.key !== key));
       }, 5000);
+    } finally {
+      activeUploadsRef.current = Math.max(0, activeUploadsRef.current - 1);
+      // 마지막 업로드가 끝났고 아직 uploading 상태면 평상시(neutral)로 복귀
+      if (activeUploadsRef.current === 0) {
+        const { emotion: cur, setEmotion } = useStore.getState();
+        if (cur === "uploading") setEmotion("neutral");
+      }
     }
   }
 
