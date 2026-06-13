@@ -5,6 +5,79 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-51: AI 답변 본문에 HTML 태그(`<span>`)·단일괄호 인용 마커가 찌꺼기로 노출 (2026-06-13)
+
+**증상**: 답변 본문에 `<span style="font-family: serif;">[doc:3. ...업무편람.hwpx_72a81791]</span>` 같은 **HTML 태그 + 인용 마커**가 그대로 보임. 파일명도 `<span style=...>파일명.hwpx</span>`로 감싸져 노출.
+**원인**: 정상 인용 마커 규약은 `[[doc:<doc_id>]]`(이중괄호)이고 프론트가 이를 칩으로 변환·본문에서 제거한다. 그러나 **gemma4(8B)가 형식을 못 지키고** 단일괄호 `[doc:id]` + 임의의 HTML `<span style="font-family: serif;">`로 출력했다(코드엔 `font-family: serif`가 전혀 없음 → 순수 모델 환각). `ChatPanel.stripNoteMarkers`는 **이중괄호만** 제거하므로 단일괄호 마커와 HTML이 누출됐다. react-markdown은 기본적으로 raw HTML을 렌더하지 않아 태그가 텍스트 찌꺼기로 표시됨.
+**수정**: `stripNoteMarkers`에 (1) 단일괄호 `[doc:id]`/`[note:slug]` 제거, (2) HTML 태그(`<...>`) 제거를 추가. 모델이 형식을 어떻게 틀리든 프론트에서 **결정론적으로** 정리.
+- 검증: 실제 찌꺼기 패턴(span+단일마커+평문 파일명)에 적용 → 태그·마커 제거, 파일명 평문 유지, 마크다운 블록(제목·표·`\n`)은 보존. `tsc`·`vite build` 성공.
+**교훈**: **작은 로컬 LLM(8B)의 출력 형식은 신뢰할 수 없다** — 인용 마커/HTML 같은 구조적 토큰의 정리는 프롬프트가 아니라 **프론트에서 형식 변형에 견고하게** 처리해야 한다. react-markdown 기본은 raw HTML 미렌더이므로, 모델이 뱉은 HTML은 strip하지 않으면 그대로 노출된다.
+
+---
+
+## E-50: AI 답변의 마크다운(제목·표)이 렌더링 안 되고 한 줄로 붙음 — 줄바꿈을 공백으로 뭉갬 (2026-06-13)
+
+**증상**: 채팅 답변에 모델이 마크다운(`##`, 표 `| |`, 목록)을 정상적으로 출력하는데, 화면에는 `##`·`|`가 **날것 텍스트**로 보이고 전체가 **한 줄로 붙어** 표시됨. 인라인인 `**굵게**`만 렌더링됨.
+**원인** (WS 원본 캡처로 확정): 백엔드 `display_text`에는 `\n\n`(마크다운 블록 구분 줄바꿈)이 **정상 포함**돼 옴(데이터는 멀쩡). 문제는 프론트 `ChatPanel.stripNoteMarkers()`의 `.replace(/\s{2,}/g, " ")` — `\s`가 **줄바꿈까지 포함**하므로 `\n\n`이 공백 1개로 뭉개짐. 그 결과 ReactMarkdown이 받는 텍스트가 한 줄이 되어 제목·표·목록을 **블록으로 인식하지 못함**(인라인 bold만 살아남음). 원래 의도는 노트 마커(`[[note:slug]]`) 제거 후 남는 중복 공백 정리였는데, 줄바꿈까지 죽인 것.
+**수정**: `ChatPanel.stripNoteMarkers`의 정규식을 `/\s{2,}/` → `/[ \t]{2,}/`로 변경 — **가로 공백(스페이스·탭)만 정리하고 줄바꿈(`\n`)은 보존**.
+- 검증: 정규식 비교(샘플 `요지\n\n## 정리\n| 표 |`)에서 OLD는 `\n\n`을 공백으로 뭉갬, NEW는 보존 확인. `tsc`·`vite build` 성공.
+**교훈**: **마크다운으로 렌더링할 텍스트에는 `\s` 기반 공백 정리를 절대 쓰지 말 것.** `\n`은 마크다운의 블록 구분자다(제목·표·목록·문단). 중복 공백을 줄이려면 `[ \t]`로 가로 공백만 건드려라. 데이터(백엔드)가 멀쩡한데 화면만 깨지면, 렌더 직전 프론트 텍스트 변환(strip/replace)을 의심할 것.
+
+---
+
+## E-49: 펫↔데스크톱 모드 전환·창 최소화 시 회의록 작업이 전부 사라짐 (2026-06-13)
+
+**증상**: 음성 전사·회의록 작성 중에 펫 모드↔데스크톱 모드를 전환하거나 펫 모드에서 창을 내렸다 올리면, 진행 중이던 작업(올린 음성·전사 결과·작성 중인 회의록)이 전부 초기화됨. "어제 작업이 다 날아갔다 / 기능이 퇴화했다"로 보고. (git 확인 결과 커밋된 작업/기능 손실은 0 — 라이브 세션 상태만 파괴됨.)
+**원인** (`App.tsx`·`MeetingView.tsx`로 확정):
+- `App.tsx`는 `windowMode === "window"`면 `<DesktopView>`, 펫 모드면 `<CharacterWidget/> + <ChatPanel/>`를 렌더한다 — **모드마다 완전히 다른 컴포넌트 트리**. 모드 전환 시 한쪽 트리가 통째로 언마운트된다.
+- `MeetingView`는 `DesktopView`와 `ChatPanel` 양쪽에서 각각 마운트되고, 3단계 작업 상태(audioFile·transcript·meetingNotes·각 step status 등 17개)가 전부 컴포넌트 지역 `useState`였다. 언마운트 → 지역 state 파괴 → 작업 증발. (펫 모드 *내부* 채팅 닫기는 167줄 display:none으로 보존했지만 모드 전환은 못 막음.)
+**수정** (상태를 전역 store로 승격):
+- `store.ts`에 `MeetingSlice` 추가: `meeting: MeetingWork`(작업 상태 단일 소스) + `patchMeeting(partial)` + `resetMeeting()`. 전역 store는 모듈 싱글톤이라 컴포넌트 언마운트·모드 전환과 무관하게 살아남고, 펫/데스크톱 두 MeetingView 인스턴스가 같은 상태를 공유한다.
+- `MeetingView`의 17개 `useState`를 store 구독 + 동일 시그니처 setter 래퍼로 교체(`setStepXSteps`는 `useStore.getState()`로 최신값 읽어 함수형 업데이트 지원). 렌더·핸들러 본문은 거의 무변경. `handleReset`은 `resetMeeting()`로 단순화.
+- 음성 File 객체는 메모리에만 유지(앱 재시작 시엔 재선택 필요) — 사용자 합의 범위(모드 전환·최소화 유지)에 맞춤.
+- 검증: `tsc --noEmit` 0 오류(누락 참조·미사용 변수 없음), `vite build` 성공, 프론트 테스트 13건 통과.
+**교훈**:
+1. **모드/탭에 따라 컴포넌트 트리를 분기(`if mode === ... return <A/> else <B/>`)하면, 그 안의 지역 state는 전환 시 전부 파괴된다.** 진행 중 작업처럼 보존돼야 하는 상태는 컴포넌트 지역(useState)이 아니라 **전역 store(모듈 싱글톤)** 에 둘 것.
+2. "기능이 퇴화/소실됐다"는 보고는 (a) 실제 코드 회귀 (b) **라이브 세션 상태 파괴**를 구분해야 한다. git으로 커밋 손실 여부부터 확인하면 (b)임을 빨리 가려낼 수 있다 (이번 건은 커밋 손실 0).
+
+---
+
+## E-48: 큰 PDF 업로드 시 백엔드 전체가 죽음 — 네이티브 파서 크래시가 프로세스를 급사시킴 (2026-06-13)
+
+**증상**: 큰 PDF를 업로드하면 화면에 "Network error during upload"가 뜨고, 이후 새싹이 대화·RAG·일정이 전부 무응답이 됨. "또 다 깨졌다"로 반복 보고. 같은 PDF가 어떤 때는 성공(457청크)하고 어떤 때는 실패 — 비결정적.
+**원인** (로그·재현으로 확정):
+- "Network error during upload"는 프론트 `xhr.onerror`(연결 끊김) — 서버가 보낸 에러가 아니라 **업로드 도중 백엔드가 죽어 연결이 끊긴 것**(E-36과 동일 표면 증상, 원인은 다름).
+- 백엔드가 죽은 직접 원인: 업로드 파싱이 `pypdfium2`(네이티브 C++)로 PDF를 읽다가 특정 페이지에서 `[WinError -1073741795] 0xc000001d`(ILLEGAL_INSTRUCTION)로 크래시. 파싱은 `asyncio.to_thread` 워커 **스레드**에서 돌았는데, **네이티브 크래시는 파이썬 try/except로 못 막고 같은 프로세스의 스레드라 백엔드 전체가 급사**. 비결정성은 연속 업로드 시 자원(메모리/VRAM) 압박으로 추정.
+**수정** (프로세스 격리):
+- `document_ingest/subprocess_parse.py` 신설 — 파싱 정본 로직을 경량 모듈로 분리(무거운 의존성 모듈레벨 import 금지, 파서는 함수 내 지연 import).
+- `rag_routes._parse_isolated()` 추가: 파싱을 `ProcessPoolExecutor(max_workers=1, mp_context=spawn)` **별도 프로세스**에서 수행. 워커가 급사하면 `BrokenProcessPool`을 잡아 해당 파일만 **HTTP 422**로 실패 처리 → 백엔드 메인 프로세스는 생존. 업로드 경로(`upload_document`)가 이 격리 파서를 호출하도록 교체. `_parse_to_meta_segments`는 정본 모듈로 위임하는 얇은 래퍼로 유지.
+- 매 업로드마다 새 프로세스 → 연속 업로드 시 자원 누적/스파이크 방지. fork가 아닌 **spawn** → 맥/리눅스에서 CUDA/torch 상태 상속으로 인한 2차 크래시 방지.
+- 검증: (A) 22MB 실제 PDF(과거 크래시 유발한 152쪽 포함) 격리 파싱 → 233 세그먼트 정상, (B) 워커 강제 급사 → BrokenProcessPool 포착, (C) 크래시 후 부모 생존 + 재파싱 성공. 라이브 백엔드에 실제 PDF 업로드 → 201/95청크 성공 + 업로드 직후 백엔드 HTTP 200 생존 확인. 회귀 테스트 `tests/document_ingest/test_subprocess_parse.py` 5건 추가.
+**교훈**:
+1. **네이티브 라이브러리(pypdfium2 등)의 크래시는 try/except로 못 막는다.** 한 입력이 전체 서버를 죽일 수 있는 작업(네이티브 파서)은 **별도 프로세스로 격리**해야 백엔드가 한 파일 때문에 통째로 죽지 않는다.
+2. "Network error during upload"는 코드 버그가 아니라 **연결 끊김** 신호 — 먼저 백엔드 생존(프로세스/포트)과 직전 로그(크래시 흔적)부터 확인할 것.
+3. 멀티프로세스 격리는 **spawn** 컨텍스트로(맥/리눅스 기본 fork는 CUDA 초기화 상태를 상속해 2차 크래시 유발).
+
+---
+
+## E-47: pull 후 프론트엔드 변경 미반영(옛 dist) + 빌드의 bash 의존성 (2026-06-13)
+
+**증상**: 다른 머신에서 작업해 push한 프론트엔드 변경(RAG 업로드 시 캐릭터 동영상 재생)을 `git pull`로 받아왔으나, 앱에는 옛날 그림만 나오고 동영상이 안 나옴. "기능이 다 깨졌다"로 보고됨. 또한 PowerShell/cmd에서 `npm run build` 시 `'bash' is not recognized`로 빌드 실패.
+**원인**:
+1. **옛 dist 재사용**: `새싹이.cmd`·`start.cmd`가 프론트엔드를 **`web\dist\index.html`이 없을 때만** 빌드. 이미 빌드된 적 있는 머신에서는 pull로 소스(`web/src`, `web/public`)가 새것이 돼도 재빌드를 안 해, Electron이 옛 dist를 로드 → 새 기능 미반영. (소스만 새것, 화면은 옛것.)
+2. **빌드의 bash 의존성**: `package.json`의 `prebuild`→`sync-assets`가 `bash scripts/sync-character-assets.sh` 호출. Git Bash가 PATH에 없는 일반 cmd/PowerShell에서는 prebuild가 실패해 빌드 자체가 중단. "사용자가 어디에 설치하든 동일하게 동작" 원칙 위배.
+**수정**:
+1. **bash 제거(크로스플랫폼)**: `web/scripts/sync-character-assets.mjs`(Node 포팅) 추가, `package.json`의 `sync-assets`를 `node scripts/sync-character-assets.mjs`로 변경 → Windows/macOS 어디서든 `npm run build` 동작.
+2. **자동 재빌드**: `web/scripts/check-rebuild.mjs` 추가 — `web/dist/index.html` 부재 또는 `web/src`·`web/public`·핵심 설정파일이 dist보다 최신이면 exit 1(재빌드 필요), 아니면 exit 0. `새싹이.cmd`·`start.cmd`의 "dist 없을 때만 빌드" 블록을 `node check-rebuild.mjs` + `if errorlevel 1` 기반 자동 빌드로 교체. 이제 pull 후 아이콘만 더블클릭하면 변경이 자동 반영됨.
+- 검증: PowerShell·Git Bash 양쪽에서 `npm run build` 성공(`✓ built`), dist에 `avatars/uploading.webm` 포함 확인, check-rebuild가 빌드 직후 exit 0 / 소스 변경 시 exit 1 반환 확인.
+**교훈**:
+1. **빌드 트리거는 "존재 여부"가 아니라 "최신 여부"로** — `if not exist dist`는 최초 1회만 빌드하므로 업데이트가 영원히 반영 안 된다. 소스 mtime > 산출물 mtime 비교가 정답.
+2. **빌드 스크립트에 bash/rsync 등 POSIX 전용 의존성을 넣지 말 것** — 멀티 OS 프로젝트는 Node로 작성하면 어디서든 동작한다.
+3. "기능이 깨졌다"는 보고는 (a) 백엔드 미기동 (b) dist 미빌드 두 가지가 흔한 원인. 코드 회귀로 단정 말고 런타임 상태부터 확인.
+4. **`.cmd`(batch)의 실행 줄(echo 등)에 한글·em대시(—) 등 비ASCII를 절대 넣지 말 것.** 수정 중 `echo [화면 빌드] ...` 한글 echo를 넣었더니 cmd.exe가 멀티바이트 바이트를 오독해 그 뒤 줄 파싱이 통째로 깨졌다(`'OOT'`, `'exist'`, `'ffline'` 같은 단어 파편 에러 + 백엔드 미기동). `chcp 65001`이 있어도 실행 줄의 비ASCII는 위험. echo는 영어로, 한글이 꼭 필요하면 `::` 주석에만(주석은 cmd가 건너뜀). **`.cmd` 수정 후에는 백엔드 실행 직전까지 잘라 실행하는 하니스로 파싱을 반드시 검수.** (줄바꿈은 원래도 LF였고 무관 — 범인은 비ASCII 실행 줄.)
+
+---
+
 ## E-46: 연속 노트 작성 시 누락 — 도구 호출은 했지만 title 누락으로 검증 거부, 폴백 사각지대 (2026-06-12)
 
 **증상**: 업무노트를 연속으로 작성시키면 하나가 누락됨. 다른 질문을 한 뒤 다시 시키면 동작.

@@ -27,8 +27,16 @@ import type { MessageAttachment, MessageImage } from "../types";
 // 본문에 stray `]`가 남지 않도록 한다.
 function stripNoteMarkers(text: string): string {
   return text
+    // [[note:slug]] / [[doc:id]] (정상 이중괄호, 닫힘 0~2개 깨진 것 포함)
     .replace(/\[\[(?:note|doc):[^[\]]*\]{0,2}/g, "")
-    .replace(/\s{2,}/g, " ")
+    // [doc:id] / [note:slug] (단일괄호 — 8B 모델이 자주 이렇게 잘못 출력)
+    .replace(/\[(?:note|doc):[^[\]]*\]/g, "")
+    // 모델이 임의로 끼워넣는 HTML 태그(<span style=...> 등). react-markdown은
+    // raw HTML을 렌더하지 않아 그대로 찌꺼기로 보인다 (E-51).
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+    // 가로 공백(스페이스·탭)만 정리한다. \s를 쓰면 줄바꿈(\n)까지 뭉개져
+    // 마크다운 블록(제목·표·목록)이 한 줄로 붙어 렌더링되지 않는다 (E-50).
+    .replace(/[ \t]{2,}/g, " ")
     .trim();
 }
 import { startVoice, stopVoice } from "../services/voice";
@@ -565,9 +573,9 @@ export function ChatContent({
                         padding: "2px 8px",
                         fontSize: "var(--fs-11)",
                         borderRadius: 10,
-                        background: "rgba(255,180,80,0.18)",
-                        border: "1px solid rgba(255,180,80,0.5)",
-                        color: "#ffc875",
+                        background: "var(--chip-note-bg)",
+                        border: "1px solid var(--chip-note-border)",
+                        color: "var(--chip-note-text)",
                         cursor: "pointer",
                         maxWidth: 240,
                         overflow: "hidden",
@@ -594,9 +602,9 @@ export function ChatContent({
                         padding: "2px 8px",
                         fontSize: "var(--fs-11)",
                         borderRadius: 10,
-                        background: "rgba(100,140,220,0.18)",
-                        border: "1px solid rgba(100,140,220,0.4)",
-                        color: "#7aa8ff",
+                        background: "var(--chip-doc-bg)",
+                        border: "1px solid var(--chip-doc-border)",
+                        color: "var(--chip-doc-text)",
                         textDecoration: "none",
                         maxWidth: 220,
                         overflow: "hidden",

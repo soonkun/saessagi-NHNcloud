@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import html
 import json
 import logging
+import multiprocessing as mp
 import os
 import re
 import shutil
-import tempfile
 import threading
 import uuid
+from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
 from typing import Any
 
@@ -223,43 +225,42 @@ def _chunk_with_meta(text: str, doc_name: str, page: int | None) -> str:
 def _parse_to_meta_segments(filename: str, data: bytes) -> list[tuple[str, int | None]]:
     """파서를 호출해 (text, page) 튜플 목록을 반환한다.
 
-    - PDF/PPTX : page = 실제 페이지/슬라이드 번호(1-based).
-    - HWPX/DOCX/TXT/MD : page = None (페이지 개념 없음).
-    - 알 수 없는 확장자 : 전체 텍스트를 page=None 1건으로 반환.
+    정본 로직은 document_ingest.subprocess_parse.parse_to_meta_segments 에 있다
+    (별도 프로세스에서도 동일하게 쓰기 위해 경량 모듈로 분리). 이 함수는 동기 호출용
+    얇은 래퍼다.
     """
-    suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
-    tmp_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
+    from document_ingest.subprocess_parse import parse_to_meta_segments
 
-        from document_ingest.parsers.docx import _parse_docx
-        from document_ingest.parsers.hwpx import _parse_hwpx
-        from document_ingest.parsers.md import _parse_md
-        from document_ingest.parsers.pdf import _parse_pdf
-        from document_ingest.parsers.pptx import _parse_pptx
-        from document_ingest.parsers.txt import _parse_txt
+    return parse_to_meta_segments(filename, data)
 
-        parser_map = {
-            ".pdf": _parse_pdf,
-            ".docx": _parse_docx,
-            ".pptx": _parse_pptx,
-            ".hwpx": _parse_hwpx,
-            ".txt": _parse_txt,
-            ".md": _parse_md,
-            ".markdown": _parse_md,
-        }
 
-        parser = parser_map.get(suffix)
-        if parser is None:
-            raw = data.decode("utf-8", errors="replace").strip()
-            return [(raw, None)] if raw else []
+async def _parse_isolated(filename: str, data: bytes) -> list[tuple[str, int | None]]:
+    """파싱을 **별도 프로세스**에서 수행한다.
 
-        return [(seg.text.strip(), seg.page) for seg in parser(tmp_path) if seg.text.strip()]
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+    pypdfium2 등 네이티브 파서가 손상/비호환 PDF 페이지에서 illegal-instruction
+    (WinError 0xc000001d 등)으로 프로세스를 통째로 죽이는 사고가 반복됐다(E-48).
+    파싱을 자식 프로세스로 격리하면 그런 크래시가 나도 **백엔드 메인 프로세스는
+    살아남고**, 해당 파일만 422로 깔끔히 실패한다.
+
+    - 매 호출마다 새 프로세스(max_workers=1) → 연속 업로드 시 자원 누적/스파이크 방지.
+    - fork가 아닌 spawn → 맥/리눅스에서 CUDA/torch 상태 상속으로 인한 2차 크래시 방지.
+    """
+    from document_ingest.subprocess_parse import parse_to_meta_segments
+
+    loop = asyncio.get_running_loop()
+    ctx = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as ex:
+        try:
+            return await loop.run_in_executor(ex, parse_to_meta_segments, filename, data)
+        except BrokenProcessPool as exc:
+            logger.error("PDF 파서 프로세스 비정상 종료(손상/비호환 페이지 추정): %s", filename)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "이 PDF를 처리할 수 없습니다(손상되었거나 호환되지 않는 페이지 포함). "
+                    "PDF를 '다른 이름으로 인쇄/저장'하여 다시 시도해 주세요."
+                ),
+            ) from exc
 
 
 def _list_documents_from_store(store: Any) -> list[DocumentInfo]:
@@ -444,8 +445,10 @@ async def upload_document(request: Request) -> UploadResponse:
 
     data = await file.read()
     try:
-        # 파싱은 CPU-bound — 이벤트 루프 점유 방지
-        meta_segments = await asyncio.to_thread(_parse_to_meta_segments, filename, data)
+        # 파싱을 별도 프로세스에서 수행 — 네이티브 파서 크래시로부터 백엔드 보호 (E-48)
+        meta_segments = await _parse_isolated(filename, data)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"텍스트 추출 실패: {exc}")
 

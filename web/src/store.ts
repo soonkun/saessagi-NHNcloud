@@ -166,9 +166,64 @@ interface UiSlice {
 }
 
 // ────────────────────────────────────────────────────────────
+// Meeting Slice — 회의록 3단계 작업 상태 (모드 전환·창 최소화에도 유지)
+// MeetingView는 펫(ChatPanel)·데스크톱(DesktopView) 두 트리에서 각각 마운트되므로
+// 작업 상태를 컴포넌트 지역(useState)에 두면 모드 전환 시 언마운트로 사라진다.
+// 전역 저장소(모듈 싱글톤)에 두면 두 인스턴스가 같은 상태를 공유해 유지된다.
+// (음성 File 객체는 메모리에만 존재 — 앱 재시작 시엔 다시 선택 필요.)
+// ────────────────────────────────────────────────────────────
+export type MeetingStepStatus = "idle" | "loading" | "done" | "error";
+
+export interface MeetingWork {
+  audioFile: File | null;
+  step1Status: MeetingStepStatus;
+  step1Steps: string[];
+  step1Error: string;
+  transcript: string;
+  step2Input: string;
+  pages: 1 | 2;
+  step2Status: MeetingStepStatus;
+  step2Steps: string[];
+  step2Error: string;
+  meetingNotes: string;
+  step3Input: string;
+  step3Status: MeetingStepStatus;
+  step3Steps: string[];
+  step3Error: string;
+  downloadUrl: string;
+}
+
+function makeInitialMeeting(): MeetingWork {
+  return {
+    audioFile: null,
+    step1Status: "idle",
+    step1Steps: [],
+    step1Error: "",
+    transcript: "",
+    step2Input: "",
+    pages: 1,
+    step2Status: "idle",
+    step2Steps: [],
+    step2Error: "",
+    meetingNotes: "",
+    step3Input: "",
+    step3Status: "idle",
+    step3Steps: [],
+    step3Error: "",
+    downloadUrl: "",
+  };
+}
+
+interface MeetingSlice {
+  meeting: MeetingWork;
+  patchMeeting: (patch: Partial<MeetingWork>) => void;
+  resetMeeting: () => void;
+}
+
+// ────────────────────────────────────────────────────────────
 // Combined Store
 // ────────────────────────────────────────────────────────────
-type AppStore = ChatSlice & AvatarSlice & UiSlice;
+type AppStore = ChatSlice & AvatarSlice & UiSlice & MeetingSlice;
 
 let _msgCounter = 0;
 function nextId(): string {
@@ -299,4 +354,9 @@ export const useStore = create<AppStore>((set, get) => ({
     try { localStorage.setItem("saessagi_tts_engine", engine); } catch { /* ignore */ }
     set({ ttsEngine: engine });
   },
+
+  // Meeting — 회의록 작업 상태 (모드 전환·최소화에도 유지)
+  meeting: makeInitialMeeting(),
+  patchMeeting: (patch) => set((s) => ({ meeting: { ...s.meeting, ...patch } })),
+  resetMeeting: () => set({ meeting: makeInitialMeeting() }),
 }));

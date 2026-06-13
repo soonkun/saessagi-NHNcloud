@@ -12,9 +12,11 @@ if not exist "%UPSTREAM%\frontend\index.html" (
     git -C "%UPSTREAM%" submodule update --init --recursive
 )
 
-:: 프론트엔드 빌드 (dist 없을 때만)
-if not exist "%ROOT%\web\dist\index.html" (
-    echo 프론트엔드 빌드 중...
+:: Build frontend if dist is missing OR source is newer than the built bundle.
+:: check-rebuild.mjs exits 1 when a rebuild is needed, 0 when up to date.
+node "%ROOT%\web\scripts\check-rebuild.mjs"
+if errorlevel 1 (
+    echo Building frontend...
     cd /d "%ROOT%\web"
     if exist "%ROOT%\assets\npm_cache" (
         npm install --prefer-offline --cache "%ROOT%\assets\npm_cache"

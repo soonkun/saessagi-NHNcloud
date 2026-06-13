@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { FileAudio, Download, Loader, ChevronRight, RotateCcw, X } from "lucide-react";
 import { API_BASE } from "../services/api";
-import { useStore } from "../store";
+import { useStore, type MeetingStepStatus } from "../store";
 import { speak } from "../services/tts";
 
 // ────────────────────────────────────────────────────────────
@@ -138,12 +138,37 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
     lineHeight: 1.6,
   });
 
-  // ── Step 1: 전사 ──────────────────────────────────────────
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [step1Status, setStep1Status] = useState<"idle"|"loading"|"done"|"error">("idle");
-  const [step1Steps, setStep1Steps] = useState<string[]>([]);
-  const [step1Error, setStep1Error] = useState("");
-  const [transcript, setTranscript] = useState("");
+  // ── 회의록 작업 상태 — 전역 저장소 보관 (모드 전환·창 최소화에도 유지) ──
+  // 펫/데스크톱 두 트리에서 MeetingView가 각각 마운트되므로 지역 state(useState)에
+  // 두면 모드 전환 시 언마운트로 작업이 사라진다. 전역 store가 단일 소스다.
+  const meeting = useStore((s) => s.meeting);
+  const patchMeeting = useStore((s) => s.patchMeeting);
+  const resetMeeting = useStore((s) => s.resetMeeting);
+  const {
+    audioFile, step1Status, step1Steps, step1Error, transcript,
+    step2Input, pages, step2Status, step2Steps, step2Error, meetingNotes,
+    step3Input, step3Status, step3Steps, step3Error, downloadUrl,
+  } = meeting;
+  // 기존 useState 시그니처를 그대로 유지하는 setter 래퍼 — 본문/렌더 코드 변경 최소화.
+  const setAudioFile = (v: File | null) => patchMeeting({ audioFile: v });
+  const setStep1Status = (v: MeetingStepStatus) => patchMeeting({ step1Status: v });
+  const setStep1Steps = (u: string[] | ((p: string[]) => string[])) =>
+    patchMeeting({ step1Steps: typeof u === "function" ? u(useStore.getState().meeting.step1Steps) : u });
+  const setStep1Error = (v: string) => patchMeeting({ step1Error: v });
+  const setTranscript = (v: string) => patchMeeting({ transcript: v });
+  const setStep2Input = (v: string) => patchMeeting({ step2Input: v });
+  const setPages = (v: 1 | 2) => patchMeeting({ pages: v });
+  const setStep2Status = (v: MeetingStepStatus) => patchMeeting({ step2Status: v });
+  const setStep2Steps = (u: string[] | ((p: string[]) => string[])) =>
+    patchMeeting({ step2Steps: typeof u === "function" ? u(useStore.getState().meeting.step2Steps) : u });
+  const setStep2Error = (v: string) => patchMeeting({ step2Error: v });
+  const setMeetingNotes = (v: string) => patchMeeting({ meetingNotes: v });
+  const setStep3Input = (v: string) => patchMeeting({ step3Input: v });
+  const setStep3Status = (v: MeetingStepStatus) => patchMeeting({ step3Status: v });
+  const setStep3Steps = (u: string[] | ((p: string[]) => string[])) =>
+    patchMeeting({ step3Steps: typeof u === "function" ? u(useStore.getState().meeting.step3Steps) : u });
+  const setStep3Error = (v: string) => patchMeeting({ step3Error: v });
+  const setDownloadUrl = (v: string) => patchMeeting({ downloadUrl: v });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // 드래그 앤 드롭 (drag counter로 중첩 처리 — DocumentsView와 동일 패턴).
@@ -175,30 +200,11 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
     if (f && isAudioFile(f)) setAudioFile(f);
   }
 
-  // ── Step 2: 회의록 ────────────────────────────────────────
-  const [step2Input, setStep2Input] = useState("");
-  const [pages, setPages] = useState<1 | 2>(1);
-  const [step2Status, setStep2Status] = useState<"idle"|"loading"|"done"|"error">("idle");
-  const [step2Steps, setStep2Steps] = useState<string[]>([]);
-  const [step2Error, setStep2Error] = useState("");
-  const [meetingNotes, setMeetingNotes] = useState("");
-
-  // ── Step 3: 결과보고서 ────────────────────────────────────
-  const [step3Input, setStep3Input] = useState("");
-  const [step3Status, setStep3Status] = useState<"idle"|"loading"|"done"|"error">("idle");
-  const [step3Steps, setStep3Steps] = useState<string[]>([]);
-
-  const [step3Error, setStep3Error] = useState("");
-  const [downloadUrl, setDownloadUrl] = useState("");
+  // ── Step 2(회의록)·Step 3(결과보고서) 상태는 위의 전역 store에서 관리 ──
 
   // ── 초기화 ────────────────────────────────────────────────
   function handleReset(): void {
-    setAudioFile(null);
-    setStep1Status("idle"); setStep1Steps([]); setStep1Error(""); setTranscript("");
-    setStep2Input(""); setPages(1);
-    setStep2Status("idle"); setStep2Steps([]); setStep2Error(""); setMeetingNotes("");
-    setStep3Input("");
-    setStep3Status("idle"); setStep3Steps([]); setStep3Error(""); setDownloadUrl("");
+    resetMeeting();
     setMeetingGenerating(false);
   }
 

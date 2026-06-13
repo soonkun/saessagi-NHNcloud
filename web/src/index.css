@@ -12,6 +12,13 @@
   --color-text: #e8e8e8;
   --color-text-muted: #888;
   --color-border: #373a40;
+  /* 인용 칩 — 다크: 밝은 글자 + 옅은 배경 */
+  --chip-note-bg: rgba(255, 180, 80, 0.18);
+  --chip-note-border: rgba(255, 180, 80, 0.5);
+  --chip-note-text: #ffc875;
+  --chip-doc-bg: rgba(100, 140, 220, 0.18);
+  --chip-doc-border: rgba(100, 140, 220, 0.4);
+  --chip-doc-text: #7aa8ff;
 }
 
 /* ── 타이포 스케일 ──────────────────────────────────────────
@@ -49,6 +56,13 @@
   --color-text: #1f2024;
   --color-text-muted: #6c7180;
   --color-border: #dde1e7;
+  /* 인용 칩 — 라이트: 진한 글자 + 옅은 배경 (가독성 확보) */
+  --chip-note-bg: rgba(201, 100, 66, 0.12);
+  --chip-note-border: rgba(201, 100, 66, 0.5);
+  --chip-note-text: #a84e2f;
+  --chip-doc-bg: rgba(45, 100, 200, 0.10);
+  --chip-doc-border: rgba(45, 100, 200, 0.5);
+  --chip-doc-text: #2c5bb5;
 }
 
 * {

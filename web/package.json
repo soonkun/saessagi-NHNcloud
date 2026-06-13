@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync-assets": "bash scripts/sync-character-assets.sh",
+    "sync-assets": "node scripts/sync-character-assets.mjs",
     "predev": "npm run sync-assets",
     "dev": "vite",
     "prebuild": "npm run sync-assets",
