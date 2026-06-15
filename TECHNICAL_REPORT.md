@@ -578,6 +578,69 @@ window.webContents.session.on('will-download', (_event, item) => {
 
 ---
 
+### 문제 8: 첨부 자료 기반 업무노트가 "추측성"으로 작성됨 (E-54·E-55)
+
+**증상**: 한글 문서(.hwpx)나 스크린샷을 첨부하고 "업무노트로 정리해줘"라고 해도, 노트에 실제 문서/이미지 내용이 담기지 않고 제목만 그럴듯한 빈껍데기 노트가 저장됨.
+
+**원인 (복합)**:
+1. **노트 강제 저장 폴백(`_force_save_note`)이 1차 소스를 안 봄** — LLM이 도구 호출을 건너뛴 note_save 턴에서, 폴백이 *사용자의 짧은 한 줄 + 비서 답변*만 요약했다. 첨부 문서의 실제 청크를 근거로 넣지 않아, 답변이 두루뭉술하면 노트도 빈약해졌다.
+2. **로컬 모델(gemma4)의 이미지 OCR 부재** — `gemma4:latest`는 capabilities에 `vision`이 있어도 실제 한글 스크린샷 텍스트를 읽지 못했다(어두운 배경/추상 패턴으로 인식). 반면 `qwen2.5vl:7b`는 동일 이미지를 정확히 판독.
+
+**해결**:
+- (E-55) `_force_save_note`가 첨부 doc_id의 원문 청크(`per_doc_limit=30`)를 직접 가져와 "추측 말고 이 내용을 근거로" 노트를 작성하도록 보강.
+- (E-54) **비전 모델 라우팅** 도입 — `conf.yaml`에 `app.ollama.vision_model`(예: `qwen2.5vl:7b`) 추가. 이미지가 첨부된 턴은 **전사 전용 모델이 OCR → 추출 텍스트를 메인 모델(gemma4)에 주입 → gemma4가 페르소나·도구로 답변·노트 작성**(2단계, A안). 모델 vision 플래그 ≠ 실제 OCR 품질이므로 실제 데이터로 검증 후 채택.
+
+```python
+# gemma_chat_agent.chat — 이미지 턴은 전사 후 텍스트 턴으로 전환
+if batch.images and self._vision_model:
+    batch = await self._transcribe_images_into_batch(batch)  # qwen OCR → 텍스트 주입
+messages = self._inner._to_messages(batch)
+raw_stream = self._inner._openai_tool_interaction_loop(messages, tools)  # gemma4 + 도구
+```
+
+---
+
+### 문제 9: Ollama OpenAI-호환 엔드포인트가 `think:false`를 무시 (E-53)
+
+**증상**: 채팅 모델을 thinking 계열(`gemma4:latest`)로 바꾸자 비전·장문 응답에서 `content`가 빈 문자열로 반환 → "응답 없음"·AgentError.
+
+**원인**: 추론을 끄려고 `NoThinkLLM`이 `extra_body={"think": False}`를 주입했으나, **Ollama의 `/v1/chat/completions`(OpenAI 호환) 엔드포인트는 `think` 파라미터를 무시**한다(네이티브 `/api/chat`에서만 동작). 추론 토큰이 출력 예산을 잠식해 content가 비었다.
+
+**해결**: `/v1`이 실제로 존중하는 `reasoning_effort="none"`을 함께 주입. (네이티브/`/v1` 직접 비교로 검증: `/v1`+`think:false`는 finish=length·빈 content, `/v1`+`reasoning_effort:none`은 finish=stop·정상.)
+
+---
+
+### 문제 10: 의도 분류기(로컬) 콜드스타트 타임아웃 → 첨부 노트 유실 (E-57)
+
+**증상**: 첨부 파일/이미지로 노트 작성을 요청해도 산발적으로 답변만 나오고 노트가 저장되지 않음(아이콘도 작성 모드로 전환 안 됨).
+
+**원인**: 의도 분류기를 로컬 모델(gemma4)로 전환한 뒤, **콜드스타트/모델 경합으로 첫 분류가 8초 기본 타임아웃을 초과** → `fallback_error` → 의도가 `chat`으로 강등 → note_save가 아니라 강제 저장이 동작하지 않음. (로그상 텍스트 질의는 ~1.5초, 첨부 턴은 정확히 8초에 타임아웃.)
+
+**해결**:
+1. `intent_gate.timeout_seconds: 8 → 30` (로컬 모델 콜드스타트 여유).
+2. **안전망** — 분류가 실패(`fallback_error`)했더라도 첨부(문서/이미지)가 있으면 `note_save`로 강제 라우팅해 노트 유실 방지.
+
+**교훈**: 외부 API 기준 타임아웃은 로컬 모델에 부족하다. 분류 실패 시 의도가 chat으로 떨어져 부가 동작이 통째로 사라지므로, 핵심 신호(첨부 등)에는 폴백 안전망을 둔다.
+
+---
+
+### 문제 11: 회의록 날짜 placeholder + rag_folders 유실 (E-52·E-56)
+
+- **E-52**: 회의결과보고서 `next_steps[].date` 예시가 `"M.DD."`(문자 placeholder)라 LLM이 `M.15.`를 출력 → 스키마 위반 하드 실패. → 정규화 단계에서 형식 위반 날짜는 빈 문자열로 흡수(하드 실패 금지), 프롬프트 예시를 실제 숫자(`6.15.`)로 교정.
+- **E-56**: RAG 폴더 정의(`rag_folders.json`)가 **비원자적 쓰기**라 프로세스 중단 시 빈 파일로 손상 → 모든 문서가 "미분류"로 떨어짐. → temp 파일 + `fsync` + `os.replace`로 **원자적 쓰기** 전환.
+
+---
+
+### UX 개선: 파일 링크 클릭 시 기본 앱으로 바로 열기
+
+답변의 참고자료·노트의 관련 자료·문서 탭의 파일 링크를 클릭하면 "저장 위치 묻기" 대신 **기본 앱으로 즉시 열린다**. Electron main의 `shell:openDocument` IPC가 백엔드 loopback URL을 임시 폴더로 받아 `shell.openPath`로 연다(임시 사본을 열어 RAG 원본은 보존).
+
+### 운영 편의: 런처가 Ollama 자동 기동
+
+`새싹이.cmd` 실행 시 Ollama(11434)가 떠 있지 않으면 자동으로 `ollama serve`를 시작하고 준비될 때까지 대기한 뒤 백엔드를 띄운다. 기존엔 Ollama가 꺼져 있으면 백엔드가 `Ollama unreachable`로 시작 직후 종료됐다.
+
+---
+
 ## 7. 배포 전략
 
 ### 오프라인 USB 번들
@@ -663,6 +726,20 @@ start.cmd
 | M_12 Frontend | ✅ DONE | PASS (3차) |
 | M_13 MeetingMinutes | ✅ DONE | 실기기 검증 완료 |
 
+**현재 버전 추가 기능 (2026-06 갱신)**:
+
+| 기능 | 상태 | 비고 |
+|---|---|---|
+| 멀티모달 노트 — 이미지/스크린샷 OCR | ✅ | 비전 모델(`qwen2.5vl`) 전사 → gemma4 정리 (A안 2단계) |
+| 멀티모달 노트 — 첨부 문서(.hwpx 등) 내용 기반 | ✅ | 폴백이 원문 청크를 직접 근거로 작성 (E-55) |
+| 모달리티별 모델 라우팅 | ✅ | `vision_model` 설정으로 OCR 전용 모델 분리 |
+| 첨부 노트 의도 안전망 | ✅ | 분류 실패 시에도 첨부 있으면 note_save (E-57) |
+| 파일 링크 바로 열기 | ✅ | 다운로드 대화상자 없이 기본 앱 실행 |
+| 로컬 LLM thinking 비활성화 | ✅ | `/v1` `reasoning_effort:none` (E-53) |
+| 런처 Ollama 자동 기동 | ✅ | `새싹이.cmd`가 Ollama 헬스체크 후 자동 시작 |
+
+> 누적 버그/교훈 기록: `docs/ERROR_HISTORY.md` (E-01 ~ E-57)
+
 ### 동작 확인 (Mac Mini M 시리즈 기준)
 
 | 기능 | 상태 |
@@ -718,7 +795,7 @@ ai-assistant/
 │   ├── character/        # 새싹이 스프라이트 PNG 9종
 │   └── models/           # AI 모델 파일 (git 제외)
 ├── docs/
-│   ├── ERROR_HISTORY.md  # 버그 원인·해결·교훈 (E-01 ~ E-20)
+│   ├── ERROR_HISTORY.md  # 버그 원인·해결·교훈 (E-01 ~ E-57)
 │   ├── FRONTEND_CONSTRAINTS.md
 │   ├── ARCHITECTURE.md
 │   └── USER_GUIDE.md

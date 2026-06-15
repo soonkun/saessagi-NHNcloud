@@ -22,7 +22,14 @@ interface PetModeAPI {
   dragEnd(): Promise<void>;
 }
 
+interface ShellAPI {
+  openPath(absolutePath: string): Promise<string>;
+  /** 백엔드 다운로드 URL을 임시 폴더로 받아 기본 앱으로 연다 (다운로드 위치 묻지 않음) */
+  openDocument(url: string, filename: string): Promise<string>;
+}
+
 interface Window {
   electronAPI?: ElectronAPI;
   petMode?: PetModeAPI;
+  shell?: ShellAPI;
 }

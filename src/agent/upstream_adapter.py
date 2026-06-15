@@ -246,6 +246,28 @@ def _make_adapter_class() -> type:
             """
             # 이번 턴 인용 마커 초기화 (RAG 미주입 시 빈 채로 유지)
             self._last_cited_markers = []
+
+            # E-54: 이미지 첨부 턴 — 화면 '상황 판단'이 아니라 보이는 '글자를 전사'하도록
+            # 명시 지침을 주입한다. (note_save tool_hint는 "처리한 업무 보고"로만 프레이밍해
+            # 모델이 이미지 속 텍스트를 읽지 않고 두루뭉술하게 요약하던 문제.)
+            # 모든 하위 분기가 input_data.texts 순서를 보존하므로 진입부 한 곳만 수정한다.
+            if input_data.images:
+                img_instr = TextData(
+                    source=TextSource.INPUT,
+                    content=(
+                        "[이미지 판독 지침] 첨부된 이미지/스크린샷 안에 보이는 모든 텍스트·표·"
+                        "수치·날짜·담당자·항목을 빠짐없이 그대로 읽어서(전사) 답변과 노트에 "
+                        "반영하세요. 화면이 '무슨 상황인지' 추측하거나 두루뭉술하게 요약하지 "
+                        "말고, 실제로 보이는 글자를 근거로 구체적으로 작성하세요."
+                    ),
+                    from_name="이미지판독",
+                )
+                input_data = BatchInput(
+                    texts=[img_instr] + list(input_data.texts or []),
+                    images=input_data.images,
+                    metadata=input_data.metadata,
+                )
+
             if self._rag_service is None:
                 # RAG 서비스 없어도 tool_hint·answer_guide는 주입해야 한다 (M_17)
                 prepend_no_svc: list[Any] = []
@@ -450,7 +472,12 @@ def _make_adapter_class() -> type:
             user_text_for_classify = " ".join(
                 t.content for t in (input_data.texts or []) if t.source == TextSource.INPUT
             ).strip()
-            has_attachment = "[첨부 자료:" in user_text_for_classify
+            # 첨부 문서('[첨부 자료:')뿐 아니라 첨부 이미지('[첨부 이미지:')도 포함 —
+            # 이미지 첨부도 note_save 의도 신호 + 분류 실패 안전망 대상 (E-57).
+            has_attachment = (
+                "[첨부 자료:" in user_text_for_classify
+                or "[첨부 이미지:" in user_text_for_classify
+            )
 
             # 진행 상태 1: 의도 분류는 LLM 1회 호출(~1초)이라 먼저 알린다
             yield _status_event("질문을 살펴보고 있어요…")
@@ -478,6 +505,28 @@ def _make_adapter_class() -> type:
                         legacy_rag_triggered=_legacy,
                         prompt_overrides=_overrides,
                     )
+                    # 안전망(E-57): 분류가 실패(타임아웃 등 fallback_error)했는데 첨부가 있으면
+                    # note_save로 처리한다. 첨부 + 보고는 거의 항상 노트 저장 의도이고, 분류
+                    # 타임아웃 때문에 chat으로 떨어져 노트가 유실되는 것을 막는다.
+                    if _result.source == "fallback_error" and has_attachment:
+                        from intent_gate.types import IntentResult
+
+                        logger.info(
+                            "IntentGate 안전망: 분류 실패(%s) + 첨부 → note_save로 강제",
+                            _result.source,
+                        )
+                        _result = IntentResult(
+                            intent="note_save",
+                            confidence=1.0,
+                            reason="분류 실패 + 첨부 자료 → note_save 폴백",
+                            source="llm",
+                        )
+                        _decision = decide_with_confidence(
+                            _result,
+                            confidence_threshold=_threshold,
+                            legacy_rag_triggered=_legacy,
+                            prompt_overrides=_overrides,
+                        )
                     self._last_routing = _decision
                     self._last_intent = _result.intent
                     logger.info(
@@ -677,7 +726,16 @@ def _make_adapter_class() -> type:
                 "additionalProperties": False,
                 "required": ["title", "summary", "tags"],
                 "properties": {
-                    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+                    "title": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80,
+                        "description": (
+                            "노트 내용을 대표하는 구체적인 제목 (예: '2025 업무편람 등록', "
+                            "'LG AI연구원 협의 결과', '연구노트 제외 신청 절차'). "
+                            "'업무 노트'·'노트' 같은 일반적·무의미한 제목 금지."
+                        ),
+                    },
                     "summary": {"type": "string", "minLength": 1, "maxLength": 7000},
                     "tags": {
                         "type": "array",
@@ -687,24 +745,72 @@ def _make_adapter_class() -> type:
                 },
             }
             reply_core = _strip_llm_markers(reply_text)[:4000]
+
+            # E-55: 첨부 문서가 있으면 그 원문 청크를 직접 근거로 넣는다.
+            # (기존엔 reply_text만 요약 → 모델이 두루뭉술하게 답하면 노트가 추측이 됐다.
+            #  reply에 내용이 안 실렸어도 노트가 실제 문서 내용 기반이 되도록 보강.)
+            attached_ids = _extract_attached_doc_ids(user_text)
+            doc_excerpt = ""
+            doc_title_hint = ""  # 제목 비었을 때 폴백 (첨부 파일명 기반)
+            if attached_ids:
+                try:
+                    chunks = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self._fetch_attached_chunks(attached_ids, per_doc_limit=30),
+                    )
+                    joined = "\n".join(
+                        str(c.get("text", "")).strip()
+                        for c in chunks
+                        if str(c.get("text", "")).strip()
+                    )
+                    doc_excerpt = joined[:6000]
+                    # 첫 문서명(확장자 제거)을 제목 폴백 후보로 보관
+                    for c in chunks:
+                        dn = str(c.get("doc_name", "")).strip()
+                        if dn:
+                            doc_title_hint = dn.rsplit(".", 1)[0][:80]
+                            break
+                    logger.info(
+                        "강제 저장 폴백: 첨부 문서 원문 주입 doc_ids=%s, chars=%d",
+                        attached_ids,
+                        len(doc_excerpt),
+                    )
+                except Exception as exc:
+                    logger.warning("강제 저장 폴백: 첨부 청크 조회 실패 (무시): %s", exc)
+
+            user_prompt = (
+                f"사용자 보고:\n'''\n{user_text[:1500]}\n'''\n\n"
+                f"비서가 작성한 정리 답변:\n'''\n{reply_core}\n'''"
+            )
+            if doc_excerpt:
+                user_prompt += (
+                    "\n\n첨부 문서 원문 발췌 — summary는 추측하지 말고 반드시 "
+                    f"이 내용을 근거로 작성하세요:\n'''\n{doc_excerpt}\n'''"
+                )
+
             raw = await self._agent.complete_json(
                 system_prompt=(
                     "사용자의 업무 보고와 비서가 작성한 정리 답변을 업무 노트 JSON으로 변환합니다. "
+                    "title은 내용을 한눈에 알 수 있는 구체적 제목으로 지으세요 — "
+                    "첨부 문서·이미지의 핵심 주제(기관명·문서명·안건 등)를 반영하고, "
+                    "'업무 노트'·'노트' 같은 일반적인 제목은 절대 쓰지 마세요. "
                     "summary는 한국어 markdown으로 '## 상황 / ## 절차 / ## 사용 자료 / ## 교훈' "
-                    "구조를 따르고, 답변에 있는 수치·날짜·결정 사항을 빠짐없이 보존하세요. "
-                    "JSON만 출력하세요."
+                    "구조를 따르고, 답변·첨부 문서 원문에 있는 수치·날짜·결정 사항을 빠짐없이 "
+                    "보존하세요. 첨부 문서 원문이 제공되면 그 실제 내용을 근거로 작성하고 "
+                    "추측하지 마세요. JSON만 출력하세요."
                 ),
-                user_prompt=(
-                    f"사용자 보고:\n'''\n{user_text[:1500]}\n'''\n\n"
-                    f"비서가 작성한 정리 답변:\n'''\n{reply_core}\n'''"
-                ),
+                user_prompt=user_prompt,
                 json_schema=schema,
                 max_tokens=2048,
                 temperature=0.2,
                 timeout_seconds=120.0,
             )
+            # 제목: LLM이 비우거나 일반 제목을 내면 첨부 파일명 → 최후에 "업무 노트"
+            raw_title = str(raw.get("title", "")).strip()
+            if not raw_title or raw_title in ("업무 노트", "업무노트", "노트", "제목 없음"):
+                raw_title = doc_title_hint or "업무 노트"
             args: dict[str, Any] = {
-                "title": (str(raw.get("title", "")).strip() or "업무 노트")[:100],
+                "title": raw_title[:100],
                 "summary": str(raw.get("summary", "")).strip()[:8000],
                 "tags": [str(t)[:30] for t in (raw.get("tags") or []) if str(t).strip()][:3],
                 "related_docs": _extract_attached_doc_ids(user_text),

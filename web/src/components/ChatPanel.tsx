@@ -13,13 +13,13 @@ import {
   MicOff,
   X,
   RotateCcw,
-  Download,
+  ExternalLink,
   Paperclip,
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
 import { invalidateDocsCache } from "../services/websocket";
-import { getDocumentDownloadUrl, uploadDocument } from "../services/api";
+import { openDocument, uploadDocument } from "../services/api";
 import type { MessageAttachment, MessageImage } from "../types";
 
 // `[[note:slug]]` / `[[doc:doc_id]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거.
@@ -150,7 +150,7 @@ export function ChatContent({
     });
     // 백엔드에는 prefix로 doc_id 메타 자동 삽입 — LLM이 related_docs에 활용
     let payload = text || (pendingImages.length > 0
-      ? "(첨부 이미지를 분석해서 업무 노트로 정리해줘. 이미지에 보이는 정보는 summary에 정리하고 save_knowledge_note를 호출.)"
+      ? "(첨부 이미지 안에 보이는 모든 텍스트·표·수치·날짜·담당자를 빠짐없이 그대로 읽어서, 그 내용을 summary에 정리하고 save_knowledge_note를 호출해줘. 화면 상황을 추측하지 말고 실제로 보이는 글자를 근거로 작성해.)"
       : "(이 첨부 자료를 검토해서 업무 노트로 정리해줘.)");
     if (attachments.length > 0) {
       const meta = attachments
@@ -460,12 +460,13 @@ export function ChatContent({
                   {msg.attachments && msg.attachments.length > 0 && (
                     <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {msg.attachments.map((a) => (
-                        <a
+                        <button
                           key={a.id}
-                          href={getDocumentDownloadUrl(a.id)}
-                          download={a.filename}
-                          title={`첨부 다운로드: ${a.filename}`}
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDocument(a.id, a.filename);
+                          }}
+                          title={`첨부 열기: ${a.filename}`}
                           style={{
                             display: "inline-flex",
                             alignItems: "center",
@@ -476,7 +477,8 @@ export function ChatContent({
                             background: "rgba(255,255,255,0.12)",
                             border: "1px solid rgba(255,255,255,0.2)",
                             color: "var(--color-text)",
-                            textDecoration: "none",
+                            cursor: "pointer",
+                            fontFamily: "inherit",
                             maxWidth: 220,
                             overflow: "hidden",
                             textOverflow: "ellipsis",
@@ -485,7 +487,7 @@ export function ChatContent({
                         >
                           <Paperclip size={11} />
                           {a.filename}
-                        </a>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -589,12 +591,13 @@ export function ChatContent({
                     </button>
                   ))}
                   {msg.citedDocs?.map((c) => (
-                    <a
+                    <button
                       key={`doc-${c.id}`}
-                      href={getDocumentDownloadUrl(c.id)}
-                      download={c.filename}
-                      title={`원본 다운로드: ${c.filename}`}
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openDocument(c.id, c.filename);
+                      }}
+                      title={`원본 열기: ${c.filename}`}
                       style={{
                         display: "inline-flex",
                         alignItems: "center",
@@ -605,16 +608,17 @@ export function ChatContent({
                         background: "var(--chip-doc-bg)",
                         border: "1px solid var(--chip-doc-border)",
                         color: "var(--chip-doc-text)",
-                        textDecoration: "none",
+                        cursor: "pointer",
+                        fontFamily: "inherit",
                         maxWidth: 220,
                         overflow: "hidden",
                         textOverflow: "ellipsis",
                         whiteSpace: "nowrap",
                       }}
                     >
-                      <Download size={11} />
+                      <ExternalLink size={11} />
                       {c.filename}
-                    </a>
+                    </button>
                   ))}
                 </div>
               )}

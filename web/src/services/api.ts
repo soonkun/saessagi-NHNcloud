@@ -176,6 +176,27 @@ export function getDocumentDownloadUrl(docId: string): string {
   return `${API_BASE}/api/rag/documents/${encodeURIComponent(docId)}/download`;
 }
 
+/**
+ * 원본 문서를 다운로드 위치를 묻지 않고 기본 앱으로 바로 연다.
+ * Electron에서는 임시 폴더로 받아 shell.openPath로 열고,
+ * 비-Electron(웹) 환경에서는 새 탭으로 연다(폴백).
+ */
+export function openDocument(docId: string, filename: string): void {
+  const url = getDocumentDownloadUrl(docId);
+  const shellApi = window.shell;
+  if (shellApi?.openDocument) {
+    void shellApi
+      .openDocument(url, filename)
+      .then((err) => {
+        // shell.openPath는 실패 시 에러 문자열을, 성공 시 "" 를 반환
+        if (err) window.open(url, "_blank");
+      })
+      .catch(() => window.open(url, "_blank"));
+  } else {
+    window.open(url, "_blank");
+  }
+}
+
 // ────────────────────────────────────────────────────────────
 // Knowledge Notes API (M_15)
 // ────────────────────────────────────────────────────────────

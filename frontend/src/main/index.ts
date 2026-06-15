@@ -1,6 +1,8 @@
 /* eslint-disable no-shadow */
-import { app, ipcMain, globalShortcut, desktopCapturer, screen, shell, dialog } from "electron";
+import { app, ipcMain, globalShortcut, desktopCapturer, screen, shell, dialog, net } from "electron";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
+import { promises as fsp } from "fs";
+import * as path from "path";
 import { WindowManager } from "./window-manager";
 import { MenuManager } from "./menu-manager";
 import { loadPetWindowState, savePetWindowState } from "./pet-window-persistence";
@@ -251,6 +253,32 @@ function setupIPC(): void {
     }
     logger.info(`[Shell] openPath: ${absolutePath}`);
     return shell.openPath(absolutePath);
+  });
+
+  // 원본 문서/첨부를 "다운로드 위치 묻기" 없이 기본 앱으로 바로 열기.
+  // 백엔드(loopback) 다운로드 URL을 임시 폴더로 받아 shell.openPath로 연다.
+  // 임시 사본을 여므로 사용자가 편집·저장해도 RAG 원본은 보존된다("다른 이름으로 저장"은 각 앱에서).
+  ipcMain.handle('shell:openDocument', async (_event, url: unknown, filename: unknown): Promise<string> => {
+    if (typeof url !== 'string' || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url)) {
+      throw new Error('shell:openDocument: loopback http url required');
+    }
+    // 경로 조작 방지 — basename만 사용
+    const base = typeof filename === 'string' && filename.trim() ? path.basename(filename) : 'document';
+    const safeName = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'document';
+
+    const res = await net.fetch(url);
+    if (!res.ok) {
+      throw new Error(`shell:openDocument: download failed (${res.status})`);
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+
+    const dir = path.join(app.getPath('temp'), 'saessagi-docs');
+    await fsp.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, safeName);
+    await fsp.writeFile(dest, buf);
+
+    logger.info(`[Shell] openDocument -> ${dest}`);
+    return shell.openPath(dest);
   });
 
   // pet:dragEnd() — offset 초기화 + 최종 위치 영속화 (Q-12)

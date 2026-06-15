@@ -189,8 +189,17 @@ def _load_folders() -> list[dict[str, str]]:
 
 
 def _save_folders(folders: list[dict[str, str]]) -> None:
+    # 원자적 쓰기: temp에 쓰고 flush+fsync 후 os.replace로 교체.
+    # 직접 write_text는 쓰는 중 프로세스 종료/정전 시 파일이 빈/잘린 상태로 남아
+    # 폴더 정의가 통째로 유실될 수 있다 (E-56).
     _FOLDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _FOLDERS_FILE.write_text(json.dumps(folders, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = _FOLDERS_FILE.with_suffix(".json.tmp")
+    payload = json.dumps(folders, ensure_ascii=False, indent=2)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, _FOLDERS_FILE)
 
 
 def _get_folder_or_404(folder_id: str) -> dict[str, str]:

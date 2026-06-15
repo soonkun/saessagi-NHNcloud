@@ -66,7 +66,8 @@ JSON 키와의 매핑:
    - 단, 조사 생략으로 의미가 왜곡되는 경우에는 조사 유지 (예: "팀장에게 보고")
 2. 텍스트 필드에 '○ ', '- ', '* ' 기호 포함 금지. 위계는 JSON 구조로만 표현
 3. 출력은 지정된 JSON 구조만 사용. 마크다운·자연어 설명 절대 금지
-4. 날짜 형식: 'YYYY.MM.DD.' (마지막 마침표 포함). 향후계획 date는 'M.DD.' 또는 빈 문자열
+4. 날짜 형식: 'YYYY.MM.DD.' (마지막 마침표 포함). 향후계획 date는 '6.15.'처럼 \
+숫자 월.일.(마지막 마침표 포함) 또는 빈 문자열. 'M', 'DD' 같은 문자 placeholder 사용 금지
 5. 지정된 JSON 키만 사용. 임의 키 추가 금지
    최상위: title, date, department, place, attendees, datetime_place, attendees_str,
            summary_items, detail_items, next_steps
@@ -123,7 +124,7 @@ detail(*)에 보존하세요. 근거 없는 요약으로 뭉개지 마세요.
       ]
     }}
   ],
-  "next_steps": [{{"text": "향후 조치사항 (개조식)", "date": "M.DD."}}]
+  "next_steps": [{{"text": "향후 조치사항 (개조식)", "date": "6.15."}}]
 }}
 """
 

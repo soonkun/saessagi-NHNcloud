@@ -39,14 +39,19 @@ async def build_chat_agent(
         model = openai_cfg.model
         api_key = openai_cfg.api_key
         is_external = True
+        # OpenAI 모델(gpt-4o/gpt-5)은 자체적으로 비전 처리 → 별도 비전 라우팅 불필요
+        vision_model = ""
         logger.info(f"build_chat_agent: provider=openai, model={model}, use_mcpp={use_mcpp}")
     else:
         base_url = ollama_config.base_url
         model = ollama_config.model
         api_key = "z"
         is_external = False
+        # 이미지 턴은 비전 전용 모델로 분기 (gemma4 등은 이미지 OCR을 못 함)
+        vision_model = ollama_config.vision_model
         logger.info(
-            f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, use_mcpp={use_mcpp}"
+            f"build_chat_agent: provider=ollama, model={model}, base_url={base_url}, "
+            f"use_mcpp={use_mcpp}, vision_model={vision_model or '(none)'}"
         )
 
     # 모델별 안전한 temperature — gpt-5/o-series는 1.0만 허용 (OpenAI 400 회피)
@@ -64,6 +69,7 @@ async def build_chat_agent(
     return await GemmaChatAgent.create(
         base_url=base_url,
         model=model,
+        vision_model=vision_model,
         system_prompt=system_prompt,
         tool_manager=tool_manager,
         tool_executor=tool_executor,

@@ -568,6 +568,67 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-52: 향후계획(next_steps) date에 'M.DD.' placeholder 반환 → JSON Schema 하드 실패
+
+**날짜**: 2026-06-13  
+**증상**: 회의결과보고서(Step 3) 생성 시 `JSON Schema 위반 (max_retries 소진): JSON Schema 위반 at next_steps/2/date: 'M.15.' does not match '^(\d{1,2}\.\d{1,2}\.|)$'` 오류로 생성 전체가 실패.  
+**원인**: E-18에서 최상위 `date`의 placeholder 문제는 고쳤으나, `next_steps[].date`는 누락되어 있었다. 프롬프트(`prompts.py`)가 date 예시·설명을 `"M.DD."`로 제시 → LLM이 문자 그대로 베껴 `M.15.`(월 자리 'M' 유지)를 반환. date는 선택 필드인데도 스키마 패턴 위반으로 보고서 생성이 하드 실패했다.  
+**수정**:
+1. `generator.py`에 `_sanitize_next_step_date()` 추가 — `_normalize_raw_draft`(스키마 검증 전 단계)에서 각 next_step의 date를 정규화. 'M.D.' 형식은 유지, 'YYYY.MM.DD.'는 'M.D.'로 축약, 그 외 형식 불명 값은 빈 문자열로 떨어뜨려 **하드 실패 대신 날짜만 생략**하고 보고서 생성은 진행.
+2. `prompts.py`의 date 예시·설명을 `"M.DD."` → `"6.15."`(실제 숫자)로 교정하고 "문자 placeholder 사용 금지" 명시.  
+**교훈**: (E-18 재확인) 형식 예시는 항상 실제 값으로 줄 것. 그리고 **선택 필드의 형식 위반은 재시도/하드 실패가 아니라 정규화로 흡수**할 것 — 분량·형식이 조금 어긋난다고 생성 전체를 막지 말고, 살릴 수 있으면 살리고 못 살리면 그 필드만 생략해 사용자가 본문에서 판단하게 둔다.
+
+---
+
+## E-53: gemma4 thinking 모델 — /v1에서 think:false 무시 → 빈 응답/에러/제네릭 노트
+
+**날짜**: 2026-06-15
+**증상**: 정전 후 채팅이 "이상해짐" — RAG 책읽기(study) 연출 안 뜨고, 오류 발생, hwpx/스크린샷 첨부 업무노트가 내용 기반이 아닌 제네릭 노트로 저장됨.
+**원인(복합)**:
+1. (선행) 크래시 전후로 채팅 모델이 한때 `exaone3.5:32b`(tools·vision 미지원)에 물려 AgentError가 났다. 사용자가 `gemma4:latest`로 되돌렸으나,
+2. (핵심) `gemma4:latest`는 **thinking 모델**이고, 사용자의 `gemma4:e4b`(비-thinking)가 Ollama에서 사라져 `latest`만 남았다. 백엔드 `NoThinkLLM`은 `extra_body={"think": False}`로 추론을 끄려 했지만, **Ollama의 OpenAI-호환 엔드포인트(/v1/chat/completions)는 `think` 파라미터를 무시**한다(네이티브 /api/chat에서만 동작). 그 결과 gemma4가 항상 추론하며, 추론 토큰이 출력 예산(num_predict)을 잠식해 `content`가 빈 문자열이 됐다. 특히 비전 입력에서 추론이 길어 content='' → AgentError → note_save 강제 폴백이 (이미지 없는) 제네릭 답변을 요약 → 내용 없는 노트.
+**진단 방법**: Ollama 직접 호출로 분리 검증 — 네이티브 `/api/chat`+`think:false`는 content 정상(이미지 글자도 정확히 판독), `/v1`+`think:false`는 finish=length·content='', `/v1`+`reasoning_effort:"none"`은 finish=stop·content 정상.
+**수정**: `src/agent/no_think_llm.py`에서 `extra_body`에 `reasoning_effort="none"`을 함께 주입(setdefault — 호출자 지정값 존중). /v1에서 실제로 추론이 꺼져 content가 채워짐. 검증(헤드리스 WS): RAG 질의 정상(study 감정+근거 답변), 이미지 턴에서 save_knowledge_note 정상 호출/에러 없음. `gemma4:e4b` stale 참조도 conf.yaml에서 `latest`로 정리.
+**교훈**: (1) Ollama OpenAI-호환 엔드포인트는 `think`를 무시한다 — 추론 끄기는 `reasoning_effort:"none"`. (2) thinking 모델은 추론이 출력 예산을 잠식해 빈 응답을 낼 수 있다(E-41과 동일 부류). (3) 모델 능력은 추측 말고 Ollama `/api/show` capabilities로 확인할 것. **남은 과제**: 이미지→노트 강제 폴백이 이미지가 아닌 채팅 답변을 요약하므로, 비전 노트 내용 충실도는 별도 개선 필요(실 스크린샷 검증 후 판단).
+
+---
+
+## E-55: 노트 강제 저장 폴백이 첨부 문서 원문이 아닌 LLM 답변만 요약 → 추측성 노트
+
+**날짜**: 2026-06-15
+**증상**: hwpx 등 문서를 첨부하고 "정리해줘" 해도, 노트가 문서 내용 기반이 아니라 두루뭉술한 추측으로 작성됨 (오래전부터).
+**원인**: `_force_save_note`(note_save 강제 폴백)가 노트를 `user_text`(짧은 보고문) + `reply_text`(비서 답변)만으로 생성. 주석에 "답변에 첨부 내용이 *이미 반영돼 있다고 가정*"이라 적혀 있었으나, 모델이 "정리했어요"식 제네릭 답변을 내면 노트에 실제 문서 내용이 0건.
+**수정**: `_force_save_note`에서 `_extract_attached_doc_ids`로 첨부 doc_id를 찾아 `_fetch_attached_chunks(per_doc_limit=30)`로 원문 청크를 가져와 complete_json 프롬프트에 "추측 말고 이 원문을 근거로" 넣음.
+**교훈**: 폴백/요약은 "답변에 내용이 실려 있겠지" 가정 금지 — 1차 소스(문서 청크/이미지)를 직접 근거로 넣을 것.
+
+---
+
+## E-54: 이미지(스크린샷) 노트가 내용 미반영 — gemma4 OCR 불가 + 프롬프트 갭 → 비전 모델 라우팅
+
+**날짜**: 2026-06-15
+**증상**: 스크린샷을 붙이고 노트를 요청하면 이미지 글자를 전혀 못 읽고 추측성 노트 작성.
+**진단(실데이터)**: 사용자 실제 한글 스크린샷을 Ollama에 직접 넣어 비교 — `gemma4:latest`는 `/api/chat`·`/v1` 모두에서 이미지 텍스트를 못 읽음("어두운 배경/추상 패턴"). 반면 `qwen2.5vl:7b`는 같은 스크린샷을 `/v1`(앱 경로)에서 정확히 판독. 즉 앱의 /v1 전송은 정상이고 **gemma4의 한글 OCR 능력 자체가 부재**가 핵심. (capabilities에 'vision'이 있어도 실제 OCR 품질은 별개.)
+**보조 원인**: note_save tool_hint가 "처리한 업무 보고"로만 프레이밍 → 모델이 이미지 글자를 읽기보다 상황을 추측.
+**수정**:
+1. 이미지 첨부 턴에 "보이는 텍스트·표·수치를 그대로 전사하라(추측 금지)" 판독 지침 주입 (`_augment_with_rag` 진입부).
+2. **비전 모델 라우팅**: `OllamaConfig.vision_model`(conf.yaml `app.ollama.vision_model: qwen2.5vl:7b`) 추가. 이미지가 있는 턴은 `GemmaChatAgent.chat`에서 비전 모델로 `_simple_stream`(no-tools) 호출 → 이미지 전사 → note_save 폴백(E-55)이 그 전사 내용으로 노트 저장. 텍스트·도구 대화는 그대로 gemma4.
+**교훈**: (1) 모델 vision capability 플래그 ≠ 실제 OCR 품질 — 실데이터로 검증. (2) 합성 이미지(PIL 기본폰트/저화질)는 OCR 검증에 부적합, 사용자 실제 스크린샷으로 확인. (3) 한 모델이 모든 모달리티를 잘하지 못하면 모달리티별 라우팅이 답.
+
+---
+
+## E-57: 의도 분류기(gemma4) 콜드스타트 타임아웃 → 첨부 노트 작성 안 됨
+
+**날짜**: 2026-06-15
+**증상**: 첨부 파일/이미지를 붙이고 업무 노트 작성을 요청해도, 답변만 생성되고 노트가 저장되지 않음(아이콘도 note_writing으로 안 바뀜). 그런데 같은 동작이 어떤 때(예: 직전 턴으로 모델이 따뜻할 때)는 정상 작동 — 산발적.
+**진단(로그)**: 분류 소요시간 패턴 — 텍스트 질문은 ~1.5s에 분류 성공(doc_query/work_query). 첨부 턴은 **정확히 8s에 타임아웃 → source=fallback_error → intent=chat**. chat이면 note_save가 아니라 강제 저장(force-save)이 안 돌아 노트 미작성. 한 번은 pptx 첨부가 1.8s에 note_save 0.98로 성공 — gemma4가 그때만 warm이었던 것. 즉 **gemma4(로컬) 콜드스타트/모델 경합으로 첫 분류가 8s 기본 타임아웃을 초과**가 근본 원인. (gpt-4o-mini 때는 빨라서 안 드러남.) 추가로 `has_attachment`가 `[첨부 자료:]`만 검사해 **이미지(`[첨부 이미지:]`)는 첨부로 인식조차 안 됨**.
+**수정**:
+1. `conf.yaml intent_gate.timeout_seconds: 8 → 30` (콜드스타트 여유).
+2. 안전망(upstream_adapter): 분류가 `fallback_error`인데 첨부가 있으면 → note_save로 강제 라우팅. 분류 타임아웃에도 노트 유실 방지.
+3. `has_attachment`가 `[첨부 이미지:]`도 포함.
+**교훈**: (1) 로컬 LLM은 콜드스타트가 길어 외부 API 기준 타임아웃(8s)이 부족하다. (2) 분류기 실패 시 의도가 chat으로 떨어져 부가 동작이 통째로 사라지므로, 핵심 신호(첨부 등)에는 안전망 폴백을 둘 것. (3) 산발적 버그는 타이밍/웜업 의심 — 로그의 소요시간을 보라.
+
+---
+
 ## E-20: ChatPanel 탭 전환 시 MeetingView 작업 state 소실
 
 **날짜**: 2026-04-26  

@@ -1,11 +1,16 @@
 # src/agent/no_think_llm.py
-"""NoThinkLLM — 모든 Ollama API 호출에 think=False를 강제하는 LLM.
+"""NoThinkLLM — 모든 Ollama API 호출에 thinking 비활성화를 강제하는 LLM.
 
-gemma4:e2b / e4b 의 extended-thinking이 일상 대화에서도 항상 실행되어
-응답이 느린 문제를 해결한다.
+gemma4 류의 extended-thinking이 일상 대화에서도 항상 실행되어 응답이 느리거나,
+추론 토큰이 출력 예산을 잠식해 content가 빈 문자열이 되는 문제를 해결한다.
+(특히 비전 입력 시 추론이 길어 num_predict를 다 소진하고 content=''가 된다.)
 
 upstream chat_completion()을 재구현하지 않고, 내부 OpenAI 클라이언트의
-chat.completions.create를 패치해 extra_body={"think": False}를 주입한다.
+chat.completions.create를 패치해 thinking 비활성화 파라미터를 주입한다.
+
+주의: Ollama의 OpenAI-호환 엔드포인트(/v1/chat/completions)는 `think` 파라미터를
+**무시**한다 (네이티브 /api/chat에서만 동작). /v1에서 추론을 끄는 것은
+`reasoning_effort="none"`이므로 이 둘을 함께 주입한다 (E-53).
 """
 
 from __future__ import annotations
@@ -37,7 +42,10 @@ class NoThinkLLM(AsyncLLM):
             **kwargs: Any,
         ) -> Any:
             eb: dict[str, Any] = dict(extra_body) if extra_body else {}
-            eb["think"] = False  # 강제 — setdefault는 caller가 think=True를 넘기면 무력화됨
+            eb["think"] = False  # 네이티브 /api/chat용 (강제)
+            # /v1 OpenAI-호환 엔드포인트는 think를 무시하므로 reasoning_effort로 끈다.
+            # 호출자가 명시한 값(예: 정형 문서용 'low')은 존중 (setdefault).
+            eb.setdefault("reasoning_effort", "none")
             logger.debug("NoThinkLLM: injecting extra_body=%s", eb)
             return await original_create(*args, extra_body=eb, **kwargs)
 

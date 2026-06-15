@@ -6,8 +6,16 @@ from __future__ import annotations
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from meeting_minutes.generator import MeetingDraftGenerator, _check_length_violations
+import jsonschema
+
+from meeting_minutes.generator import (
+    MeetingDraftGenerator,
+    _check_length_violations,
+    _normalize_raw_draft,
+    _sanitize_next_step_date,
+)
 from meeting_minutes.errors import MeetingDraftError
+from meeting_minutes.schemas import MEETING_DRAFT_SCHEMA
 from meeting_minutes.types import MeetingDraft
 
 
@@ -207,3 +215,49 @@ def test_check_length_violations_2page_over_28_lines() -> None:
     draft = {"summary_items": items, "detail_items": []}
     violations = _check_length_violations(draft, 2)
     assert any("2장" in v for v in violations)
+
+
+# ── next_steps date 정규화 (E-52) ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("6.15.", "6.15."),          # 이미 올바른 형식
+        ("06.15.", "06.15."),        # 2자리 월·일도 허용
+        ("2026.06.15.", "6.15."),    # 전체 날짜 → M.D. 축약
+        ("2026.6.5", "6.5."),        # 마침표 누락 + 1자리도 축약
+        ("M.15.", ""),               # 문자 placeholder → 생략 (하드 실패 방지)
+        ("미정", ""),                # 날짜 아님 → 생략
+        ("6/15", ""),                # 형식 불명 → 생략
+        ("", ""),                    # 빈 문자열 유지
+        (None, ""),                  # 비문자열 → 빈 문자열
+    ],
+)
+def test_sanitize_next_step_date(raw: object, expected: str) -> None:
+    assert _sanitize_next_step_date(raw) == expected
+
+
+def test_normalize_drops_invalid_next_step_date_passes_schema() -> None:
+    """'M.15.' 같은 형식 위반 date가 있어도 정규화 후 스키마 검증을 통과해야 한다 (E-52)."""
+    raw = {
+        "title": "t",
+        "date": "2026.06.13.",
+        "department": "d",
+        "place": "p",
+        "attendees": ["a"],
+        "datetime_place": "dp",
+        "attendees_str": "a",
+        "summary_items": [{"text": "개요", "subs": []}],
+        "detail_items": [{"text": "주요", "subs": []}],
+        "next_steps": [
+            {"text": "1번 조치", "date": "6.20."},
+            {"text": "2번 조치", "date": "2026.07.01."},
+            {"text": "3번 조치", "date": "M.15."},
+        ],
+    }
+    norm = _normalize_raw_draft(raw)
+    dates = [s["date"] for s in norm["next_steps"]]
+    assert dates == ["6.20.", "7.1.", ""]
+    # 하드 실패 없이 검증 통과
+    jsonschema.validate(norm, MEETING_DRAFT_SCHEMA)

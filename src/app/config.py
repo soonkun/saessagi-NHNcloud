@@ -102,6 +102,9 @@ class LlmProviderKind(str, Enum):
 class OllamaConfig(BaseModel):
     base_url: str = Field(default="http://127.0.0.1:11434")
     model: str = Field(default="gemma4:e4b")
+    # 이미지(스크린샷) 첨부 턴 전용 비전 모델. 비우면 라우팅 안 함(메인 모델 사용).
+    # 메인 모델(gemma4 등)이 이미지 OCR을 못 할 때 비전 전용 모델로 분기한다.
+    vision_model: str = Field(default="")
     keep_alive_seconds: int = Field(default=300)
     request_timeout_seconds: int = Field(default=120)
 

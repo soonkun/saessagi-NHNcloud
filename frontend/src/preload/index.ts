@@ -16,6 +16,9 @@ declare global {
 const shellApi = {
   openPath: (absolutePath: string): Promise<string> =>
     ipcRenderer.invoke('shell:openPath', absolutePath),
+  // 백엔드 다운로드 URL을 임시 폴더로 받아 기본 앱으로 연다 (다운로드 위치 묻지 않음)
+  openDocument: (url: string, filename: string): Promise<string> =>
+    ipcRenderer.invoke('shell:openDocument', url, filename),
 };
 
 // 새싹이 web UI(web/src)가 사용하는 window.electronAPI

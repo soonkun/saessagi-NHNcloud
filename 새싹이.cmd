@@ -54,6 +54,31 @@ echo.
 echo Starting Saessagi...
 echo.
 
+:: Ensure Ollama (LLM server) is running. The backend needs it on startup, or it
+:: aborts with "Ollama unreachable". If Ollama is down, start it and wait (max ~30s).
+curl -sf http://127.0.0.1:11434/api/version > nul 2>&1
+if not errorlevel 1 goto OLLAMA_READY
+echo Ollama is not running. Starting Ollama...
+start "Ollama" /min cmd /c "ollama serve"
+set "_OLLAMA_TRIES=0"
+:WAIT_OLLAMA
+timeout /t 1 /nobreak > nul
+curl -sf http://127.0.0.1:11434/api/version > nul 2>&1
+if not errorlevel 1 goto OLLAMA_READY
+set /a _OLLAMA_TRIES+=1
+if %_OLLAMA_TRIES% geq 30 echo [Warning] Ollama did not respond within 30s. Continuing anyway... & goto OLLAMA_READY
+goto WAIT_OLLAMA
+:OLLAMA_READY
+echo Ollama ready.
+
+:: Kill any leftover backend still holding port 12393 from a previous session.
+:: (The backend window stays open after closing the app; relaunching otherwise
+::  fails with WinError 10048 "port in use" and the new backend shuts down.)
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:12393" ^| findstr "LISTENING"') do (
+    echo Stopping stale backend on port 12393 ^(PID %%P^)...
+    taskkill /PID %%P /F > nul 2>&1
+)
+
 :: Launch backend in a separate window
 start "Saessagi Backend" cmd /c "cd /d "%UPSTREAM%" && uv run --project "%ROOT%" uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393 & pause"
 

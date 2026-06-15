@@ -11,7 +11,7 @@ import {
   Network,
   Search,
   Paperclip,
-  Download,
+  ExternalLink,
 } from "lucide-react";
 import type {
   KnowledgeNote,
@@ -25,7 +25,7 @@ import {
   updateNote,
   deleteNote,
   fetchKnowledgeGraph,
-  getDocumentDownloadUrl,
+  openDocument,
 } from "../services/api";
 import { useStore } from "../store";
 import { invalidateNotesCache } from "../services/websocket";
@@ -711,8 +711,7 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {docs.map((d) => {
           const label = d.filename ?? d.id;
-          const href = d.filename ? getDocumentDownloadUrl(d.id) : undefined;
-          if (!href) {
+          if (!d.filename) {
             return (
               <span
                 key={d.id}
@@ -735,12 +734,13 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
             );
           }
           return (
-            <a
+            <button
               key={d.id}
-              href={href}
-              download={d.filename ?? undefined}
-              title={`원본 다운로드: ${label}`}
-              onClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                openDocument(d.id, d.filename as string);
+              }}
+              title={`원본 열기: ${label}`}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -751,16 +751,17 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
                 background: "rgba(100,140,220,0.18)",
                 border: "1px solid rgba(100,140,220,0.4)",
                 color: "#7aa8ff",
-                textDecoration: "none",
+                cursor: "pointer",
+                fontFamily: "inherit",
                 maxWidth: 240,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
               }}
             >
-              <Download size={11} />
+              <ExternalLink size={11} />
               {label}
-            </a>
+            </button>
           );
         })}
       </div>

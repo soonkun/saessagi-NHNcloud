@@ -4,7 +4,7 @@ import { speak } from "../services/tts";
 import {
   Upload,
   Trash2,
-  Download,
+  ExternalLink,
   FileText,
   Folder,
   FolderOpen,
@@ -20,7 +20,7 @@ import {
   fetchFolders,
   uploadDocument,
   deleteDocument,
-  getDocumentDownloadUrl,
+  openDocument,
   createFolder,
   renameFolder,
   deleteFolder,
@@ -216,7 +216,8 @@ export function DocumentsView(): React.ReactElement {
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 폴더 펼침 상태. 기본값(키 없음) = 닫힘. 사용자가 펼친 폴더만 true로 기록.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
   // 업로드 대상 폴더 (명시적 선택)
   const [targetFolderId, setTargetFolderId] = useState<string>("");
@@ -385,7 +386,8 @@ export function DocumentsView(): React.ReactElement {
     try {
       const folder = await createFolder(name);
       setFolders((prev) => [...prev, folder]);
-      setCollapsed((prev) => ({ ...prev, [folder.folder_id]: false }));
+      // 방금 만든 폴더는 펼쳐 보여준다
+      setExpanded((prev) => ({ ...prev, [folder.folder_id]: true }));
       setNewFolderName("");
       setAddingFolder(false);
     } catch (err) {
@@ -448,7 +450,7 @@ export function DocumentsView(): React.ReactElement {
   }
 
   function toggleFolder(folderId: string): void {
-    setCollapsed((prev) => ({ ...prev, [folderId]: !prev[folderId] }));
+    setExpanded((prev) => ({ ...prev, [folderId]: !prev[folderId] }));
   }
 
   // folder_id가 없거나 알 수 없는 폴더(orphan)인 문서도 미분류로 표시
@@ -706,7 +708,7 @@ export function DocumentsView(): React.ReactElement {
         {/* 사용자 폴더 */}
         {folders.map((folder) => {
           const folderDocs = docs.filter((d) => d.folder_id === folder.folder_id);
-          const isOpen = !collapsed[folder.folder_id];
+          const isOpen = !!expanded[folder.folder_id];
           return (
             <div key={folder.folder_id} style={{ marginBottom: 1 }}>
               <FolderRow
@@ -741,11 +743,11 @@ export function DocumentsView(): React.ReactElement {
               onClick={() => toggleFolder("__unclassified__")}
               style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", background: "none", border: "none", cursor: "pointer", color: "var(--color-text)", padding: "5px 4px", borderRadius: 4, fontSize: "var(--fs-13)", fontWeight: 600, textAlign: "left" }}
             >
-              {!collapsed["__unclassified__"]
+              {expanded["__unclassified__"]
                 ? <ChevronDown size={14} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
                 : <ChevronRight size={14} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
               }
-              {!collapsed["__unclassified__"]
+              {expanded["__unclassified__"]
                 ? <FolderOpen size={15} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
                 : <Folder size={15} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
               }
@@ -754,7 +756,7 @@ export function DocumentsView(): React.ReactElement {
                 {unclassifiedDocs.length}
               </span>
             </button>
-            {!collapsed["__unclassified__"] && (
+            {expanded["__unclassified__"] && (
               <div style={{ paddingLeft: 24 }}>
                 {unclassifiedDocs.map((doc) => (
                   <DocRow key={doc.id} doc={doc} onDelete={handleDeleteDoc} />
@@ -788,16 +790,17 @@ function DocRow({ doc, onDelete }: { doc: RagDocument; onDelete: (id: string) =>
           {doc.uploaded_at ? ` · ${new Date(doc.uploaded_at).toLocaleDateString("ko-KR")}` : ""}
         </div>
       </div>
-      <a
-        href={getDocumentDownloadUrl(doc.id)}
-        download={doc.filename}
+      <button
         className="btn-download"
         style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", flexShrink: 0, padding: 2, display: "flex", alignItems: "center", opacity: 0 }}
-        title="원본 다운로드"
-        onClick={(e) => e.stopPropagation()}
+        title="원본 열기"
+        onClick={(e) => {
+          e.stopPropagation();
+          openDocument(doc.id, doc.filename);
+        }}
       >
-        <Download size={12} />
-      </a>
+        <ExternalLink size={12} />
+      </button>
       <button
         onClick={() => void onDelete(doc.id)}
         className="btn-delete"

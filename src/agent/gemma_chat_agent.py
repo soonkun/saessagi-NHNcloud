@@ -33,6 +33,20 @@ _RETRY_DELAYS = [0.5, 1.0, 2.0]
 _ERROR_CALLING_CHAT_PREFIX = "Error calling the chat endpoint"
 
 
+# 이미지 턴(비전 모델) 전용 추출 프롬프트. persona("친절히 답해/정리해뒀어요")를 쓰면
+# 모델이 대화체로 주제만 언급하고 세부를 전사하지 않아 노트에 알맹이가 없어진다.
+# → 이미지 턴에선 이 추출 전용 시스템 프롬프트로 교체해 보이는 내용을 빠짐없이 뽑게 한다.
+_VISION_EXTRACT_SYSTEM_PROMPT = (
+    "당신은 첨부된 이미지(스크린샷·문서·사진)를 읽어 업무 노트의 근거 자료를 만드는 판독기입니다.\n"
+    "이미지에 실제로 보이는 모든 텍스트·표·수치·날짜·인물·기관·금액·항목을 빠짐없이 그대로 추출해 정리하세요.\n"
+    "가능한 한 누가(담당·참석자), 언제(일시·기한), 어디서(장소·기관), 무엇을(안건·내용), "
+    "어떻게(방법·절차), 왜(목적·배경)가 드러나도록 항목별로 작성하세요.\n"
+    "규칙: (1) 추측·창작 금지 — 이미지에 없는 항목은 비워 두세요. "
+    "(2) '정리해 두었어요' 같은 인사·대화체·메타 발언 금지. 추출된 실제 내용만 출력하세요. "
+    "(3) 한국어로, 항목/글머리 형태로 구체적으로 작성하세요."
+)
+
+
 def _normalize_openai_url(base_url: str) -> str:
     """base_url에서 /v1 suffix 포함 OpenAI 호환 URL 반환."""
     url = base_url.rstrip("/")
@@ -136,6 +150,7 @@ class GemmaChatAgent:
         tts_preprocessor_config: Any | None = None,
         llm_api_key: str = "z",
         is_external: bool = False,
+        vision_model: str = "",
     ) -> None:
         """필드만 초기화. 직접 호출 금지 — create() classmethod를 사용하라.
 
@@ -143,6 +158,7 @@ class GemmaChatAgent:
         """
         self.base_url = base_url
         self.model = model
+        self._vision_model = vision_model  # 이미지 턴 전용 (빈 문자열이면 라우팅 안 함)
         self.temperature = temperature
         self.max_context_tokens = max_context_tokens
         self.system_prompt = system_prompt
@@ -214,6 +230,7 @@ class GemmaChatAgent:
         cls,
         base_url: str,
         model: str = "gemma4:e4b",
+        vision_model: str = "",
         system_prompt: str = "",
         tool_manager: ToolManager | None = None,
         tool_executor: ToolExecutor | None = None,
@@ -253,6 +270,7 @@ class GemmaChatAgent:
         return cls(
             base_url=base_url,
             model=model,
+            vision_model=vision_model,
             system_prompt=system_prompt,
             tool_manager=tool_manager,
             tool_executor=tool_executor,
@@ -329,11 +347,17 @@ class GemmaChatAgent:
             self._inner.reset_interrupt()
             self._inner.prompt_mode_flag = False
 
+            # 이미지 첨부 턴 (A안): 전사 전용 모델(vision_model)로 이미지를 먼저 OCR 전사한 뒤,
+            # 그 텍스트를 입력에 주입해 batch를 텍스트화한다. 이후 메인 모델(gemma4)이 평소처럼
+            # 페르소나·도구(save_knowledge_note 등)로 답변·노트를 담당한다.
+            # (gemma4는 이미지를 못 보지만, 전사 텍스트는 일반 텍스트로 처리 가능.)
+            if batch.images and self._vision_model:
+                batch = await self._transcribe_images_into_batch(batch)
+
             messages = self._inner._to_messages(batch)
             # use_mcpp=False여도 extra_tool_specs(ToolRouter)이 있으면 도구 호출 경로 사용
             tools = self._formatted_tools_openai  # MCP + ToolRouter extras
 
-            # raw stream 선택: 도구가 하나라도 있으면 tool_interaction_loop 사용
             if tools:
                 raw_stream = self._inner._openai_tool_interaction_loop(messages, tools)
             else:
@@ -394,6 +418,71 @@ class GemmaChatAgent:
                 self._inner._add_message(assistant_text_total, "assistant")
 
             yield EndOfTurn(assistant_text_total=assistant_text_total)
+
+    async def _transcribe_images_into_batch(self, batch: BatchInput) -> BatchInput:
+        """이미지 첨부 batch를 전사 모델로 OCR해 텍스트화한다 (A안).
+
+        vision_model로 이미지 내용을 추출 → '[첨부 이미지에서 추출한 내용]' 블록으로
+        기존 텍스트에 덧붙이고 images=None인 새 BatchInput을 반환한다. 이렇게 하면
+        이후 메인 모델(gemma4)이 일반 텍스트 턴으로 처리해 도구 호출까지 정상 수행한다.
+        전사 실패 시 원본 batch를 그대로 반환(회귀 방지).
+        """
+        from open_llm_vtuber.agent.input_types import BatchInput, TextData, TextSource
+
+        try:
+            transcription = await self._transcribe_images(batch)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("이미지 전사 실패 (원본 유지): %s", exc)
+            return batch
+
+        if not transcription.strip():
+            logger.warning("이미지 전사 결과 비어 있음 — 원본 batch 유지")
+            return batch
+
+        logger.info(
+            "이미지 전사 완료(model=%s, %d자) → 메인 모델(%s)이 답변·노트 담당",
+            self._vision_model,
+            len(transcription),
+            self.model,
+        )
+        extra = TextData(
+            source=TextSource.INPUT,
+            content="[첨부 이미지에서 추출한 내용 — 이 내용을 근거로 답변/노트를 작성]\n"
+            + transcription.strip(),
+            from_name="이미지전사",
+        )
+        return BatchInput(
+            texts=list(batch.texts or []) + [extra],
+            images=None,
+            metadata=batch.metadata,
+        )
+
+    async def _transcribe_images(self, batch: BatchInput) -> str:
+        """vision_model을 비스트리밍 호출해 batch의 이미지 내용을 전사한 텍스트를 반환."""
+        user_content: list[dict[str, Any]] = [
+            {"type": "text", "text": "이 이미지에 보이는 모든 내용을 빠짐없이 추출해 정리해줘."}
+        ]
+        for img in batch.images or []:
+            data = getattr(img, "data", None)
+            if isinstance(data, str) and data.startswith("data:image"):
+                user_content.append(
+                    {"type": "image_url", "image_url": {"url": data, "detail": "auto"}}
+                )
+        if len(user_content) == 1:  # 유효한 이미지가 없음
+            return ""
+        async with asyncio.timeout(120.0):
+            resp = await self._llm.client.chat.completions.create(
+                model=self._vision_model,
+                messages=[
+                    {"role": "system", "content": _VISION_EXTRACT_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                stream=False,
+                temperature=0.2,
+            )
+        return resp.choices[0].message.content or ""
 
     async def handle_interrupt(self, heard_text: str) -> None:
         """upstream BasicMemoryAgent.handle_interrupt에 단순 위임.

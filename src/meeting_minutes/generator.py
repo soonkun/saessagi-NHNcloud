@@ -95,12 +95,37 @@ def _check_length_violations(draft_dict: dict[str, Any], pages: PageCount) -> li
     return violations
 
 
+def _sanitize_next_step_date(value: Any) -> str:
+    """향후계획 date를 스키마 패턴('M.D.' 또는 빈 문자열)에 맞게 정규화한다.
+
+    LLM이 프롬프트 예시('M.DD.')를 문자 그대로 베껴 'M.15.' 같은 비숫자 날짜를
+    내는 경우가 있다. 날짜는 선택 필드이므로 형식을 못 맞추는 값은 하드 실패시키지
+    말고 빈 문자열로 떨어뜨려 보고서 생성은 진행한다 (사용자가 본문에서 판단).
+    """
+    if not isinstance(value, str):
+        return ""
+    v = value.strip()
+    if not v:
+        return ""
+    # 이미 'M.D.' (1~2자리 월.일.) 형식이면 그대로
+    if re.fullmatch(r"\d{1,2}\.\d{1,2}\.", v):
+        return v
+    # 'YYYY.MM.DD.' / 'YYYY.MM.DD' → 'M.D.' 로 축약
+    m = re.fullmatch(r"\d{4}\.(\d{1,2})\.(\d{1,2})\.?", v)
+    if m:
+        return f"{int(m.group(1))}.{int(m.group(2))}."
+    # 그 외(예: 'M.15.', '미정', '6/15') 형식 불명 → 날짜 생략
+    logger.warning(f"next_steps date 형식 불명 → 생략: {v!r}")
+    return ""
+
+
 def _normalize_raw_draft(raw: dict[str, Any]) -> dict[str, Any]:
     """LLM 응답의 흔한 형식 일탈을 스키마 검증 전에 정규화한다 (E-41).
 
     - 빈 text + detail만 있는 sub: 직전 sub의 추가 *로 취급 — 직전 sub의 text를
       복제해 살린다 (HwpxWriter가 연속 동일 - 텍스트를 병합).
     - text·detail 모두 빈 sub, text 빈 item: 제거.
+    - next_steps date: 스키마 패턴 위반 값은 빈 문자열로 정규화 (하드 실패 방지).
     """
     if not isinstance(raw, dict):
         return raw
@@ -139,9 +164,14 @@ def _normalize_raw_draft(raw: dict[str, Any]) -> dict[str, Any]:
 
     next_steps = raw.get("next_steps")
     if isinstance(next_steps, list):
-        raw["next_steps"] = [
-            s for s in next_steps if isinstance(s, dict) and str(s.get("text", "")).strip()
-        ]
+        cleaned_steps: list[Any] = []
+        for s in next_steps:
+            if not isinstance(s, dict) or not str(s.get("text", "")).strip():
+                continue
+            if "date" in s:
+                s = {**s, "date": _sanitize_next_step_date(s.get("date"))}
+            cleaned_steps.append(s)
+        raw["next_steps"] = cleaned_steps
 
     # 주요내용(detail_items) 비움 방지 — LLM이 모든 ○를 summary_items(개요)에
     # 몰아넣으면 보고서에서 '주요내용' 카테고리 헤더가 통째로 사라진다.

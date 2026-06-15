@@ -82,7 +82,7 @@ async def test_think_false_injected_when_no_extra_body() -> None:
     await llm.client.chat.completions.create(messages=[])
 
     assert len(captured) == 1
-    assert captured[0]["extra_body"] == {"think": False}
+    assert captured[0]["extra_body"] == {"think": False, "reasoning_effort": "none"}
 
 
 @pytest.mark.asyncio
@@ -205,7 +205,7 @@ async def test_none_extra_body_becomes_think_false() -> None:
         )
 
     await llm.client.chat.completions.create(messages=[], extra_body=None)
-    assert captured[0]["extra_body"] == {"think": False}
+    assert captured[0]["extra_body"] == {"think": False, "reasoning_effort": "none"}
 
 
 @pytest.mark.asyncio
