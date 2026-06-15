@@ -66,7 +66,10 @@ timeout /t 1 /nobreak > nul
 curl -sf http://127.0.0.1:11434/api/version > nul 2>&1
 if not errorlevel 1 goto OLLAMA_READY
 set /a _OLLAMA_TRIES+=1
-if %_OLLAMA_TRIES% geq 30 echo [Warning] Ollama did not respond within 30s. Continuing anyway... & goto OLLAMA_READY
+if %_OLLAMA_TRIES% geq 30 (
+    echo [Warning] Ollama did not respond within 30s. Continuing anyway...
+    goto OLLAMA_READY
+)
 goto WAIT_OLLAMA
 :OLLAMA_READY
 echo Ollama ready.
@@ -82,12 +85,23 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr "127.0.0.1:12393" ^| findstr 
 :: Launch backend in a separate window
 start "Saessagi Backend" cmd /c "cd /d "%UPSTREAM%" && uv run --project "%ROOT%" uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393 & pause"
 
-:: Wait for backend to be ready
+:: Wait for backend to be ready (bounded so a dead backend won't hang forever).
 echo Waiting for backend...
+set "_BE_TRIES=0"
 :WAIT_LOOP
 timeout /t 1 /nobreak > nul
 curl -sf http://127.0.0.1:12393/ > nul 2>&1
-if errorlevel 1 goto WAIT_LOOP
+if not errorlevel 1 goto BACKEND_READY
+set /a _BE_TRIES+=1
+if %_BE_TRIES% geq 180 (
+    echo.
+    echo [Error] Backend did not become ready within 180s.
+    echo Check the "Saessagi Backend" window for the error message.
+    pause
+    exit /b 1
+)
+goto WAIT_LOOP
+:BACKEND_READY
 
 echo Backend ready. Launching app...
 
