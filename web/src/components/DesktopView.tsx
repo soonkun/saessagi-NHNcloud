@@ -36,11 +36,11 @@ const SIDEBAR_TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = 
 
 const SAMPLE_PROMPTS = [
   { title: "오늘 한 업무 기록", body: "오늘 ⟨이 자료⟩로 ⟨이 업무⟩를 이렇게 처리했어" },
-  { title: "이미지·스크린샷 정리", body: "화면 캡처를 붙여넣고 “노트로 정리해줘”" },
-  { title: "사내 문서에서 답 찾기", body: "출장비 신청 절차 알려줘 (출처와 함께)" },
+  { title: "이미지·스크린샷 붙여넣기", body: "자료를 붙여넣고 내용을 읽고 업무노트에 기록해줘" },
+  { title: "사내 문서에서 답 찾기", body: "연구책임자 변경신청 방법을 알려줘" },
   { title: "지난 업무 다시 찾기", body: "지난번 LG 협의 결과 뭐였지?" },
   { title: "일정 등록·확인", body: "내일 오후 2시 팀 회의 잡아줘" },
-  { title: "회의록 작성", body: "회의록 탭에서 음성 파일 업로드 → 한글 보고서까지" },
+  { title: "회의 결과보고서 작성", body: "회의록 탭에서 음성 파일 업로드 → 한글 보고서까지" },
 ];
 
 export function DesktopView(): React.ReactElement {
