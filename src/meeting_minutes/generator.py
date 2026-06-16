@@ -15,7 +15,9 @@ from .prompts import (
     CHUNK_BULLETS_SCHEMA,
     CHUNK_SUMMARY_SYSTEM_PROMPT,
     CHUNK_SUMMARY_USER_TEMPLATE,
+    MEETING_STYLE_RULES,
     SYSTEM_PROMPT,
+    TEXT_OUTPUT_FORMAT,
     USER_PROMPT_TEMPLATE,
     VOLUME_GUIDE_1PAGE,
     VOLUME_GUIDE_2PAGE,
@@ -420,30 +422,12 @@ class MeetingDraftGenerator:
                 "주요내용 ○ 항목 합계 3~4개."
             )
 
-        # 사용자 커스텀 지침(M_17)을 2단계에도 적용한다 — 기존엔 3단계(JSON 생성)에만
-        # 적용돼 사용자가 "설정한 기준이 동작하지 않는다"고 느꼈다 (E-41).
-        # 커스텀 지침에는 JSON 출력 규칙이 포함될 수 있으므로 출력 형식만 오버라이드.
-        base_rules = self._custom_system_prompt.strip() or SYSTEM_PROMPT
-        step2_system = (
-            f"{base_rules}\n\n"
-            "## 이번 작업의 출력 형식 (위 JSON 규칙보다 우선)\n"
-            "이번에는 JSON이 아니라 사람이 읽고 수정할 수 있는 개조식 보고서 텍스트를 출력합니다.\n"
-            "위의 위계·글자수·톤 규칙(특히 명사형 종결 우선, -함/-음 일률 금지)은 그대로 적용하되,\n"
-            "아래 레이아웃의 plain text로만 출력하세요 (마크다운 기호 ​#, **, ``` 금지):\n\n"
-            "회의 제목\n"
-            "[개요]\n"
-            "○ 일시·장소 : YYYY.MM.DD. HH:MM / 장소 (녹취에 없으면 날짜만)\n"
-            "○ 참 석 자 : 이름1, 이름2 (녹취에 없으면 생략)\n"
-            "○ 회의 목적·배경 (개조식 한 줄)\n"
-            "\n"
-            "[주요내용]\n"
-            "○ 주요 논의·결정 사항 (개조식)\n"
-            " - 부연 설명 (필요 시)\n"
-            "  * 구체적 근거·일정·수치 — 녹취의 수치·금액·날짜·기관명은 빠짐없이 여기 보존\n"
-            "\n"
-            "[향후계획]\n"
-            "○ 향후 조치 사항 (M.DD.)\n"
-        )
+        # Step 2는 "개조식 텍스트"를 출력한다. 작성 스타일 규칙(MEETING_STYLE_RULES)은
+        # Step 3(JSON)과 공유하되, 출력 형식은 텍스트 레이아웃만 덧붙인다.
+        # (E-58) 과거엔 base_rules = 커스텀/ SYSTEM_PROMPT 전체를 깔았는데, 거기엔
+        # "JSON으로만 출력" 규칙이 들어 있어 약한 로컬 모델이 텍스트 대신 JSON을 토해냈다.
+        # 스타일 ↔ 출력 형식을 분리해 Step 2에는 JSON 지시가 절대 섞이지 않게 한다.
+        step2_system = f"{MEETING_STYLE_RULES}\n\n{TEXT_OUTPUT_FORMAT}"
 
         user_prompt = (
             f"다음 회의 녹취록을 개조식 회의 결과 보고 텍스트로 정리하세요.\n"

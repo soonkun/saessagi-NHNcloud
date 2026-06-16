@@ -629,6 +629,22 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-58: 회의록 Step 2(개조식 텍스트)가 JSON을 토해냄 — 스타일·출력형식 커플링
+
+**날짜**: 2026-06-15
+**증상**: 회의록 탭 Step 2(회의록 작성)가 사람이 읽는 개조식 텍스트([개요]/[주요내용]/[향후계획], ○/-/*) 대신, 내부 JSON 스키마(title/summary_items/...)를 그대로 출력. 회의록 작성 지침을 무시하는 것처럼 보임. (chat·노트 기능과 무관한, 회의록 탭 전용 파이프라인.)
+**원인**: `summarize_to_text`(Step 2)가 `complete_text`(텍스트 모드)로 호출하면서도 system 프롬프트로 `base_rules`(= 커스텀 지침 또는 `SYSTEM_PROMPT`)를 깔았는데, 그 안에는 **"출력은 지정된 JSON 구조만 사용"** 규칙이 들어 있었다. 뒤에 "이번엔 텍스트로 출력" 오버라이드를 붙였지만, **스타일 규칙과 JSON 출력 규칙이 한 덩어리로 섞여** 있어, gpt-5 같은 강한 모델은 오버라이드를 따르지만 **gemma4(로컬)는 방대한 JSON 규칙에 휩쓸려 JSON을 출력**. LLM 공급자를 ollama로 바꾸면서 드러난 커플링.
+**수정 (OOP — 관심사 분리)**: `prompts.py`에서
+- `MEETING_STYLE_RULES` — 작성 스타일(카테고리·위계·글자수·명사형 종결·수치 보존), **출력 형식과 무관**
+- `_JSON_OUTPUT_SPEC` — JSON 전용 출력 규칙
+- `SYSTEM_PROMPT = MEETING_STYLE_RULES + _JSON_OUTPUT_SPEC` (Step 3, 기존 동일 내용 — complete_json이 JSON 강제)
+- `TEXT_OUTPUT_FORMAT` — Step 2 전용 개조식 텍스트 레이아웃
+
+`generator.summarize_to_text`는 이제 `MEETING_STYLE_RULES + TEXT_OUTPUT_FORMAT`만 사용(JSON 지시 일절 없음). gemma4로 실제 검증: 개조식 텍스트 정상 출력.
+**교훈**: 프롬프트에서 **"무엇을 쓰는가(스타일)"와 "어떤 형식으로 출력하는가"를 한 덩어리로 묶지 말 것.** 같은 스타일을 텍스트/JSON 두 형식으로 내보낼 땐 형식 지시를 분리해 조합해야, 약한 모델에서도 형식이 흔들리지 않는다. Step 3가 안정적인 이유는 `complete_json`이 API 차원에서 JSON을 강제하기 때문 — 텍스트 출력엔 그런 강제가 없으므로 프롬프트의 명료성이 더 중요하다.
+
+---
+
 ## E-20: ChatPanel 탭 전환 시 MeetingView 작업 state 소실
 
 **날짜**: 2026-04-26  
