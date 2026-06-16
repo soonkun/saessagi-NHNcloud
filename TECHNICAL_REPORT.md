@@ -1,21 +1,23 @@
 # 새싹이 AI 비서 — 기술 개발 보고서
 
-> **프로젝트**: 사내 인트라넷 오프라인 AI 비서 "새싹이(Saessagi)"  
-> **최종 갱신**: 2026-04-26  
-> **버전**: v1.1 (회의록 자동화 + 프론트엔드 v2 기준)
+> 사내 오프라인 환경을 위한 데스크톱 AI 비서. 음성·텍스트·이미지로 대화하고, 사내 문서를 근거로 답하며(RAG), 업무 노트·일정·회의 결과보고서(HWPX)를 자동 작성하는 멀티모달 에이전트.
+>
+> 최종 갱신: 2026-06 · GitHub: https://github.com/soonkun/ai-assistant
 
 ---
 
 ## 목차
 
-1. [프로젝트 개요](#1-프로젝트-개요)
-2. [요구사항 요약](#2-요구사항-요약)
-3. [기술 스택 선정](#3-기술-스택-선정)
-4. [아키텍처 설계](#4-아키텍처-설계)
-5. [모듈별 개발 히스토리](#5-모듈별-개발-히스토리)
-6. [핵심 기술 문제와 해결](#6-핵심-기술-문제와-해결)
-7. [배포 전략](#7-배포-전략)
-8. [현재 상태 및 잔여 과제](#8-현재-상태-및-잔여-과제)
+1. 프로젝트 개요
+2. 시스템 아키텍처
+3. 모델 구성
+4. 에이전트 체계 (요청 처리 흐름)
+5. 핵심 기능 서브시스템
+6. 프론트엔드 (Electron 펫/창 모드)
+7. 주요 기술 문제와 해결
+8. 배포·운영
+9. 개발 방식
+10. 현재 상태 및 잔여 과제
 
 ---
 
@@ -23,786 +25,329 @@
 
 ### 배경
 
-사내 인트라넷 환경에서 동작하는 AI 비서 소프트웨어. 외부 인터넷이 차단된 완전 오프라인 환경이 전제 조건이다. 기존의 클라우드 기반 AI 서비스를 사용할 수 없으므로, 모든 추론을 로컬 GPU/CPU에서 직접 수행한다.
+기관 인트라넷은 외부 인터넷이 차단된 폐쇄망이다. 상용 클라우드 AI(ChatGPT 등)를 그대로 쓸 수 없으므로, **로컬에서 동작하는 오프라인 AI 비서**가 필요하다. 새싹이는 직원의 데스크톱에 설치되어 인터넷 없이 동작하는 것을 목표로 한다.
 
 ### 핵심 목표
 
-- **음성으로 말을 걸면 음성으로 답하는** 멀티모달 AI 비서
-- **사내 문서(PDF/DOCX/HWPX 등)를 검색**해 출처를 명시한 답변 제공
-- **일정 관리**: 자연어로 일정 등록·조회·알림
-- **회의록 자동 작성**: 음성 파일 업로드 → 전사 → 요약 → HWPX 결과보고서 3단계 자동화
-- **캐릭터 아바타 "새싹이"**: 투명 배경의 펫 모드로 항상 화면 위에 표시
-- **완전 오프라인**: 네트워크 호출 제로. 모든 모델·의존성 로컬 번들
+- **완전 오프라인 동작** — LLM·임베딩·ASR·TTS 등 모든 추론을 로컬(Ollama·로컬 모델)에서 수행
+- **사내 문서 기반 응답(RAG)** — 업로드한 규정·보고서·업무편람을 근거로 출처와 함께 답변
+- **업무 자동화** — 업무 노트 정리, 일정 등록, 회의 녹취 → 한글(HWPX) 결과보고서 생성
+- **멀티모달** — 텍스트·음성·이미지(스크린샷) 입력 처리
+- **친근한 UX** — 바탕화면에 떠 있는 펫 캐릭터(새싹이)로 상태·감정을 시각 표현
 
-### 개발 방식
+> **상용 타깃 인프라**: 기관 인트라넷 중앙 GPU(대구 PPP존). 그 인프라 구축 전까지는 OpenAI(GPT-5/4o)를 "인트라넷에 올릴 OSS 모델"의 임시 대역으로 사용한다. `conf.yaml`의 LLM provider를 `openai`↔`ollama`로 전환할 수 있으며, 인트라넷 GPU 구축 시 base_url만 사내로 돌리면 된다.
 
-`Open-LLM-VTuber`(이하 "upstream")를 베이스 프레임워크로 채택해 상속·확장하는 방식을 선택했다. 처음부터 다 만드는 대신 검증된 WebSocket 파이프라인(ASR → VAD → LLM → TTS)을 재사용하고, 사내 요구사항에 맞는 기능(RAG, 캘린더, 유휴 감지, 스프라이트 아바타, 펫 모드, 회의록)을 추가했다.
+### 핵심 특징 요약
 
-개발은 역할 분리된 멀티에이전트 구조로 진행됐다:
-
-| 역할 | 담당 |
+| 영역 | 내용 |
 |---|---|
-| Planner | 아키텍처 설계, 모듈 스펙 작성 |
-| Builder | 실제 코드 구현 |
-| Critic | 독립적 적대적 리뷰 (Builder와 세션 분리) |
-| Validator | pytest·ruff·mypy 실행으로 검증 |
-| Integrator | E2E 통합 테스트 |
+| 형태 | Electron 데스크톱 앱(창 모드 + 바탕화면 펫 모드) + Python 백엔드 |
+| 대화 | 의도 자동 분류 → RAG/도구/노트/일정으로 라우팅하는 에이전트 |
+| 입력 | 음성(STT) · 텍스트 · 이미지/스크린샷(비전 OCR) |
+| 산출물 | 답변(출처 인용) · 업무 노트(마크다운) · 일정 · 회의 결과보고서(.hwpx) |
+| 기반 | Open-LLM-VTuber 포크 + 사내 요구사항 모듈(M_05b ~ M_18) 신규 개발 |
 
 ---
 
-## 2. 요구사항 요약
-
-### 기능 요구사항
-
-| 영역 | 주요 요구사항 |
-|---|---|
-| 음성 대화 | STT(한국어/영어), VAD, TTS(한국어 여성), Full-Duplex 끼어들기 |
-| 텍스트 대화 | 채팅 UI, 음성과 동일 컨텍스트 공유 |
-| 문서 RAG | PDF·DOCX·PPTX·HWP/HWPX·TXT·MD 파싱, 페이지 단위 인용, 원문 하이라이트 |
-| 캐릭터 아바타 | 스프라이트 9종, 펫 모드(투명·클릭 관통·항상 위), 감정 연동 |
-| 일정 관리 | 자연어 파싱 → 함수 호출 → SQLite 저장, 10분 전 알림, 아침 브리핑 |
-| 유휴 감지 | 45분 무입력 → 휴식 권고, 2시간 연속 → 과로 경고 |
-| 화면 인식 | 사용자 요청 시 스크린샷 → 멀티모달 LLM 분석 |
-| **회의록 자동화** | **음성 업로드 → Whisper 전사 → LLM 요약 → HWPX 결과보고서 생성** |
-
-### 비기능 요구사항
-
-| 항목 | 목표 |
-|---|---|
-| 기동 시간 | 15초 이내 |
-| 음성 응답 지연 | GPU 2초 / CPU-only 6초 이내 |
-| 메모리(MIN 프로파일) | 14GB 이하 (Whisper medium int8) |
-| 메모리(RECOMMENDED) | 20GB 이하 (Whisper large-v3) |
-| 외부 네트워크 | 0건 (URL 화이트리스트 검증으로 강제) |
-| OS | Windows 10/11 배포, macOS/Linux 개발 지원 |
-
-### 모델 선정
-
-| 용도 | 모델 | 비고 |
-|---|---|---|
-| LLM | Gemma 4 E4B (Ollama) | 멀티모달, 함수 호출, 131K 컨텍스트 |
-| STT | faster-whisper large-v3-turbo | 한국어 int8 CPU, 최신 경량 버전 |
-| TTS | MeloTTS Korean | 한국어 여성 음성, 오픈소스 |
-| 임베딩 | BGE-M3 (sentence-transformers) | 다국어, 한국어 포함 |
-| 벡터 DB | LanceDB (embedded) | 설치 불필요, 로컬 디스크 |
-
----
-
-## 3. 기술 스택 선정
-
-### 백엔드
-
-```
-Python 3.12
-├── FastAPI 0.115     — WebSocket + REST 서버
-├── asyncio           — 비동기 파이프라인
-├── Ollama            — LLM 로컬 런타임
-├── faster-whisper    — CTranslate2 기반 STT + 회의록 전사
-├── MeloTTS           — 한국어 TTS
-├── LanceDB           — 벡터 저장소 (임베드)
-├── SQLite            — 캘린더 데이터
-├── pydantic v2       — 설정 스키마 검증
-└── python-hwpx       — HWPX 결과보고서 생성
-```
-
-### 프론트엔드
-
-```
-Electron 35
-├── React 18          — UI 컴포넌트
-├── Vite              — 번들러
-├── TypeScript        — 타입 안전성
-└── SSE (fetch API)   — 실시간 진행 스트리밍
-```
-
-### 개발 도구
-
-```
-uv              — Python 패키지 관리 (pip 대체)
-ruff            — 린터·포매터
-mypy            — 정적 타입 검사
-pytest          — 단위·통합·E2E 테스트
-```
-
----
-
-## 4. 아키텍처 설계
+## 2. 시스템 아키텍처
 
 ### 전체 구조
 
 ```
- ┌─────────────────────────────────────────────────────────────────────┐
- │                    FRONTEND (Electron + React)                       │
- │  ┌────────────┐  ┌─────────────┐  ┌─────────────┐  ┌────────────┐  │
- │  │  Chat UI   │  │  Calendar   │  │  Documents  │  │  Meeting   │  │
- │  │ Text/Voice │  │    View     │  │    View     │  │    View    │  │
- │  └─────┬──────┘  └──────┬──────┘  └──────┬──────┘  └─────┬──────┘  │
- │        │                                              REST│(SSE)    │
- │        └──────────────────────────────────────────────────┘         │
- │               WebSocket + REST API client                           │
- │                                                                     │
- │  ┌─────────────────────────────────────────────────────────────┐    │
- │  │                  Sprite Avatar (새싹이)                      │    │
- │  │  표정 9종 · 펫 모드(투명·항상 위·클릭 관통·드래그 이동)      │    │
- │  └─────────────────────────────────────────────────────────────┘    │
- └───────────────────────────────┬─────────────────────────────────────┘
-                                 │ ws://127.0.0.1:12393
- ┌───────────────────────────────▼─────────────────────────────────────┐
- │                   APPLICATION LAYER (FastAPI)                        │
- │  ┌──────────────────────────────────────────────────────────────┐   │
- │  │ AppServiceContext (upstream ServiceContext 확장)              │   │
- │  │  + RagService · CalendarService · IdleMonitor                │   │
- │  │  + AvatarState · ProactiveDispatcher                         │   │
- │  └──────┬──────────┬──────────┬────────────────────────────────┘   │
- │         │          │          │                                     │
- │     ┌───▼──┐  ┌────▼────┐  ┌──▼──────────────────────────────────┐ │
- │     │ ASR  │  │   LLM   │  │ MeetingMinutes (M_13)               │ │
- │     │(M_02)│  │(M_05+FC)│  │  /transcribe-stream  (Whisper)      │ │
- │     └───┬──┘  └────┬────┘  │  /summarize-stream   (LLM)          │ │
- │         │          │       │  /generate-stream    (python-hwpx)  │ │
- │     ┌───▼──┐  ┌────▼────────────────────────────────────────────┘ │
- │     │ VAD  │  │ ToolRouter → RAG (M_06/M_07) · Calendar (M_09)   │ │
- │     │(M_03)│  └───────────────────────────────────────────────────┘ │
- │     └──────┘                                                        │
- │                          ┌────▼────┐                               │
- │                          │   TTS   │                               │
- │                          │ (M_04)  │                               │
- │                          └─────────┘                               │
- └─────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────── Electron 데스크톱 앱 ────────────────────────────┐
+│  frontend/ (main process)              web/ (React UI)                        │
+│  · 창 모드 / 펫 모드(투명창·click-through·드래그)                              │
+│  · IPC: shell:openDocument, pet:*, get-display …                              │
+│  · 탭: 새싹이(대화)·일정표·노트·문서·회의록·설정                              │
+└───────────────┬───────────────────────────────────┬──────────────────────────┘
+                │ WebSocket (ws://127.0.0.1:12393/client-ws)   │ HTTP (/api/*)
+                ▼                                               ▼
+┌──────────────────────────── Python 백엔드 (FastAPI / uvicorn, :12393) ───────┐
+│  대화 파이프라인:  IntentGate → RAG 증강 → (비전 전사) → ToolLoop → 폴백      │
+│  ─ GemmaChatAgentAdapter (의도분류·RAG·도구상태·노트 폴백)                    │
+│  ─ GemmaChatAgent (upstream BasicMemoryAgent 컴포지션 + 도구 루프)            │
+│  서비스: RAG · Knowledge(노트) · Calendar · MeetingMinutes · Proactive ·      │
+│          IdleMonitor · AvatarState · ASR · TTS · VAD                          │
+└──────┬───────────────┬──────────────────┬───────────────────┬────────────────┘
+       │               │                  │                   │
+       ▼               ▼                  ▼                   ▼
+   Ollama(:11434)   LanceDB           SQLite              파일시스템
+   gemma4/qwen2.5vl  (벡터 스토어)    (calendar.db)       data/knowledge/*.md
+   임베딩·리랭커는                                         data/rag_originals/
+   로컬 sentence-transformers
 ```
 
-### 핵심 설계 결정
-
-**1. Upstream 상속 전략**  
-처음부터 작성하는 대신 `ServiceContext`, `WebSocketHandler`, `ConversationOrchestrator`를 Python 상속으로 확장했다. upstream의 WebSocket 파이프라인(메시지 라우팅·오디오 스트리밍·인터럽트 처리)을 그대로 재사용하면서, 필요한 부분만 메서드 오버라이드로 교체했다.
-
-**2. 완전 오프라인 강제**  
-`url_guard.py`가 모든 외부 URL을 로드 타임에 검사한다. `127.0.0.1`·`localhost`·사내 IP가 아닌 URL이 설정 파일에 있으면 앱이 기동을 거부한다.
-
-**3. 하드웨어 자동 적응**  
-`src/app/hardware.py`가 시작 시 하드웨어를 감지해 최적 설정을 자동 선택한다.
-
-| 환경 | Whisper 설정 | TTS |
-|---|---|---|
-| NVIDIA ≥16GB VRAM (RTX 4090) | large-v3-turbo / cuda / float16 | cuda |
-| NVIDIA 6-16GB VRAM | large-v3-turbo / cuda / int8_float16 | cuda |
-| Apple Silicon (MPS) | large-v3-turbo / cpu / int8 | auto (MPS) |
-| CPU, RAM ≥16GB | large-v3-turbo / cpu / int8 | cpu |
-| CPU, RAM <16GB | medium / cpu / int8 | cpu |
-
-**4. LLM 사고 모드 제어**  
-Gemma 4는 기본적으로 모든 응답에 Chain-of-Thought 추론(thinking)을 사용한다. 일상 대화에서 수 초의 불필요한 대기가 발생하므로, Ollama API 호출 시 `extra_body={"think": False}`를 주입해 기본적으로 비활성화했다.
-
-**5. 회의록 3단계 SSE 파이프라인**  
-회의록 자동화는 각 단계를 SSE(Server-Sent Events) 스트림으로 노출해 프론트엔드가 실시간 진행상황을 표시할 수 있도록 설계했다.
-
-```
-오디오 파일 (POST /transcribe-stream)
-    → SSE: {"stage":"progress","message":"음성 파일 변환 중..."}
-    → SSE: {"stage":"done","transcript":"..."}
-
-전사 텍스트 (POST /summarize-stream)
-    → SSE: {"stage":"progress","message":"회의 내용을 분석 중..."}
-    → SSE: {"stage":"done","meeting_notes":"..."}
-
-회의록 텍스트 (POST /generate-stream)
-    → SSE: {"stage":"progress","message":"HWPX 문서 생성 중..."}
-    → SSE: {"stage":"done","download_url":"/api/meeting-minutes/download/{id}"}
-```
-
----
-
-## 5. 모듈별 개발 히스토리
-
-### 개발 순서 (의존성 그래프 순)
-
-```
-M_01 → M_02 → M_03 → M_04 → M_05 → M_05b
-                                       ↓
-M_09 → M_07 → M_06 → M_08 → M_10 → M_11 → M_12 → M_13
-```
-
----
-
-### M_01 — AppCore (EXTEND)
-
-**역할**: FastAPI 앱 진입점, upstream ServiceContext 확장, WebSocket 라우팅
-
-**주요 작업**:
-- `AppServiceContext`가 upstream `ServiceContext`를 상속. `init_asr`, `init_tts`, `init_agent` 오버라이드로 프로젝트 고유 엔진(MeloTTS, GemmaChatAgent) 배선
-- `AppWebSocketHandler`가 `_send_initial_messages` 오버라이드로 Live2D 없는 환경(None 처리) 대응
-- `construct_system_prompt` 오버라이드로 Live2D 모델 없어도 페르소나 프롬프트 정상 적용
-- URL 화이트리스트 검증 (`url_guard.py`)
-- 구조화된 설정 스키마 (`AppConfig`, `FullConfig` — pydantic v2)
-
----
-
-### M_02 — ASREngine (EXTEND)
-
-**역할**: 한국어 faster-whisper 래퍼
-
-- upstream `FasterWhisperASR`를 한국어 설정(`language="ko"`, `compute_type="int8"`)으로 초기화
-- 모델: `large-v3-turbo` (최신 경량 버전, ~1.5GB, CPU 친화적)
-- 하드웨어 적응형 설정 자동 적용
-
----
-
-### M_03 — VADEngine (REUSE)
-
-**역할**: 발화 구간 감지 (Voice Activity Detection)
-
-upstream `SileroVAD`를 그대로 사용. 설정값(`prob_threshold=0.4`, `db_threshold=60`)만 조정.
-
----
-
-### M_04 — TTSEngine (NEW)
-
-**역할**: 한국어 음성 합성 (MeloTTS)
-
-- `MeloTTSEngine`: upstream `TTSInterface` 구현
-- 동기 `generate_audio()` + 비동기 `async_generate_audio()` 양쪽 지원
-- asyncio.Lock으로 동시 합성 요청 직렬화
-- REST API `/api/tts/speak` 엔드포인트 — 회의록 단계 완료 시 TTS 안내음성 재생에도 사용
-
----
-
-### M_05 — LLMAgent (EXTEND)
-
-**역할**: Gemma 4 E4B 기반 대화 에이전트
-
-```
-GemmaChatAgent          ← 프로젝트 고유 Ollama 래퍼
-    │
-    └── BasicMemoryAgentAdapter  ← upstream AgentInterface 호환 어댑터
-            │
-            └── upstream BasicMemoryAgent  ← 대화 히스토리 관리
-```
-
-- `GemmaChatAgent`가 OpenAI 호환 Ollama API를 직접 호출, 스트리밍 응답 생성
-- `BasicMemoryAgentAdapter`가 upstream `AgentInterface`를 만족하면서 `SentenceOutput` 타입으로 변환
-- Thinking 모드 비활성화: `extra_body={"think": False}` 주입
-- Tool call 이벤트(`ToolCallStart`, `ToolCallResult`)를 dict로 변환해 upstream 파이프라인에 전달
-
----
-
-### M_05b — ToolRouter (NEW)
-
-**역할**: LLM 함수 호출 디스패처
-
-Gemma 4의 function calling 출력을 파싱해 `search_docs`, `add_event`, `screenshot` 등 로컬 도구로 라우팅. JSON Schema 기반 도구 등록, 실행 결과를 컨텍스트에 주입.
-
----
-
-### M_06 — DocumentIngest (NEW)
-
-**역할**: 사내 문서 파싱·청킹·임베딩
-
-**지원 포맷**: PDF, DOCX, PPTX, HWPX, TXT, MD
-
-- `doc_id = SHA-256(절대경로)[:32]` — 경로 기반 중복 방지
-- HWPX: 네임스페이스 `2011/hwpml/2.0`·`2016/hwpml/2.1` 양쪽 지원
-- XXE 방어: `defusedxml` 적용
-- 페이지 번호·섹션·bbox 메타데이터 보존
-
----
-
-### M_07 — VectorSearch (NEW)
-
-**역할**: BGE-M3 임베딩 + LanceDB 벡터 검색 + 인용 포매터
-
-- `sentence-transformers` + `BGE-M3`으로 다국어(한국어 포함) 임베딩
-- LanceDB embedded 모드 — 서버 없이 로컬 디스크에 직접 저장
-- 인용 포매팅: `"이 내용은 {문서명} {페이지}페이지에 있습니다"` 형식
-- `rag_min_score=0.35` 임계값 미만 결과 필터링
-
----
-
-### M_08 — AvatarState (NEW)
-
-**역할**: LLM 출력에서 감정 태그 파싱 → 스프라이트 상태 이벤트 송신
-
-LLM 응답의 `[emotion:happy]` 같은 태그를 감지해 프론트엔드에 `set-avatar-expression` 메시지 전송. 표정 세트: neutral·happy·surprised·sad·worried·thinking·tired·study·writing (9종).
-
----
-
-### M_09 — CalendarService (NEW)
-
-**역할**: SQLite 기반 일정 CRUD + 자연어 파싱 연동
-
-Gemma 4의 함수 호출로 `add_event(title, start_dt, duration_min)`, `list_events(date)`, `delete_event(id)` 실행. 10분 전 알림 스케줄링은 M_11 ProactiveDispatcher와 연동.
-
----
-
-### M_10 — IdleMonitor (NEW)
-
-**역할**: 마우스·키보드 유휴 상태 감지
-
-**3계층 폴백 구조**:
-1. `pynput` (크로스플랫폼 글로벌 훅)
-2. `win32api.GetLastInputInfo` (Windows 전용, 더 정확)
-3. 폴링 폴백 (제한 환경)
-
-45분 무입력 → `idle_rest` 이벤트, 2시간 연속 활동 → `overwork` 이벤트 발행.
-
----
-
-### M_11 — ProactiveDispatcher (NEW)
-
-**역할**: 능동적 메시지 발송 (아침 브리핑, 일정 알림, 휴식 권고)
-
-**APScheduler 기반 스케줄링**:
-- 아침 브리핑: 매일 09:00 (설정 가능)
-- 일정 알림: 이벤트 10분 전 자동 발송
-- 유휴/과로 이벤트 수신 → 쿨다운 로직 적용 후 메시지 생성
-
----
-
-### M_12 — Frontend (FORK+NEW)
-
-**역할**: Electron + React 기반 GUI
-
-**5단계 개발**:
-
-| 단계 | 내용 |
-|---|---|
-| P1 Foundation | upstream-Web 반입, Live2D 제거, WebSocket 통합, 기반 인프라 |
-| P2 | SpriteAvatarRenderer 구현 — 스프라이트 스왑, 200ms crossfade, 아이들 애니메이션 |
-| P3 | 펫 모드 — 투명 배경, 항상 위, 클릭 관통, 드래그 이동, IPC 배선 |
-| P4 | pdf.js 인용 뷰어 — 원문 페이지 열기, 하이라이트, bbox 포지셔닝 |
-| P5 | RSS 문서 감시, 적대적 테스트, E2E skeleton, NSIS 설치 패키지 |
-
-**주요 UI 구성**:
-- 탭 5종: 채팅 / 캘린더 / 문서 / 회의록 / 설정
-- ChatPanel — 모든 탭 컨텐츠의 컨테이너, 모드(window/pet) 연동
-- MeetingView — 3단계 회의록 wizard (항상 마운트, CSS display:none으로 state 보존)
-- CharacterWidget — 감정 스프라이트 + 드래그 이동 + 클릭 토글
-
----
-
-### M_13 — MeetingMinutes (NEW)
-
-**역할**: 3단계 회의록 자동화 파이프라인
-
-**구성 파일**:
-- `src/meeting_minutes/generator.py` — LLM 기반 회의록 요약 + HWPX 생성
-- `src/meeting_minutes/prompts.py` — 회의 결과 보고서 프롬프트 템플릿
-- `src/app/meeting_minutes_routes.py` — FastAPI SSE 라우트 3종
-
-**3단계 흐름**:
-
-```
-Step 1 — 전사 (Transcribe)
-  POST /api/meeting-minutes/transcribe-stream
-  · 오디오 파일(wav/mp3/m4a 등) 수신
-  · faster-whisper large-v3-turbo로 한국어 전사
-  · SSE로 진행 메시지 스트리밍 → 완료 시 transcript 반환
-  · 완료 TTS: "전사가 완료되었어요. 확인해 보시고 회의록 작성을 시작해주세요."
-
-Step 2 — 요약 (Summarize)
-  POST /api/meeting-minutes/summarize-stream
-  · transcript + pages(1/2) 수신
-  · Gemma 4로 개조식 회의록 텍스트 생성
-  · pages=1: max_tokens=2048, A4 1페이지 분량 지시
-  · pages=2: max_tokens=3000, A4 2페이지 분량 지시
-  · 완료 TTS: "회의록 작성이 완료되었습니다. 확인해보시고 결과보고서 작성을 시작하세요."
-
-Step 3 — 보고서 생성 (Generate)
-  POST /api/meeting-minutes/generate-stream
-  · meeting_notes 수신 → JSON 파싱 (MeetingMinutesModel)
-  · python-hwpx로 .hwpx 문서 생성
-  · UUID 기반 임시 파일 → /download/{file_id} 엔드포인트로 제공 (24h)
-  · 완료 TTS: "결과보고서를 완성하였습니다. 내용을 검토하세요."
-```
-
-**JSON 출력 스키마 (`MeetingMinutesModel`)**:
-
-```python
-class MeetingMinutesModel(BaseModel):
-    title: str
-    date: str              # 정규식: r'^\d{4}\.\d{2}\.\d{2}\.$'
-    datetime_place: str
-    attendees: list[str]
-    agenda_items: list[AgendaItem]
-    decisions: list[str]
-    action_items: list[ActionItem]
-    next_steps: list[str]
-```
-
----
-
-## 6. 핵심 기술 문제와 해결
-
-### 문제 1: MeloTTS 한국어 합성 실패 (macOS)
-
-**증상**: `g2pkk`(한국어 자소 변환 라이브러리)가 `import mecab`에 실패해 `AttributeError: 'NoneType' object has no attribute 'pos'`
-
-**원인 분석**:
-- `python-mecab-ko` v1.3.7은 C 확장(`_mecab.so`)만 제공하고, 예전 버전이 제공하던 `mecab/` Python 패키지를 더 이상 포함하지 않음
-- `mecab-python3` v1.0.12는 `MeCab/` (대문자) 패키지를 제공하지만, macOS HFS+ 파일시스템이 대소문자 비구분이라 `os.listdir()`은 `MeCab`으로 반환함 — Python의 import 시스템은 대소문자를 구분하므로 `import mecab` (소문자)이 실패함
-
-**해결책**:
-- `vendor/mecab_shim/mecab/` — HFS+ 외부의 별도 경로에 소문자 `mecab` 패키지 생성
-- `mecab_shim.pth` — site-packages에 `.pth` 파일로 해당 경로를 sys.path에 추가
-- `mecab/__init__.py` — `__getattr__`을 이용한 지연 임포트로 순환 임포트 차단
-
-```python
-# mecab/__init__.py — 지연 임포트로 순환 차단
-def __getattr__(name: str) -> object:
-    if name in ("MeCab", "MeCabError", "mecabrc_path"):
-        from MeCab.mecab import MeCab as _C, MeCabError as _E, mecabrc_path as _p
-        globals()["MeCab"] = _C
-        # ...
-        return globals()[name]
-    raise AttributeError(f"module 'mecab' has no attribute {name!r}")
-```
-
----
-
-### 문제 2: Upstream SentenceOutput 타입 불일치
-
-**증상**: LLM 응답이 UI에 표시되지 않음
-
-**원인**: upstream `process_single_conversation`이 agent 스트림에서 `SentenceOutput` 타입만 처리하고 `str`은 무시함. 프로젝트의 `BasicMemoryAgentAdapter.chat()`이 raw string을 yield했음.
-
-**해결**: `TextChunk` 이벤트를 누적해 전체 텍스트를 조립한 뒤 `SentenceOutput(display_text=..., tts_text=...)` 하나로 yield.
-
----
-
-### 문제 3: Gemma 4 Thinking 모드로 인한 응답 지연
-
-**증상**: "안녕"에 8~15초 응답 지연. Ollama 로그에 `<think>...</think>` 블록이 대량 생성됨.
-
-**해결**: Ollama의 비공개 파라미터 `think`를 `false`로 설정.
-
-```python
-stream = await self._llm.client.chat.completions.create(
-    messages=messages, model=self._llm.model, stream=True,
-    temperature=self._llm.temperature,
-    extra_body={"think": False},  # Gemma 4 thinking 비활성화
-)
-```
-
----
-
-### 문제 4: E-17 — transcribe-stream UploadFile 조기 소멸
-
-**증상**: M4A 파일 업로드 후 `{"stage":"error","message":"read of closed file"}`
-
-**원인**: `await audio_file.read()`를 `StreamingResponse` 제너레이터 내부에서 호출했는데, FastAPI 런타임이 라우트 핸들러가 `return StreamingResponse(...)`를 반환하는 시점에 `UploadFile`을 닫아버림. 제너레이터가 실제로 실행되는 시점(스트리밍 시작 시)에는 파일이 이미 소멸됨.
-
-**해결**: `audio_bytes = await audio_file.read()`와 `suffix` 추출을 라우트 핸들러 본체(제너레이터 생성 전)에서 수행. 클로저로 참조.
-
-```python
-async def transcribe_stream(audio_file: UploadFile = File(...)):
-    audio_bytes = await audio_file.read()      # ← 제너레이터 생성 전에 읽기
-    suffix = Path(audio_file.filename or "audio.wav").suffix.lower()
-    async def run():
-        # audio_bytes, suffix를 클로저로 참조
-        ...
-    return StreamingResponse(run(), media_type="text/event-stream")
-```
-
----
-
-### 문제 5: E-18 — LLM이 날짜 플레이스홀더 "YYYY.MM.DD." 그대로 반환
-
-**증상**: 날짜 정보가 없는 녹취록으로 Step 3 실행 시 JSON Schema 위반: `'YYYY.MM.DD.' does not match '^\d{4}\.\d{2}\.\d{2}\.$'`
-
-**원인**: 프롬프트 템플릿에 `"date": "YYYY.MM.DD."` 예시를 포함했는데, 녹취록에 날짜가 없으면 LLM이 예시를 그대로 출력함.
-
-**해결**: `generator.py`에서 `today_date = datetime.date.today().strftime("%Y.%m.%d.")`를 계산해 프롬프트에 주입. "날짜를 알 수 없으면 오늘 날짜를 사용하세요" 지시 추가.
-
-```python
-today = datetime.date.today().strftime("%Y.%m.%d.")
-user_prompt = USER_PROMPT_TEMPLATE.format(
-    pages=pages, volume_guide=volume_guide,
-    transcript=transcript, today_date=today,
-)
-```
-
----
-
-### 문제 6: E-19/E-20 — React 조건부 렌더링으로 회의록 작업 state 소실
-
-**증상**:
-- 캐릭터를 드래그하면 패널이 닫히고, 다시 열면 모든 회의록 작업 내용 초기화
-- 탭을 전환했다가 회의록 탭으로 돌아와도 모든 내용 초기화
-
-**원인**:
-- `{chatOpen && <ChatPanel />}` — 패널 닫힐 때 ChatPanel 언마운트
-- `{chatTab === "meeting" && <MeetingView />}` — 탭 전환 시 MeetingView 언마운트
-- React 컴포넌트 언마운트 → 모든 useState 초기화
-
-**해결**: 두 곳 모두 항상 마운트하고 CSS `display:none`으로만 숨김 처리.
-
-```tsx
-// App.tsx — 패널 오픈/클로즈
-<div style={{ display: chatOpen ? undefined : "none", pointerEvents: chatOpen ? undefined : "none" }}>
-  <ChatPanel charPosition={charPosition} charSize={charSize} />
-</div>
-
-// ChatPanel.tsx — 탭 전환
-<div style={{
-  display: chatTab === "meeting" ? "flex" : "none",
-  flexDirection: "column", flex: 1, overflow: "hidden", minHeight: 0,
-}}>
-  <MeetingView />
-</div>
-```
-
-**교훈**: 다단계 wizard 컴포넌트는 조건부 렌더링 대신 CSS display:none을 써야 함. 패널 오픈/클로즈와 탭 전환 모두 동일하게 적용.
-
----
-
-### 문제 7: Electron will-download 핸들러가 모든 다운로드에 .hwpx 필터 적용
-
-**증상**: 전사 결과·회의록 텍스트를 .txt로 저장하려 해도 .hwpx 저장 대화상자가 열림
-
-**원인**: `will-download` 이벤트 핸들러에서 파일 확장자를 확인하지 않고 무조건 `.hwpx` 필터를 적용했음
-
-**해결**: `item.getFilename()`으로 파일명을 먼저 읽어 `.txt` 여부를 판단하고 필터 분기.
-
-```typescript
-window.webContents.session.on('will-download', (_event, item) => {
-    const filename = item.getFilename() || '';
-    const isTxt = filename.toLowerCase().endsWith('.txt');
-    const savePath = dialog.showSaveDialogSync(window, {
-        defaultPath: filename || (isTxt ? '파일.txt' : '회의결과보고서.hwpx'),
-        filters: isTxt
-            ? [{ name: '텍스트 파일', extensions: ['txt'] }]
-            : [{ name: '한글 문서', extensions: ['hwpx'] }],
-    });
-    ...
-});
-```
-
----
-
-### 문제 8: 첨부 자료 기반 업무노트가 "추측성"으로 작성됨 (E-54·E-55)
-
-**증상**: 한글 문서(.hwpx)나 스크린샷을 첨부하고 "업무노트로 정리해줘"라고 해도, 노트에 실제 문서/이미지 내용이 담기지 않고 제목만 그럴듯한 빈껍데기 노트가 저장됨.
-
-**원인 (복합)**:
-1. **노트 강제 저장 폴백(`_force_save_note`)이 1차 소스를 안 봄** — LLM이 도구 호출을 건너뛴 note_save 턴에서, 폴백이 *사용자의 짧은 한 줄 + 비서 답변*만 요약했다. 첨부 문서의 실제 청크를 근거로 넣지 않아, 답변이 두루뭉술하면 노트도 빈약해졌다.
-2. **로컬 모델(gemma4)의 이미지 OCR 부재** — `gemma4:latest`는 capabilities에 `vision`이 있어도 실제 한글 스크린샷 텍스트를 읽지 못했다(어두운 배경/추상 패턴으로 인식). 반면 `qwen2.5vl:7b`는 동일 이미지를 정확히 판독.
-
-**해결**:
-- (E-55) `_force_save_note`가 첨부 doc_id의 원문 청크(`per_doc_limit=30`)를 직접 가져와 "추측 말고 이 내용을 근거로" 노트를 작성하도록 보강.
-- (E-54) **비전 모델 라우팅** 도입 — `conf.yaml`에 `app.ollama.vision_model`(예: `qwen2.5vl:7b`) 추가. 이미지가 첨부된 턴은 **전사 전용 모델이 OCR → 추출 텍스트를 메인 모델(gemma4)에 주입 → gemma4가 페르소나·도구로 답변·노트 작성**(2단계, A안). 모델 vision 플래그 ≠ 실제 OCR 품질이므로 실제 데이터로 검증 후 채택.
-
-```python
-# gemma_chat_agent.chat — 이미지 턴은 전사 후 텍스트 턴으로 전환
-if batch.images and self._vision_model:
-    batch = await self._transcribe_images_into_batch(batch)  # qwen OCR → 텍스트 주입
-messages = self._inner._to_messages(batch)
-raw_stream = self._inner._openai_tool_interaction_loop(messages, tools)  # gemma4 + 도구
-```
-
----
-
-### 문제 9: Ollama OpenAI-호환 엔드포인트가 `think:false`를 무시 (E-53)
-
-**증상**: 채팅 모델을 thinking 계열(`gemma4:latest`)로 바꾸자 비전·장문 응답에서 `content`가 빈 문자열로 반환 → "응답 없음"·AgentError.
-
-**원인**: 추론을 끄려고 `NoThinkLLM`이 `extra_body={"think": False}`를 주입했으나, **Ollama의 `/v1/chat/completions`(OpenAI 호환) 엔드포인트는 `think` 파라미터를 무시**한다(네이티브 `/api/chat`에서만 동작). 추론 토큰이 출력 예산을 잠식해 content가 비었다.
-
-**해결**: `/v1`이 실제로 존중하는 `reasoning_effort="none"`을 함께 주입. (네이티브/`/v1` 직접 비교로 검증: `/v1`+`think:false`는 finish=length·빈 content, `/v1`+`reasoning_effort:none`은 finish=stop·정상.)
-
----
-
-### 문제 10: 의도 분류기(로컬) 콜드스타트 타임아웃 → 첨부 노트 유실 (E-57)
-
-**증상**: 첨부 파일/이미지로 노트 작성을 요청해도 산발적으로 답변만 나오고 노트가 저장되지 않음(아이콘도 작성 모드로 전환 안 됨).
-
-**원인**: 의도 분류기를 로컬 모델(gemma4)로 전환한 뒤, **콜드스타트/모델 경합으로 첫 분류가 8초 기본 타임아웃을 초과** → `fallback_error` → 의도가 `chat`으로 강등 → note_save가 아니라 강제 저장이 동작하지 않음. (로그상 텍스트 질의는 ~1.5초, 첨부 턴은 정확히 8초에 타임아웃.)
-
-**해결**:
-1. `intent_gate.timeout_seconds: 8 → 30` (로컬 모델 콜드스타트 여유).
-2. **안전망** — 분류가 실패(`fallback_error`)했더라도 첨부(문서/이미지)가 있으면 `note_save`로 강제 라우팅해 노트 유실 방지.
-
-**교훈**: 외부 API 기준 타임아웃은 로컬 모델에 부족하다. 분류 실패 시 의도가 chat으로 떨어져 부가 동작이 통째로 사라지므로, 핵심 신호(첨부 등)에는 폴백 안전망을 둔다.
-
----
-
-### 문제 11: 회의록 날짜 placeholder + rag_folders 유실 (E-52·E-56)
-
-- **E-52**: 회의결과보고서 `next_steps[].date` 예시가 `"M.DD."`(문자 placeholder)라 LLM이 `M.15.`를 출력 → 스키마 위반 하드 실패. → 정규화 단계에서 형식 위반 날짜는 빈 문자열로 흡수(하드 실패 금지), 프롬프트 예시를 실제 숫자(`6.15.`)로 교정.
-- **E-56**: RAG 폴더 정의(`rag_folders.json`)가 **비원자적 쓰기**라 프로세스 중단 시 빈 파일로 손상 → 모든 문서가 "미분류"로 떨어짐. → temp 파일 + `fsync` + `os.replace`로 **원자적 쓰기** 전환.
-
----
-
-### UX 개선: 파일 링크 클릭 시 기본 앱으로 바로 열기
-
-답변의 참고자료·노트의 관련 자료·문서 탭의 파일 링크를 클릭하면 "저장 위치 묻기" 대신 **기본 앱으로 즉시 열린다**. Electron main의 `shell:openDocument` IPC가 백엔드 loopback URL을 임시 폴더로 받아 `shell.openPath`로 연다(임시 사본을 열어 RAG 원본은 보존).
-
-### 운영 편의: 런처가 Ollama 자동 기동
-
-`새싹이.cmd` 실행 시 Ollama(11434)가 떠 있지 않으면 자동으로 `ollama serve`를 시작하고 준비될 때까지 대기한 뒤 백엔드를 띄운다. 기존엔 Ollama가 꺼져 있으면 백엔드가 `Ollama unreachable`로 시작 직후 종료됐다.
-
----
-
-## 7. 배포 전략
-
-### 오프라인 USB 번들
-
-인터넷이 차단된 환경이므로 모든 의존성을 USB에 사전 패키징한다.
-
-**번들 구조**:
-```
-USB (32GB 이상)/
-├── shared/
-│   ├── ai-assistant/        ← 소스 코드 (OS 공통)
-│   └── models/              ← AI 모델 파일 (OS 공통, ~5GB)
-│       ├── Whisper large-v3-turbo
-│       └── BGE-M3 임베딩 모델
-├── macos/
-│   ├── install.sh           ← macOS 원클릭 설치
-│   ├── python-3.12.pkg
-│   └── wheels/
-│       ├── arm64/           ← Apple Silicon
-│       └── x86_64/          ← Intel Mac
-├── windows/
-│   ├── install.bat          ← Windows 원클릭 설치
-│   ├── python-3.12-amd64.exe
-│   └── wheels/
-│       ├── cpu/
-│       └── cuda/            ← NVIDIA GPU
-└── ollama/
-    ├── Ollama-macos.dmg
-    ├── OllamaSetup.exe
-    └── models/              ← Ollama 모델 파일 (~2GB)
-```
-
-**번들 생성**: `bash scripts/bundle_usb.sh /Volumes/USB명`
-
-### 설치 자동화
-
-**Windows (`install.bat`)**:
-1. Python 3.12 설치 확인 → 없으면 USB의 설치 파일 실행
-2. Ollama 설치 (`/S` 조용한 설치)
-3. `nvidia-smi` 감지 → RTX GPU면 CUDA wheels, 없으면 CPU wheels 선택
-4. venv 생성 → `pip install --find-links` 로컬 설치
-5. MeloTTS + eunjeon (Windows 한국어 형태소 분석기) 설치
-6. Ollama 모델 복사
-7. 바탕화면 바로가기 자동 생성
-
-**macOS (`install.sh`)**:
-1. Python 3.12 확인 → 없으면 `.pkg` 설치
-2. Ollama DMG 마운트·설치
-3. venv 생성 → pip 로컬 설치
-4. `post_install.py` 실행 → mecab_shim 적용, MeCab Tagger 스텁 패치
-5. Ollama 모델 복사
-
-### 서버 실행
-
-```bash
-# macOS/Linux
-bash start.sh
-
-# Windows
-start.cmd
-```
-
----
-
-## 8. 현재 상태 및 잔여 과제
-
-### 완료 현황
-
-| 모듈 | 상태 | Critic |
-|---|---|---|
-| M_01 AppCore | ✅ DONE | PASS |
-| M_02 ASREngine | ✅ DONE | PASS |
-| M_03 VADEngine | ✅ DONE | PASS |
-| M_04 TTSEngine | ✅ DONE | PASS (4차) |
-| M_05 LLMAgent | ✅ DONE | PASS |
-| M_05b ToolRouter | ✅ DONE | PASS |
-| M_06 DocumentIngest | ✅ DONE | PASS (2차) |
-| M_07 VectorSearch | ✅ DONE | PASS |
-| M_08 AvatarState | ✅ DONE | PASS |
-| M_09 CalendarService | ✅ DONE | PASS |
-| M_10 IdleMonitor | ✅ DONE | PASS (2차) |
-| M_11 ProactiveDispatcher | ✅ DONE | PASS (3차) |
-| M_12 Frontend | ✅ DONE | PASS (3차) |
-| M_13 MeetingMinutes | ✅ DONE | 실기기 검증 완료 |
-
-**현재 버전 추가 기능 (2026-06 갱신)**:
-
-| 기능 | 상태 | 비고 |
-|---|---|---|
-| 멀티모달 노트 — 이미지/스크린샷 OCR | ✅ | 비전 모델(`qwen2.5vl`) 전사 → gemma4 정리 (A안 2단계) |
-| 멀티모달 노트 — 첨부 문서(.hwpx 등) 내용 기반 | ✅ | 폴백이 원문 청크를 직접 근거로 작성 (E-55) |
-| 모달리티별 모델 라우팅 | ✅ | `vision_model` 설정으로 OCR 전용 모델 분리 |
-| 첨부 노트 의도 안전망 | ✅ | 분류 실패 시에도 첨부 있으면 note_save (E-57) |
-| 파일 링크 바로 열기 | ✅ | 다운로드 대화상자 없이 기본 앱 실행 |
-| 로컬 LLM thinking 비활성화 | ✅ | `/v1` `reasoning_effort:none` (E-53) |
-| 런처 Ollama 자동 기동 | ✅ | `새싹이.cmd`가 Ollama 헬스체크 후 자동 시작 |
-
-> 누적 버그/교훈 기록: `docs/ERROR_HISTORY.md` (E-01 ~ E-57)
-
-### 동작 확인 (Mac Mini M 시리즈 기준)
-
-| 기능 | 상태 |
-|---|---|
-| 텍스트 채팅 | ✅ 정상 동작 |
-| LLM 응답 (Gemma 4 E4B) | ✅ 정상, thinking 비활성화 |
-| TTS (MeloTTS 한국어) | ✅ 합성 확인 (WAV 출력) |
-| 하드웨어 자동 감지 | ✅ Apple MPS 감지, Whisper cpu/int8 설정 |
-| 회의록 전사 (Step 1) | ✅ M4A 45분 파일 → 32,918자 전사 확인 |
-| 회의록 요약 (Step 2) | ✅ pages=2 → 3,836자 회의록 생성 확인 |
-| HWPX 생성 (Step 3) | ✅ 149.9KB .hwpx 다운로드 확인 |
-| TTS 단계 안내음성 | ✅ 각 단계 완료 시 한국어 안내음성 재생 |
-| 작업 state 보존 | ✅ 패널 닫기·탭 전환 모두 state 유지 확인 |
-| .txt/.hwpx 다운로드 분기 | ✅ 파일 형식에 따라 올바른 저장 대화상자 |
-
-### 잔여 과제
-
-| 항목 | 내용 |
-|---|---|
-| Windows QA | M_12 Electron 앱의 펫 모드·인용 뷰어·NSIS 설치 패키지 Windows 실기기 검증 |
-| USB 번들 생성 | `bundle_usb.sh` 실행 + Ollama/Python 설치 파일 수동 추가 |
-| XTTS v2 법무 검토 | Coqui CPML 라이선스 사내 법무 승인 후 활성화 가능 |
-| ASR 브라우저 E2E | 마이크 → STT → LLM → TTS 전체 파이프라인 실기기 테스트 |
-
----
-
-## 부록: 주요 파일 구조
+- **프로세스 분리**: Electron(프론트) ↔ FastAPI 백엔드(별도 프로세스) ↔ Ollama(별도 서버). 런처(`새싹이.cmd`)가 Ollama 헬스체크 → 자동 기동 → 백엔드 → Electron 순으로 띄운다.
+- **upstream**: `Open-LLM-VTuber`를 포크(`upstream/`, 직접 수정 금지·패치 관리). 대화 에이전트는 upstream `BasicMemoryAgent`를 **컴포지션**으로 감싸고 `chat()`·도구 루프만 본 프로젝트에서 재구현한다.
+- **오프라인 원칙**: 외부 네트워크 호출 금지(127.0.0.1·사내 IP만). 단, LLM provider가 `openai`일 때 `api.openai.com` 호출은 의도된 임시 대역.
+
+### 디렉토리 구조
 
 ```
 ai-assistant/
 ├── src/
-│   ├── app/              # M_01 AppCore (FastAPI 진입점, 설정, 하드웨어 감지)
-│   ├── asr/              # M_02 ASREngine (faster-whisper 래퍼)
-│   ├── tts/              # M_04 TTSEngine (MeloTTS, XTTS v2)
-│   ├── agent/            # M_05 LLMAgent (GemmaChatAgent, 어댑터)
-│   ├── tool_router/      # M_05b ToolRouter
-│   ├── ingest/           # M_06 DocumentIngest
-│   ├── vector_search/    # M_07 VectorSearch (BGE-M3, LanceDB)
-│   ├── avatar/           # M_08 AvatarState
-│   ├── calendar/         # M_09 CalendarService
-│   ├── idle/             # M_10 IdleMonitor
-│   ├── proactive/        # M_11 ProactiveDispatcher
-│   └── meeting_minutes/  # M_13 MeetingMinutes (generator, prompts)
-├── frontend/             # M_12 Electron 메인 프로세스 (IPC, 윈도우 관리)
-├── web/                  # M_12 React 웹앱 (UI 컴포넌트)
-├── upstream/             # Open-LLM-VTuber (수정 금지)
-├── vendor/
-│   └── mecab_shim/       # macOS mecab 호환 패키지 (HFS+ 대소문자 우회)
-├── deploy/               # 배포 스크립트 (install.sh, install.bat, start.*)
-├── scripts/              # 개발 도구 (bundle_usb.sh 등)
-├── tests/                # 단위·통합·E2E 테스트
-├── assets/
-│   ├── character/        # 새싹이 스프라이트 PNG 9종
-│   └── models/           # AI 모델 파일 (git 제외)
-├── docs/
-│   ├── ERROR_HISTORY.md  # 버그 원인·해결·교훈 (E-01 ~ E-57)
-│   ├── FRONTEND_CONSTRAINTS.md
-│   ├── ARCHITECTURE.md
-│   └── USER_GUIDE.md
-├── conf.yaml             # 서버 설정
-└── REQUIREMENTS.md       # 요구사항 단일 진실 공급원
+│   ├── app/                  # FastAPI 앱·라우트·service_context(DI)·config
+│   ├── agent/                # GemmaChatAgent, upstream_adapter, builder, no_think_llm
+│   ├── agent_prompts/        # 런타임 편집 가능한 지침(페르소나·답변·노트 가이드)
+│   ├── intent_gate/          # 의도 분류기(IntentClassifier) + 라우팅 결정
+│   ├── tool_router/          # 도구 스키마·디스패치(add_event, save_knowledge_note 등)
+│   ├── vector_search/        # RAG: BGE-M3 임베더, LanceDB, BM25, RRF, bge-reranker
+│   ├── document_ingest/      # 문서 파싱(pdf/docx/pptx/hwpx/txt) + 청크 분할
+│   ├── knowledge/            # 업무 노트(마크다운 + 임베딩 + 그래프)
+│   ├── calendar_service/     # 일정(SQLite)
+│   ├── meeting_minutes/      # 회의록: generator, prompts, schemas, hwpx_writer
+│   ├── asr/                  # faster-whisper 한국어 STT
+│   ├── tts/                  # MeloTTS / 시스템 TTS
+│   ├── vad/                  # silero VAD
+│   ├── avatar_state/         # 캐릭터 감정 상태
+│   ├── idle_monitor/         # 입력 유휴 감지(pynput)
+│   └── proactive/            # 능동 알림(APScheduler)
+├── frontend/                 # Electron 메인 프로세스(IPC, 윈도우/펫 관리)
+├── web/                      # React 웹앱(UI 컴포넌트, dist는 빌드 산출물)
+├── upstream/Open-LLM-VTuber/ # 포크(수정 금지)
+├── assets/models/            # 로컬 AI 모델(git 제외): bge-m3, faster-whisper 등
+├── data/                     # 런타임 데이터(git 제외): vector_store, calendar.db, knowledge, rag_originals
+├── docs/                     # ARCHITECTURE, ERROR_HISTORY, USER_GUIDE, FRONTEND_CONSTRAINTS …
+├── conf.yaml                 # 런타임 설정(API 키 포함 → git 제외)
+└── conf.example.yaml         # 설정 템플릿
 ```
 
 ---
 
-*GitHub: https://github.com/soonkun/ai-assistant*
+## 3. 모델 구성
+
+새싹이는 단일 모델이 아니라 **역할별로 분리된 모델 집합**을 조합한다. 모든 모델은 기본적으로 로컬에서 동작하며, 채팅 모델만 OpenAI 임시 대역으로 전환 가능하다.
+
+| 역할 | 기본 모델 | 엔진 / 위치 | 비고 |
+|---|---|---|---|
+| **대화·도구 호출** | `gemma4:latest` | Ollama `/v1` | 에이전트 본체. thinking은 `reasoning_effort:none`으로 비활성(E-53). OpenAI 전환 시 `gpt-5` |
+| **비전 / 이미지 OCR** | `qwen2.5vl:7b` | Ollama | 이미지 첨부 턴 전용. 한글 스크린샷 판독. `app.ollama.vision_model`로 지정·교체 |
+| **의도 분류** | `gemma4:latest` | Ollama (또는 OpenAI `gpt-4o-mini`) | `intent_gate.provider`로 선택. 타임아웃 30s |
+| **임베딩** | `BGE-M3` | sentence-transformers (로컬) | 문서·노트 청크 벡터화 |
+| **리랭커** | `bge-reranker-v2-m3` | cross-encoder (로컬) | 검색 결과 재정렬 (GPU 시 FP16) |
+| **음성 인식(STT)** | `faster-whisper large-v3-turbo` | 로컬 (ko) | 회의 전사·음성 입력 |
+| **음성 합성(TTS)** | `MeloTTS (KR)` / 시스템 TTS | 로컬 | 사용자 선택 |
+| **음성 활동 감지(VAD)** | `silero_vad` | 로컬 | 발화 끊김 감지 |
+
+> **모달리티별 라우팅**: gemma4는 도구 호출·한국어 대화에 강하지만 이미지 OCR 능력이 부족하다(capabilities에 vision이 있어도 실제 판독 실패). 따라서 이미지가 들어오면 OCR은 qwen2.5vl이 전담하고, 그 결과 텍스트를 gemma4가 받아 답변·도구를 수행한다(§4 멀티모달). "한 모델이 모든 모달리티를 잘하지 못하면 모달리티별로 모델을 분리한다"는 설계 원칙.
+
+---
+
+## 4. 에이전트 체계 (요청 처리 흐름)
+
+새싹이 대화는 단순 LLM 호출이 아니라, **의도 분류 → 라우팅 → 컨텍스트 증강 → (필요 시) 모달리티 전환 → 도구 실행 → 후처리**로 이어지는 에이전트 파이프라인이다. 핵심은 `GemmaChatAgentAdapter`(외곽 오케스트레이션)와 `GemmaChatAgent`(LLM·도구 루프)의 2계층 구성이다.
+
+### 한 턴의 처리 단계
+
+```
+[프론트] WS text-input(+images)
+   │
+   ▼
+① 의도 분류 (IntentGate)
+   IntentClassifier(LLM 1회) → 6개 라벨 중 하나 + confidence
+   라벨: calendar_add · calendar_query · doc_query · work_query · note_save · chat
+   decide_with_confidence() → RoutingDecision{ inject_rag, rag_source, tool_hint,
+                                                answer_guide, autonomous }
+   · 저신뢰(임계 0.55 미만) → 자율 폴백
+   · (안전망 E-57) 분류 실패 + 첨부 존재 → note_save로 강제
+   │
+   ▼
+② 의도 → 캐릭터 연출
+   note_save→[note_writing]"업무 노트를 작성할게요!", doc_query/work_query→[study],
+   calendar_add→[writing], calendar_query→[thinking]  + 진행상태 말풍선
+   │
+   ▼
+③ 컨텍스트 증강 (_augment_with_rag)
+   · 이미지 첨부 시: "보이는 텍스트·표·수치를 그대로 전사" 판독 지침 주입
+   · 첨부 문서(doc_id) 있으면: 원문 청크 직접 주입(per_doc_limit=30)
+   · inject_rag면: 하이브리드 RAG 검색(§5.1) → 상위 청크 + [[doc:id]] 인용 마커
+   · tool_hint / answer_guide(사용자 편집 지침)를 사용자 메시지 앞에 prepend
+   │
+   ▼
+④ 모달리티 전환 (이미지 턴, A안)
+   batch.images 있고 vision_model 설정됨 →
+     qwen2.5vl이 이미지를 "전사 전용 프롬프트"로 OCR → 추출 텍스트를
+     "[첨부 이미지에서 추출한 내용]" 블록으로 batch에 주입, images 제거
+   → 이후는 일반 텍스트 턴과 동일(gemma4가 페르소나·도구로 처리)
+   │
+   ▼
+⑤ LLM + 도구 루프 (GemmaChatAgent)
+   upstream _to_messages → _openai_tool_interaction_loop(gemma4, 도구 6종)
+   도구: add_event · get_events · search_docs · take_screenshot ·
+         save_knowledge_note · create_meeting_minutes
+   (도구 없는 단답은 _simple_stream)
+   │
+   ▼
+⑥ 후처리 / 폴백
+   · 도구 호출/결과 이벤트 → 프론트로 중계(작성 중 표시 등)
+   · (E-45/E-55) note_save 턴인데 도구 미호출/실패 → 강제 저장 폴백:
+       첨부 문서 원문 청크 + 답변을 근거로 complete_json → save_knowledge_note
+   · 답변 텍스트에서 LLM이 끼운 마커 정리, 권위 인용 마커 부착
+   │
+   ▼
+⑦ 출력
+   SentenceOutput(display_text + tts_text) → TTS(melo/시스템) →
+   프론트: 말풍선 + [emotion] 연출 + [[doc:]]/[[note:]] 인용 칩 + 오디오 재생
+```
+
+### 도구 (ToolRouter)
+
+| 도구 | 역할 |
+|---|---|
+| `add_event` / `get_events` | 일정 등록 / 조회 (SQLite) |
+| `search_docs` | 사내 문서 RAG 검색(출처 반환) |
+| `save_knowledge_note` | 업무 노트 생성·저장(마크다운 + 임베딩) |
+| `create_meeting_minutes` | 회의 녹취 → 한글 결과보고서(.hwpx) 생성 |
+| `take_screenshot` | 화면 캡처(비전 분석용) |
+
+도구는 OpenAI function-calling 스펙으로 정의되며, `use_mcpp=False`여도 `extra_tool_specs`(ToolRouter)로 도구 루프를 사용한다.
+
+### 의도 게이트가 핵심인 이유
+
+새싹이의 "에이전틱"함은 **모든 입력을 LLM에 자유 위임하지 않고, 먼저 의도를 분류해 결정론적으로 라우팅**하는 데 있다. 이 덕분에:
+- "오늘 ~~ 처리했어"(과거 보고) → 노트 저장, "내일 2시 회의"(미래) → 일정 등록을 안정적으로 구분
+- 문서 질문이면 RAG를 강제 주입, 단순 인사면 도구 없이 빠르게 응답
+- 분류기가 실패해도(타임아웃 등) 첨부 신호로 note_save를 보장(안전망)
+
+### 멀티모달 처리(이미지)의 설계 결정 — "A안"
+
+이미지가 들어오면 두 가지 선택지가 있었다.
+- **B안(기각)**: 비전 모델이 이미지 턴 전체(답변까지)를 처리 — 답변 톤이 페르소나와 달라지고, 비전 모델이 도구를 못 부른다.
+- **A안(채택)**: 비전 모델은 **OCR 전사만** 담당 → 추출 텍스트를 메인 모델(gemma4)에 주입 → gemma4가 평소 페르소나·도구로 답변·노트 작성.
+
+A안은 "OCR 엔진(qwen) ↔ 비서 두뇌(gemma4)"를 분리해 일관된 UX와 도구 사용을 보장한다.
+
+---
+
+## 5. 핵심 기능 서브시스템
+
+각 기능은 독립 모듈로 분리되어 있고, 회의록·노트 등은 대화 파이프라인과도 분리되어 단독 동작한다.
+
+### 5.1 RAG (사내 문서 검색)
+
+```
+등록:  파일(pdf/docx/pptx/hwpx/txt) → 파싱 → 청크 분할 → BGE-M3 임베딩 → LanceDB 저장
+검색:  질의 → ┌ 벡터 검색(의미) ┐
+              └ BM25(키워드) ──┘ → RRF 융합(k=60) → bge-reranker 재정렬 → 상위 N
+```
+
+- **하이브리드 + 리랭킹(M_18)**: 의미 검색과 키워드 검색을 RRF로 융합해 과제번호·고유명사도 잡고, cross-encoder 리랭커가 질의 관련도로 재정렬.
+- 폴더별 버킷(`rag_originals/<folder_id>/`)에 원본 보관, 폴더 정의는 `rag_folders.json`(원자적 쓰기, E-56).
+- 답변에는 `[[doc:doc_id]]` 인용 마커가 붙고, 프론트에서 출처 칩으로 표시되며 클릭 시 원본이 기본 앱으로 열린다.
+
+### 5.2 업무 노트 (Knowledge)
+
+- 마크다운 파일(`data/knowledge/<slug>.md`)로 로컬 저장 + 벡터 임베딩(`__knowledge__:slug`)으로 검색 가능.
+- 생성 경로: 채팅에서 자료/이미지와 함께 요청 → 의도 note_save → 도구 호출 또는 강제 폴백으로 저장.
+- **내용 기반 작성(E-54/E-55)**: 첨부 문서는 원문 청크를, 이미지는 비전 전사를 근거로 작성. 제목도 내용 대표형으로 생성.
+- 노트 간 연결 그래프, 블록 에디터(창 모드, Notion 스타일).
+
+### 5.3 일정 (Calendar)
+
+SQLite 기반. add/get/update/delete 이벤트. 자연어 일정("내일 오후 2시")을 ISO 8601(+09:00)로 변환해 등록.
+
+### 5.4 회의록 자동 작성 (대화와 분리된 3단계 파이프라인)
+
+```
+Step 1 전사:    오디오 → faster-whisper(ko) → 녹취 텍스트
+Step 2 회의록:  녹취 → [개조식 회의록 TEXT]  (complete_text, MEETING_STYLE_RULES + TEXT_OUTPUT_FORMAT)
+Step 3 보고서:  텍스트 → [MeetingDraft JSON]  (complete_json, JSON 강제) → hwpx_writer → .hwpx
+```
+
+- **출력 형식과 작성 스타일의 분리(E-58)**: 작성 스타일 규칙(`MEETING_STYLE_RULES` — 위계 ○/-/*, 글자수, 명사형 종결, 수치 보존)은 형식과 무관하게 공유하고, Step 2는 텍스트 레이아웃을, Step 3은 JSON 스펙을 각각 덧붙인다. 한 덩어리로 섞으면 약한 로컬 모델이 텍스트 자리에 JSON을 토출하는 커플링이 생긴다.
+- Step 3는 JSON Schema(Draft 2020-12)로 검증하되, 형식 위반은 하드 실패가 아니라 정규화로 흡수(예: 향후계획 날짜 placeholder → 빈 값, E-52).
+
+### 5.5 능동 기능 (Proactive)
+
+- **IdleMonitor**: pynput으로 키/마우스 유휴 감지.
+- **ProactiveDispatcher**(APScheduler): 아침 브리핑(cron 09:00), 일정 임박 알림(interval, 토픽별 쿨다운 30분), 장시간 작업 휴식 권고.
+
+### 5.6 아바타 상태 (AvatarState)
+
+대화 의도·도구 단계에 따라 캐릭터 표정/영상을 전환: `neutral`·`thinking`·`study`(자료 찾기)·`note_writing`·`writing`·`uploading`(RAG 등록 영상) 등. 백엔드가 대화 채널로 `[emotion]` 태그를 보내면 프론트가 스프라이트를 바꾼다.
+
+---
+
+## 6. 프론트엔드 (Electron 펫/창 모드)
+
+- **창 모드**: 일반 데스크톱 창. 탭 — 새싹이(대화)·일정표·노트·문서·회의록·설정.
+- **펫 모드**: 투명 배경의 바탕화면 캐릭터. click-through(캐릭터 외 영역은 클릭이 바탕화면으로 통과), 드래그 이동, always-on-top.
+- **입력**: 음성(push-to-talk STT)·텍스트·이미지(클립보드 붙여넣기/파일 첨부).
+- **IPC**: `shell:openDocument`(원본 바로 열기), `pet:*`(펫 모드 제어), `get-display` 등.
+- **빌드 주의**: Electron은 `file://`로 로드하므로 `web/dist`는 반드시 `ELECTRON_BUILD=1`로 빌드해 상대경로(`./assets/...`)를 생성해야 한다(절대경로면 흰 화면, E-22).
+- **설정**: LLM 공급자(ollama/openai)·모델, 비전 모델, 의도 분류기, 지침(프롬프트) 편집, TTS 엔진/속도, 펫 모드, 글씨 크기.
+
+---
+
+## 7. 주요 기술 문제와 해결 (발췌)
+
+상세 이력은 `docs/ERROR_HISTORY.md`(E-01 ~ E-58)에 증상·원인·해결·교훈으로 기록된다. 최근 핵심:
+
+| # | 문제 | 해결 |
+|---|---|---|
+| E-53 | Ollama `/v1`가 `think:false`를 무시 → thinking 모델이 빈 응답 | `/v1`이 존중하는 `reasoning_effort:none` 주입 |
+| E-54 | gemma4가 한글 이미지 OCR 불가 → 추측성 노트 | 비전 모델(qwen2.5vl) 라우팅 도입(A안) |
+| E-55 | 노트 강제 폴백이 1차 소스(문서) 미반영 | 폴백이 첨부 원문 청크를 직접 근거로 작성 |
+| E-56 | `rag_folders.json` 비원자적 쓰기로 폴더 정의 유실 | temp+fsync+`os.replace` 원자적 쓰기 |
+| E-57 | 로컬 의도 분류기 콜드스타트 8s 타임아웃 → 첨부 노트 유실 | 타임아웃 30s + 분류 실패 시 첨부면 note_save 안전망 |
+| E-58 | 회의록 Step 2가 텍스트 대신 JSON 출력 | 작성 스타일 ↔ 출력 형식 분리(관심사 분리) |
+| E-22 | `web/dist` 절대경로 빌드 → Electron 흰 화면 | `ELECTRON_BUILD=1` 강제(런처 자동) |
+
+**관통하는 교훈**: ① 로컬 LLM은 외부 API와 특성이 다르다(콜드스타트·thinking·OCR 한계) — 실제 데이터로 검증할 것. ② 프롬프트에서 "스타일"과 "출력 형식"을 섞지 말 것. ③ 형식 위반은 하드 실패 대신 정규화로 흡수. ④ 모델 능력 플래그 ≠ 실제 품질.
+
+---
+
+## 8. 배포·운영
+
+### 런처(`새싹이.cmd`)
+
+1. `conf.yaml`/프론트 빌드 점검(`check-rebuild.mjs`, 필요 시 `ELECTRON_BUILD=1` 재빌드)
+2. **Ollama 자동 기동** — 미기동 시 `ollama serve` 시작 후 준비될 때까지 대기(최대 30s)
+3. **좀비 백엔드 정리** — 12393 포트를 쥔 이전 백엔드 종료(중복 바인딩 WinError 10048 방지)
+4. 백엔드(uvicorn) 기동 → 준비 폴링(상한 180s) → Electron 실행
+
+### 오프라인 USB 번들
+
+인터넷 차단 환경을 위해 소스·로컬 모델(Whisper·BGE-M3 등)·OS별 wheel을 USB에 사전 패키징하고 원클릭 설치 스크립트를 제공한다.
+
+---
+
+## 9. 개발 방식
+
+- **멀티에이전트 개발 프로세스**(런타임 아님): planner(설계)·builder(구현)·validator(테스트/린트)·critic(적대적 리뷰)로 역할 분리.
+- **스펙 우선**: `specs/M_NN_SPEC.md` 없이 `src/` 생성 금지. 요구사항은 `REQUIREMENTS.md`가 단일 진실 공급원.
+- **회귀 방지**: 버그는 반드시 `docs/ERROR_HISTORY.md`에 원인·해결·교훈 기록.
+- **품질 게이트**: `ruff format · ruff check · mypy src/ · pytest tests/`.
+
+---
+
+## 10. 현재 상태 및 잔여 과제
+
+### 완료 (모듈)
+
+| 모듈 | 내용 |
+|---|---|
+| M_01~M_05 | AppCore · ASR · VAD · TTS · LLMAgent |
+| M_05b | ToolRouter(도구 6종) |
+| M_06 / M_07 / M_18 | DocumentIngest · VectorSearch · 하이브리드+리랭커 |
+| M_08~M_11 | AvatarState · Calendar · IdleMonitor · Proactive |
+| M_12 | Electron 프론트(창/펫 모드) |
+| M_13 | MeetingMinutes(전사·회의록·HWPX) |
+| M_15 | Knowledge(업무 노트 + 그래프) |
+| M_16 / M_17 | IntentGate(의도 분류·라우팅) · 런타임 편집 지침 |
+
+### 현재 버전 추가 (멀티모달·안정화, 2026-06)
+
+- 이미지/스크린샷 OCR 노트(비전 모델 라우팅), 첨부 문서 내용 기반 노트, 모달리티별 모델 분리
+- 의도 분류 안전망, 로컬 thinking 비활성화, 파일 링크 바로 열기, 런처 Ollama 자동 기동
+- 회의록 출력 형식/스타일 분리
+
+### 잔여 과제
+
+- 인트라넷 중앙 GPU(대구 PPP존) 인프라 구축 시 LLM base_url 사내 전환 및 OSS 모델 검증
+- 비전 모델 한글 OCR 품질의 모델별 벤치마크
+- 회의록 Step 2 사용자 커스텀 스타일 지침 반영(현재 Step 3 JSON 지침만 conf 연동)
+
+---
+
+*GitHub: https://github.com/soonkun/ai-assistant · 상세 모듈/아키텍처: `docs/ARCHITECTURE.md`, `docs/MODULES.md` · 버그 이력: `docs/ERROR_HISTORY.md`*
