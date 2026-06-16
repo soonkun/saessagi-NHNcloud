@@ -36,9 +36,11 @@ const SIDEBAR_TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = 
 
 const SAMPLE_PROMPTS = [
   { title: "오늘 한 업무 기록", body: "오늘 ⟨이 자료⟩로 ⟨이 업무⟩를 이렇게 처리했어" },
-  { title: "지난 업무 검색", body: "출장비 정산은 어떻게 해?" },
-  { title: "회의록 작성", body: "회의록 탭에서 음성 파일을 업로드해 자동 정리" },
-  { title: "노트 그래프", body: "업무 노트 탭의 그래프에서 관련 업무 연결망 확인" },
+  { title: "이미지·스크린샷 정리", body: "화면 캡처를 붙여넣고 “노트로 정리해줘”" },
+  { title: "사내 문서에서 답 찾기", body: "출장비 신청 절차 알려줘 (출처와 함께)" },
+  { title: "지난 업무 다시 찾기", body: "지난번 LG 협의 결과 뭐였지?" },
+  { title: "일정 등록·확인", body: "내일 오후 2시 팀 회의 잡아줘" },
+  { title: "회의록 작성", body: "회의록 탭에서 음성 파일 업로드 → 한글 보고서까지" },
 ];
 
 export function DesktopView(): React.ReactElement {
@@ -447,9 +449,11 @@ function WelcomeHero(): React.ReactElement {
             maxWidth: 560,
           }}
         >
-          오늘 처리하신 업무를 보고해 주세요. 자료를 첨부하고 상황을 설명하면
+          오늘 처리하신 업무를 알려주세요. 자료를 첨부하거나 스크린샷 사진도 좋아요.
           <br />
-          자동으로 정리해 업무 노트로 저장합니다. 비슷한 업무가 다시 들어올 때 꺼내 드릴게요.
+          상황을 설명해주시면 내용을 정리해서 노트로 저장할게요.
+          <br />
+          제 지식이 늘어날수록 주인님의 업무가 편해질거예요.
         </p>
       </div>
 
