@@ -6,6 +6,7 @@ import { is } from '@electron-toolkit/utils';
 
 const isMac = process.platform === 'darwin';
 const isWindows = process.platform === 'win32';
+const isLinux = process.platform === 'linux';
 
 export class WindowManager {
   private window: BrowserWindow | null = null;
@@ -23,6 +24,48 @@ export class WindowManager {
 
   // Track if mouse events are forcibly ignored
   private forceIgnoreMouse = false;
+
+  // Linux 전용 커서 폴러 (pet 모드).
+  // setIgnoreMouseEvents(true, {forward:true})의 forward는 @platform darwin,win32 —
+  // Linux(WSLg 포함)에서는 click-through 중 mousemove가 렌더러에 전달되지 않아
+  // clickthrough.ts의 evaluate()가 영영 실행되지 않고 창이 영구 클릭스루로 고착된다.
+  // 우회: 커서 위치를 폴링해 합성 mouseMove를 주입 → 기존 evaluate() 경로가 그대로 동작.
+  // 주의: WSLg에서 screen.getCursorScreenPoint()는 실제 마우스를 따라가지 않는
+  // 고착값을 반환한다(E-53). X 서버 QueryPointer는 실입력을 정확히 추적하므로
+  // x11 패키지로 X 서버에 직접 묻는다.
+  private linuxCursorPoller: ReturnType<typeof setInterval> | null = null;
+
+  private x11Client: {
+    client: { QueryPointer: (root: number, cb: (err: unknown, p: { rootX: number; rootY: number }) => void) => void };
+    root: number;
+  } | null = null;
+
+  private x11InitFailed = false;
+
+  private async getLinuxCursorPoint(): Promise<{ x: number; y: number } | null> {
+    if (this.x11InitFailed) return null;
+    if (!this.x11Client) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires, global-require
+        const x11 = require('x11');
+        const display = await new Promise<{ client: never; screen: { root: number }[] }>(
+          (resolve, reject) => {
+            x11.createClient((err: unknown, d: never) => (err ? reject(err) : resolve(d)));
+          },
+        );
+        this.x11Client = { client: display.client, root: display.screen[0].root };
+      } catch (err) {
+        console.warn('[window-manager] X11 connect failed; cursor poller falls back to Electron API:', err);
+        this.x11InitFailed = true;
+        return null;
+      }
+    }
+    return new Promise((resolve) => {
+      this.x11Client!.client.QueryPointer(this.x11Client!.root, (err, p) => {
+        resolve(err ? null : { x: p.rootX, y: p.rootY });
+      });
+    });
+  }
 
   constructor() {
     ipcMain.on('renderer-ready-for-mode-change', (_event, newMode) => {
@@ -147,9 +190,44 @@ export class WindowManager {
     this.window.setOpacity(0);
 
     if (mode === 'window') {
+      this.stopLinuxCursorPoller();
       this.setWindowModeWindow();
     } else {
       this.setWindowModePet();
+      this.startLinuxCursorPoller();
+    }
+  }
+
+  private startLinuxCursorPoller(): void {
+    if (!isLinux || this.linuxCursorPoller) return;
+    let inFlight = false;
+    this.linuxCursorPoller = setInterval(() => {
+      const win = this.window;
+      if (!win || win.isDestroyed() || inFlight) return;
+      inFlight = true;
+      this.getLinuxCursorPoint()
+        .then((pt) => {
+          inFlight = false;
+          const w = this.window;
+          if (!w || w.isDestroyed()) return;
+          // X 연결 실패 시 Electron API로 폴백 (WSLg에선 고착값이지만 없는 것보단 낫다)
+          const p = pt ?? screen.getCursorScreenPoint();
+          const b = w.getBounds();
+          const x = p.x - b.x;
+          const y = p.y - b.y;
+          if (x < 0 || y < 0 || x >= b.width || y >= b.height) return;
+          w.webContents.sendInputEvent({ type: 'mouseMove', x, y });
+        })
+        .catch(() => {
+          inFlight = false;
+        });
+    }, 80);
+  }
+
+  private stopLinuxCursorPoller(): void {
+    if (this.linuxCursorPoller) {
+      clearInterval(this.linuxCursorPoller);
+      this.linuxCursorPoller = null;
     }
   }
 

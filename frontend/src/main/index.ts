@@ -18,6 +18,14 @@ const logger = {
   warn: (...args: unknown[]): void => { console.warn('[M_12]', ...args); },
 };
 
+// WSLg 등 리눅스 환경에서 GPU 프로세스 초기화가 실패하면(viz_main_impl "Exiting GPU
+// process") 투명 프레임리스 창이 화면에 그려지지 않는다. 소프트웨어 렌더링으로 전환.
+// app ready 이전에 호출해야 하며, Windows/macOS에는 영향 없음.
+if (process.platform === 'linux') {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('enable-transparent-visuals');
+}
+
 let windowManager: WindowManager;
 let menuManager: MenuManager;
 let isQuitting = false;

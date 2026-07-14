@@ -23,7 +23,7 @@
     ]
   },
   "statusLine": {
-    "type": "text",
-    "text": "AI 비서 (${model}) — ${pwd}"
+    "type": "command",
+    "command": "python3 -c \"import json,sys;d=json.load(sys.stdin);m=d.get('model') or {};w=d.get('workspace') or {};print('AI 비서 (' + (m.get('display_name') or m.get('id') or 'unknown') + ') — ' + (w.get('current_dir') or d.get('cwd') or '.'))\""
   }
 }

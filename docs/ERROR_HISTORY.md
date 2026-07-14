@@ -5,6 +5,40 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-54: 새 PC(WSL) 이식 시 "아무것도 안 됨" — conf.yaml 템플릿 초기화 + TTS 자산 부재가 LLM까지 전멸시킴 (2026-07-14)
+
+**증상**: Windows→WSL로 프로젝트 이식 후 캐릭터는 뜨는데 대화·TTS 전부 무반응. WS 테스트 시 `Error processing agent response: 'NoneType' object has no attribute 'chat'`, `/api/tts/speak` 무한 503.
+**원인** (3중 복합 — 모두 "새 머신에 git 미추적 자산이 없어서"):
+1. `conf.yaml`은 git 미추적이라 `start.sh`가 `conf.example.yaml`을 복사해 새로 만들었는데, 템플릿 기본값이 `openai_llm`(+placeholder 키)이라 원래 쓰던 Ollama 설정이 소실됨. 모델명도 템플릿은 `gemma4:e4b`인데 설치된 것은 `gemma4:latest`.
+2. `assets/models/melotts-ko`(git 미추적)가 없어 melo가 HF 자동 다운로드 폴백 → `_set_offline_env_vars()`가 HF 오프라인을 강제하므로 연결 실패 → **TTS 초기화 실패가 `load_from_config` 전체를 죽여 LLM/agent까지 None**이 됨. TTS 하나 죽었는데 대화 전체가 전멸.
+3. melo는 `cleaner.py` import 시 **모든 언어 모듈**을 로드하며 각 언어 BERT 토크나이저를 HF 캐시에서 찾음(한국어만 써도 ja/en/fr/es/multilingual 토크나이저 필요). 새 머신은 HF 캐시가 비어 있어 실패.
+**수정**: conf.yaml provider를 ollama(+`gemma4:latest`)로 정정. `myshell-ai/MeloTTS-Korean` → `assets/models/melotts-ko`, `kykim/bert-kor-base` + melo 요구 토크나이저 5종(tohoku-nlp/bert-base-japanese-v3, bert-base-uncased, bert-base-multilingual-uncased, dbmdz/bert-base-french-europeana-cased, dccuchile/bert-base-spanish-wwm-uncased) → HF 캐시 다운로드.
+**검증**: MeloTTSEngine 단독 init + 합성(280KB wav, cuda) 성공 → 백엔드 재기동 시 ERROR 0건 → `scripts/ws_test.py`로 실제 대화: LLM 응답 + 오디오 payload(1.1MB) + conversation-chain-end 수신.
+**교훈**: (1) **머신 이식 체크리스트가 필요하다**: git 미추적 요소 = `conf.yaml`(설정 원본!), `upstream/`, `assets/models/*`, HF 캐시. bootstrap.py가 upstream·BGE-M3는 챙기지만 melotts-ko·BERT 토크나이저는 안 챙긴다(추가 후보). (2) **TTS 초기화 실패가 대화 전체를 죽이는 결합은 위험** — load_from_config의 부분 실패 격리를 검토할 것. (3) 템플릿 복사로 생성된 conf.yaml은 "원래 설정"이 아니다 — 이식 후 provider·모델명부터 확인.
+
+---
+
+## E-53: 리눅스(WSLg) 펫 모드 영구 클릭스루 — setIgnoreMouseEvents의 forward는 darwin/win32 전용 (2026-07-14)
+
+**증상**: WSL에서 캐릭터는 표시되나 클릭·호버 전부 무반응(클릭이 바탕화면으로 통과).
+**원인**: click-through 해제는 렌더러 `clickthrough.ts`의 mousemove 기반 `evaluate()`가 담당하는데, `setIgnoreMouseEvents(true, {forward:true})`의 `forward` 옵션이 **`@platform darwin,win32`** (electron.d.ts로 확정) — 리눅스에서는 클릭스루 중 mousemove가 렌더러에 전달되지 않아 evaluate()가 영영 실행되지 않고 창이 영구 클릭스루로 고착 (E-09의 리눅스판, 단 forward를 줘도 소용없음).
+**수정 1차(실패)**: `window-manager.ts`에 커서 폴러 추가 — 80ms 간격 `screen.getCursorScreenPoint()` → `webContents.sendInputEvent({type:'mouseMove'})` 합성 주입. 그러나 **WSLg에서 `getCursorScreenPoint()`가 실제 마우스를 따라가지 않는 고착값을 반환**해 폴러가 헛돌았다 (X 서버 `QueryPointer`와 수 백 px 어긋난 채 몇 분간 불변인 것을 CDP+x11로 확인).
+**수정 2차(최종)**: 폴러가 **X 서버에 직접 `QueryPointer`** (frontend에 `x11` 패키지 추가, 순수 JS)로 커서를 읽도록 변경. X 연결 실패 시 `getCursorScreenPoint()` 폴백. pet 모드 진입 시 시작, window 모드 전환 시 중지. (사고 2의 setFocusable/setIgnoreMouseEvents 경로는 불변경 — 독립 추가.)
+**검증**: 전자동 E2E 구축 — X `WarpPointer`로 캐릭터 위 이동(X QueryPointer 기반 폴러는 이를 실입력처럼 추적) → 렌더러 수신 좌표 일치 확인 → XTEST 실클릭 → `char-widget`에 mousedown/click 도달 + **채팅 패널 실제 열림**(display:flex, 580×660) 확인.
+**교훈**: (1) **Electron 창 API는 플랫폼 주석(`@platform`)부터 확인할 것** — `forward`(darwin,win32), `setOpacity`(linux 미지원) 등 리눅스 구멍이 많다. (2) **WSLg에서는 Electron의 커서/화면 API(getCursorScreenPoint·desktopCapturer)를 신뢰하지 말 것** — 입력의 진실은 X 서버(QueryPointer)에 있다. (3) X `WarpPointer`+XTEST+CDP 조합이면 사용자 손 없이 hover/클릭 E2E를 자동화할 수 있다.
+
+---
+
+## E-52: WSLg에서 투명창 렌더링 실패(GPU 프로세스 사망) + WSLg 표시 계층 고착 (2026-07-14)
+
+**증상**: WSL에서 Electron 실행 시 `Exiting GPU process due to errors during initialization` 후 창이 화면에 안 보임. GPU 에러를 고쳐도 안 보이는 상태 지속.
+**원인**: 2중 — (1) WSLg에서 Electron GPU 프로세스 초기화 실패 → 투명 프레임리스 창 렌더링 불가. (2) 별개로 **WSLg 표시 계층 자체가 고착**된 상태였음: X11 map_state=Viewable, 렌더러 페이지 캡처에 캐릭터 정상, Weston이 RDP RAIL에 창 등록까지 확인됐는데도 Windows 화면에 아무것도 안 나옴(빨간색 전면 칠 테스트로 확정). WSL 세션 7시간 경과 후 발생 — 알려진 WSLg 버그.
+**수정**: (1) `frontend/src/main/index.ts`에 리눅스 한정 `app.disableHardwareAcceleration()` + `enable-transparent-visuals` 스위치 (app ready 이전 호출, Win/mac 무영향). (2)는 코드로 불가 — **Windows PowerShell에서 `wsl --shutdown` 후 재시작**으로 해결(사용자 확인: 캐릭터 표시됨).
+**검증**: 수정 후 GPU 에러 로그 소멸, WSL 재시작 후 캐릭터 표시 확인(사용자). 진단 도구: X11 map_state 조회(x11 npm), CDP `Page.captureScreenshot`(렌더러 캡처), 전면 색칠 테스트 — WSLg에서 desktopCapturer 화면 캡처는 전부 검정(사용 불가).
+**교훈**: "창이 안 보인다"는 (a) 렌더링 실패 (b) 창 미표시 (c) 표시 계층 고장의 3층 문제다. **렌더러 캡처(CDP) → X11 map 상태 → 컴포지터 로그** 순으로 층을 분리해 진단하면 코드 탓인지 환경 탓인지 가려진다. WSLg에서 GUI가 안 보이면 우선 `wsl --shutdown` 재시작부터 의심할 것.
+
+---
+
 ## E-51: AI 답변 본문에 HTML 태그(`<span>`)·단일괄호 인용 마커가 찌꺼기로 노출 (2026-06-13)
 
 **증상**: 답변 본문에 `<span style="font-family: serif;">[doc:3. ...업무편람.hwpx_72a81791]</span>` 같은 **HTML 태그 + 인용 마커**가 그대로 보임. 파일명도 `<span style=...>파일명.hwpx</span>`로 감싸져 노출.

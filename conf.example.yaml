@@ -119,7 +119,7 @@ character_config:
     conversation_agent_choice: basic_memory_agent
     agent_settings:
       basic_memory_agent:
-        llm_provider: openai_llm
+        llm_provider: ollama_llm
         use_mcpp: false
         mcp_enabled_servers: []
     llm_configs:
@@ -145,7 +145,7 @@ character_config:
       translate_provider: deeplx
 app:
   profile: min
-  llm_provider: openai
+  llm_provider: ollama
   openai:
     api_key: sk-REPLACE-WITH-YOUR-OPENAI-API-KEY
     model: gpt-4o
