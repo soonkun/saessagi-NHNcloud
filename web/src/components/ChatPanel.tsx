@@ -52,7 +52,8 @@ import { lazy, Suspense } from "react";
 const GraphRagView = lazy(() => import("./GraphRagView"));
 import type { Position, ChatTab } from "../types";
 
-const PANEL_W = 580;
+// 그래프 탭 추가로 좌우 여유 확보 (사용자 요청 2026-07-16: 580 → 700)
+const PANEL_W = 700;
 const PANEL_H = 660;
 const GAP = 8;
 

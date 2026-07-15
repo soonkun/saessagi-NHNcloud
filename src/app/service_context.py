@@ -63,6 +63,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self.intent_classifier: Any = None  # IntentClassifier | None
         # M_19: GraphRagService 슬롯 (init_agent에서 조립 — 추출 LLM이 필요)
         self.graph_rag_service: Any = None  # GraphRagService | None
+        self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
         self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
@@ -461,10 +462,56 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     database=graphrag_cfg.neo4j_database,
                 )
                 _vstore = getattr(self.rag_service, "_store", None)
+
+                # 추출 LLM 선택 (IntentGate와 동일 패턴) — 그래프 품질은 추출 품질에 좌우
+                _extract_complete_json = gemma_agent.complete_json
+                _extract_label = f"same_as_chat({self.app_config.ollama.model})"
+                if graphrag_cfg.extraction_provider == IntentGateProviderKind.OLLAMA:
+                    from agent.builder import build_chat_agent as _build_extract_agent
+
+                    _extract_agent = await _build_extract_agent(
+                        app_config=self.app_config,
+                        ollama_config=self.app_config.ollama.model_copy(
+                            update={"model": graphrag_cfg.extraction_ollama_model}
+                        ),
+                        tool_manager=None,
+                        tool_executor=None,
+                        system_prompt="",
+                        extra_tool_specs=None,
+                        tts_preprocessor_config=None,
+                    )
+                    self._graphrag_extract_agent = _extract_agent
+                    _extract_complete_json = _extract_agent.complete_json
+                    _extract_label = f"ollama({graphrag_cfg.extraction_ollama_model})"
+                elif graphrag_cfg.extraction_provider == IntentGateProviderKind.OPENAI:
+                    from agent.builder import build_chat_agent as _build_extract_agent
+                    from app.config import LlmProviderKind as _LPK
+
+                    _openai_cfg = self.app_config.model_copy(
+                        update={
+                            "llm_provider": _LPK.OPENAI,
+                            "openai": self.app_config.openai.model_copy(
+                                update={"model": graphrag_cfg.extraction_openai_model}
+                            ),
+                        }
+                    )
+                    _extract_agent = await _build_extract_agent(
+                        app_config=_openai_cfg,
+                        ollama_config=self.app_config.ollama,
+                        tool_manager=None,
+                        tool_executor=None,
+                        system_prompt="",
+                        extra_tool_specs=None,
+                        tts_preprocessor_config=None,
+                    )
+                    self._graphrag_extract_agent = _extract_agent
+                    _extract_complete_json = _extract_agent.complete_json
+                    _extract_label = f"openai({graphrag_cfg.extraction_openai_model})"
+
                 self.graph_rag_service = GraphRagService(
                     graph_store=_graph_store,
                     vector_store=_vstore,
-                    extractor=EntityExtractor(complete_json=gemma_agent.complete_json),
+                    extractor=EntityExtractor(complete_json=_extract_complete_json),
                     rag_service=self.rag_service,
                     max_hops=graphrag_cfg.max_hops,
                 )
@@ -472,7 +519,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     _graph_store.ensure_schema()
                     logger.info(
                         "AppServiceContext.init_agent: GraphRagService 배선 완료 "
-                        f"(uri={graphrag_cfg.neo4j_uri}, hops={graphrag_cfg.max_hops})"
+                        f"(uri={graphrag_cfg.neo4j_uri}, hops={graphrag_cfg.max_hops}, "
+                        f"추출모델={_extract_label})"
                     )
                 else:
                     logger.warning(

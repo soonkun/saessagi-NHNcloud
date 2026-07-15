@@ -184,6 +184,11 @@ app:
     neo4j_password: ""
     neo4j_database: neo4j
     max_hops: 2
+    # 추출 LLM: same_as_chat(기본) | ollama | openai — 업로드 시 개체·관계 추출용.
+    # 예) 더 좋은 로컬 모델: extraction_provider: ollama + extraction_ollama_model: qwen3:14b
+    extraction_provider: same_as_chat
+    extraction_ollama_model: gemma4:e4b
+    extraction_openai_model: gpt-4o-mini
   screenshot_continuous_interval_sec: 5
   meeting_minutes_prompt: "당신은 사내 공문서 표준에 맞는 '회의 결과 보고서'의 개조식 초안을 작성하는 전문가입니다.\n\n\
     ## 보고서 필수 구성 요소\n\n1. 제목 — 회의 주제를 명확히 반영\n2. 일시 및 장소 — 녹취록에서 추정 가능한 경우 기재 (불명확하면\

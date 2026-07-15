@@ -200,6 +200,18 @@ class GraphRagConfig(BaseModel):
     neo4j_password: str = Field(default="")
     neo4j_database: str = Field(default="neo4j")
     max_hops: int = Field(default=2, ge=1, le=3, description="그래프 이웃 확장 홉 수.")
+    # 문서 업로드 시 엔티티·관계 추출에 쓸 LLM (IntentGate와 동일한 3-provider 패턴).
+    # 추출 품질이 그래프 품질을 좌우하므로 대화 모델보다 좋은 모델 지정을 권장.
+    extraction_provider: IntentGateProviderKind = Field(
+        default=IntentGateProviderKind.SAME_AS_CHAT,
+        description="same_as_chat=대화 모델 재사용, ollama=전용 Ollama 모델, openai=OpenAI 모델.",
+    )
+    extraction_ollama_model: str = Field(
+        default="gemma4:e4b", description="extraction_provider=ollama일 때 사용할 모델 태그."
+    )
+    extraction_openai_model: str = Field(
+        default="gpt-4o-mini", description="extraction_provider=openai일 때 사용할 모델."
+    )
 
 
 class ProactiveConfig(BaseModel):
