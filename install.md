@@ -59,12 +59,14 @@ TTS는 완전 오프라인으로 동작하도록 설계되어(`HF_HUB_OFFLINE=1`
 아래를 반드시 실행할 것:
 
 ```bash
-# 한국어 TTS 모델 (~210MB) + 한국어 BERT (~400MB)
+# 한국어 TTS 모델 (~210MB) + 한국어 BERT (~400MB) + 검색 리랭커 (~1GB)
 .venv/bin/python -c "
 from huggingface_hub import snapshot_download
 snapshot_download('myshell-ai/MeloTTS-Korean', local_dir='assets/models/melotts-ko', local_dir_use_symlinks=False)
 snapshot_download('kykim/bert-kor-base')
+snapshot_download('BAAI/bge-reranker-v2-m3', local_dir='assets/models/bge-reranker-v2-m3')
 "
+# 주의: 리랭커가 없으면 검색이 '조용히' 벡터-only로 강등된다 (오류 없음, 품질만 저하)
 
 # melo가 import 시점에 요구하는 각 언어 토크나이저 (합계 수십 MB)
 .venv/bin/python -c "
