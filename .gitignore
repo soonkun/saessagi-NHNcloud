@@ -86,3 +86,7 @@ web/electron-dist/
 
 # 비밀키 포함 — 추적 금지. 템플릿은 conf.example.yaml 사용 (E-25 후속)
 conf.yaml
+
+# Claude Code 워크트리 + Windows 다운로드 흔적
+.claude/worktrees/
+*Zone.Identifier
