@@ -458,7 +458,7 @@ Phase 1 산출물. 구현은 Phase 2에서 이 계약대로만 이루어진다.
 | M_15 | KnowledgeService | NEW | ✅ DONE | M_07 VectorSearch |
 | M_16 | IntentGate | NEW | ✅ DONE (E2E 검증: calendar_add/doc_query/work_query 실데이터 확인) | M_05 GemmaChatAgent.complete_json, M_07 VectorSearch (소스 필터 보강) |
 | M_18 | SearchUpgrade (ANN 인덱스+리랭커+하이브리드) | NEW | ✅ DONE (실측: retrieve 259ms, recall@8 100%, 키워드 쿼리 적중 확인 — CR-06/E-40) | M_07 VectorSearch, bge-reranker-v2-m3 |
-| M_19 | GraphRAG (Neo4j 엔티티그래프 하이브리드 + 그래프 탭 시각화) | NEW | 🚧 WIP (단위 테스트 완료, Neo4j 실서버 E2E 대기 — CR-18) | M_05 complete_json, M_07 VectorSearch, M_15 KnowledgeService, Neo4j 5.x(선택, graphrag.enabled) |
+| M_19 | GraphRAG (Neo4j 엔티티그래프 하이브리드 + 그래프 탭 시각화) | NEW | ✅ DONE (실측 2026-07-16: 문서 2건→엔티티 8·관계 9 추출, 교차 질의에 "하이브리드 융합: 벡터=2+그래프=2" 주입 로그, evidence API·그래프 탭 CDP 캡처 확인 — CR-18) | M_05 complete_json, M_07 VectorSearch, M_15 KnowledgeService, Neo4j 5.x(선택, graphrag.enabled) |
 
 ---
 

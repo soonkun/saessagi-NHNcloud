@@ -193,8 +193,36 @@ systemctl --user enable --now fcitx5.service
 벡터+그래프 하이브리드로 보강하는 기능. **선택 사항** — 설치하지 않으면 앱은 기존
 벡터 RAG로 동작한다 (`graphrag.enabled: false` 기본).
 
+**설치 A — sudo 없이 사용자 공간 (WSL 개발 PC에서 검증된 방식):**
+
 ```bash
-# Neo4j 5.x 설치 (Java 자동 포함)
+mkdir -p ~/opt && cd ~/opt
+# JRE 21 (Temurin) + Neo4j Community 5.26
+curl -sLo jre21.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jre/hotspot/normal/eclipse"
+curl -sLo neo4j.tar.gz "https://dist.neo4j.org/neo4j-community-5.26.0-unix.tar.gz"
+tar xzf jre21.tar.gz && mv jdk-*-jre jre21
+tar xzf neo4j.tar.gz && mv neo4j-community-* neo4j
+JAVA_HOME=~/opt/jre21 ~/opt/neo4j/bin/neo4j-admin dbms set-initial-password saessagi-graph
+
+# systemd 유저 서비스로 상주 (부팅 자동 시작 + 자동 재시작)
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/neo4j.service <<'EOF'
+[Unit]
+Description=Neo4j Community (사용자 공간 설치 — M_19 GraphRAG)
+[Service]
+Environment=JAVA_HOME=%h/opt/jre21
+ExecStart=%h/opt/neo4j/bin/neo4j console
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now neo4j.service
+```
+
+**설치 B — apt (sudo 가능한 환경):**
+
+```bash
 wget -qO - https://debian.neo4j.com/neotechnology.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/neo4j.gpg
 echo 'deb [signed-by=/usr/share/keyrings/neo4j.gpg] https://debian.neo4j.com stable latest' | sudo tee /etc/apt/sources.list.d/neo4j.list
 sudo apt update && sudo apt install -y neo4j
