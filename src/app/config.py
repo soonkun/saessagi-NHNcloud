@@ -185,6 +185,23 @@ class IntentGateConfig(BaseModel):
     timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
+class GraphRagConfig(BaseModel):
+    """M_19 GraphRAG 설정 (CR-18).
+
+    enabled 기본 False — Neo4j 미설치 환경(사내 초기 배포)에서 기존 동작 100% 보존.
+    """
+
+    enabled: bool = Field(default=False)
+    neo4j_uri: str = Field(
+        default="bolt://127.0.0.1:7687",
+        description="Neo4j bolt URI. 사설 대역만 허용 (url_guard 검증).",
+    )
+    neo4j_user: str = Field(default="neo4j")
+    neo4j_password: str = Field(default="")
+    neo4j_database: str = Field(default="neo4j")
+    max_hops: int = Field(default=2, ge=1, le=3, description="그래프 이웃 확장 홉 수.")
+
+
 class ProactiveConfig(BaseModel):
     """프로액티브 알림 관련 설정 (M_10 IdleMonitor + M_11 ProactiveDispatcher 공용).
 
@@ -260,6 +277,7 @@ class AppConfig(BaseModel):
     tts: TtsConfig = Field(default_factory=TtsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     intent_gate: IntentGateConfig = Field(default_factory=IntentGateConfig)  # M_16
+    graphrag: GraphRagConfig = Field(default_factory=GraphRagConfig)  # M_19
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)

@@ -530,6 +530,15 @@ async def upload_document(request: Request) -> UploadResponse:
     logger.info(
         "upload_document: doc_id=%s, chunks=%d, folder_id=%s", doc_id, len(chunk_metas), folder_id
     )
+
+    # M_19: 그래프 인덱싱 백그라운드 스케줄 (활성 시)
+    graph_rag = getattr(ctx, "graph_rag_service", None)
+    if graph_rag is not None:
+        try:
+            graph_rag.schedule_index_document(doc_id)
+        except Exception as exc:
+            logger.warning("GraphRAG 인덱싱 스케줄 실패 (무시): %s", exc)
+
     return UploadResponse(
         doc_id=doc_id, filename=filename, chunk_count=len(chunk_metas), folder_id=folder_id
     )
@@ -603,6 +612,11 @@ async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
     # 청크 삭제 성공 시 원본도 정리 (디렉토리 부재 OK)
     _delete_original(doc_id)
     _schedule_store_optimize(store)
+
+    # M_19: 그래프에서도 연쇄 삭제 (활성 시)
+    graph_rag = getattr(ctx, "graph_rag_service", None)
+    if graph_rag is not None:
+        await asyncio.to_thread(graph_rag.delete_document, doc_id)
 
     logger.info("delete_document: doc_id=%s, deleted=%d", doc_id, deleted)
     return DeleteResponse(ok=True, deleted_chunks=deleted)

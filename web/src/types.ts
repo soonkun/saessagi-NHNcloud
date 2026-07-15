@@ -17,7 +17,57 @@ export type AiStatus = "idle" | "thinking" | "speaking";
 
 export type SidebarView = "calendar" | "documents" | "settings";
 
-export type ChatTab = "chat" | "calendar" | "documents" | "meeting" | "notes" | "settings";
+export type ChatTab =
+  | "chat"
+  | "calendar"
+  | "documents"
+  | "meeting"
+  | "notes"
+  | "graph"
+  | "settings";
+
+// ── M_19 GraphRAG (CR-18) ──────────────────────────────────────────────────
+export interface GraphRagNode {
+  id: string;
+  label: string;
+  kind: "entity" | "document" | "note";
+  type: string; // 엔티티 타입 (인물|조직|사업|제도|기술|장소|기타), 비엔티티는 ""
+}
+
+export interface GraphRagEdge {
+  source: string;
+  target: string;
+  kind: "rel" | "mentioned_in" | "part_of";
+  weight: number;
+}
+
+export interface GraphRagData {
+  nodes: GraphRagNode[];
+  edges: GraphRagEdge[];
+  stats: Record<string, number>;
+}
+
+export interface GraphRagStatus {
+  enabled: boolean;
+  connected: boolean;
+  stats: Record<string, number>;
+  indexing: {
+    doc_id: string;
+    state: string;
+    total_chunks: number;
+    done_chunks: number;
+    skipped_chunks: number;
+    error: string;
+  }[];
+}
+
+export interface GraphRagEvidence {
+  query: string;
+  created: string;
+  nodes: GraphRagNode[];
+  edges: GraphRagEdge[];
+  chunk_ids: string[];
+}
 
 export interface KnowledgeNoteMeta {
   slug: string;

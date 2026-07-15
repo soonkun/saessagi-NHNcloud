@@ -187,6 +187,35 @@ systemctl --user enable --now fcitx5.service
 
 ---
 
+## 6b. (선택) GraphRAG — Neo4j 지식그래프 (CR-18)
+
+문서·노트에서 개체(조직·사업·인물 등)와 관계를 추출해 그래프로 축적하고, 검색을
+벡터+그래프 하이브리드로 보강하는 기능. **선택 사항** — 설치하지 않으면 앱은 기존
+벡터 RAG로 동작한다 (`graphrag.enabled: false` 기본).
+
+```bash
+# Neo4j 5.x 설치 (Java 자동 포함)
+wget -qO - https://debian.neo4j.com/neotechnology.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/neo4j.gpg
+echo 'deb [signed-by=/usr/share/keyrings/neo4j.gpg] https://debian.neo4j.com stable latest' | sudo tee /etc/apt/sources.list.d/neo4j.list
+sudo apt update && sudo apt install -y neo4j
+sudo neo4j-admin dbms set-initial-password saessagi-graph
+sudo systemctl enable --now neo4j
+```
+
+conf.yaml 설정:
+
+```yaml
+  graphrag:
+    enabled: true
+    neo4j_password: "saessagi-graph"
+```
+
+앱 재시작 후: **그래프 탭 → 재인덱싱**으로 기존 문서를 분석하면 그래프가 채워진다
+(청크당 LLM 1콜이라 문서가 많으면 수 분 소요, 백그라운드 진행률 표시). 이후 채팅
+답변의 **"근거 그래프"** 버튼으로 답변이 밟은 개체·관계·출처를 시각적으로 확인할 수 있다.
+
+---
+
 ## 7. WSLg 입출력 제약 (알아둘 것)
 
 Windows ↔ WSLg 창 사이에는 다음이 **전달되지 않는다** (앱 버그 아님, 플랫폼 제약):

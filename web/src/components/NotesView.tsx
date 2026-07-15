@@ -359,7 +359,9 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
       </div>
 
       {/* 우측: 편집/미리보기/그래프 */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+      {/* minWidth: 0 필수 — 가로 flex 자식의 기본 min-width:auto 때문에 미리보기의
+          긴 코드 토큰이 페인을 부모 폭 밖으로 밀어내 프레임을 벗어난다 */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
         {/* sub-tabs */}
         <div
           style={{
@@ -575,7 +577,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
             </div>
           )}
           {current && subTab === "preview" && (
-            <div style={{ padding: 20, overflow: "auto", flex: 1, fontSize: "var(--fs-13)", lineHeight: 1.6 }}>
+            <div style={{ padding: 20, overflow: "auto", flex: 1, minWidth: 0, fontSize: "var(--fs-13)", lineHeight: 1.6, overflowWrap: "anywhere" }}>
               <h2 style={{ fontSize: "var(--fs-18)", fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
               <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 4 }}>
                 {current.tags.join(" · ") || "태그 없음"}
@@ -588,6 +590,15 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
+                  // 코드 블록·표는 페인 폭을 넘지 않고 내부 가로 스크롤로 격리
+                  pre: ({ children }) => (
+                    <pre style={{ overflowX: "auto", maxWidth: "100%" }}>{children}</pre>
+                  ),
+                  table: ({ children }) => (
+                    <div style={{ overflowX: "auto", maxWidth: "100%" }}>
+                      <table>{children}</table>
+                    </div>
+                  ),
                   a: ({ children, href }) => {
                     const isWikilink = typeof href === "string" && href.startsWith("#note:");
                     return (

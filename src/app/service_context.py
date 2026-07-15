@@ -61,6 +61,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self.knowledge_service: Any = None  # KnowledgeService | None
         # M_16: IntentClassifier 슬롯
         self.intent_classifier: Any = None  # IntentClassifier | None
+        # M_19: GraphRagService 슬롯 (init_agent에서 조립 — 추출 LLM이 필요)
+        self.graph_rag_service: Any = None  # GraphRagService | None
         self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
@@ -443,6 +445,50 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
         _prompt_provider = _make_prompt_provider(_app_cfg_ref)
 
+        # (7b2) M_19: GraphRagService 조립 — 추출 LLM(complete_json)이 필요해 여기서 생성
+        graphrag_cfg = self.app_config.graphrag if self.app_config else None
+        if graphrag_cfg is not None and graphrag_cfg.enabled and self.rag_service is not None:
+            try:
+                from app.url_guard import enforce_private_url
+                from graph_rag import EntityExtractor, GraphRagService
+                from graph_rag.neo4j_store import Neo4jGraphStore
+
+                enforce_private_url(graphrag_cfg.neo4j_uri, field_name="GRAPHRAG_NEO4J_URI")
+                _graph_store = Neo4jGraphStore(
+                    uri=graphrag_cfg.neo4j_uri,
+                    user=graphrag_cfg.neo4j_user,
+                    password=graphrag_cfg.neo4j_password,
+                    database=graphrag_cfg.neo4j_database,
+                )
+                _vstore = getattr(self.rag_service, "_store", None)
+                self.graph_rag_service = GraphRagService(
+                    graph_store=_graph_store,
+                    vector_store=_vstore,
+                    extractor=EntityExtractor(complete_json=gemma_agent.complete_json),
+                    rag_service=self.rag_service,
+                    max_hops=graphrag_cfg.max_hops,
+                )
+                if _graph_store.ping():
+                    _graph_store.ensure_schema()
+                    logger.info(
+                        "AppServiceContext.init_agent: GraphRagService 배선 완료 "
+                        f"(uri={graphrag_cfg.neo4j_uri}, hops={graphrag_cfg.max_hops})"
+                    )
+                else:
+                    logger.warning(
+                        "GraphRAG: Neo4j 연결 실패 — 벡터-only 폴백으로 동작 "
+                        f"(uri={graphrag_cfg.neo4j_uri})"
+                    )
+            except Exception as exc:
+                logger.warning(f"GraphRagService 조립 실패 (벡터-only 폴백): {exc!r}")
+                self.graph_rag_service = None
+        elif graphrag_cfg is not None and not graphrag_cfg.enabled:
+            logger.info("GraphRAG 비활성 (graphrag.enabled=false)")
+
+        # M_19: 노트 저장 시 그래프 인덱싱 훅 (늦은 attr 주입 — KnowledgeService가 참조)
+        if self.knowledge_service is not None:
+            self.knowledge_service.graph_rag_service = self.graph_rag_service
+
         # (7c) 어댑터 래핑
         self.agent_engine = BasicMemoryAgentAdapter(
             gemma_agent,
@@ -452,6 +498,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             tts_brief_enabled=self.app_config.tts_brief_enabled if self.app_config else True,
             tts_brief_max_chars=self.app_config.tts_brief_max_chars if self.app_config else 80,
             tool_router=self.tool_router,  # E-45: note_save 의도 강제 저장 폴백
+            graph_rag_service=self.graph_rag_service,  # M_19: 하이브리드 검색
         )
         logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
 
@@ -730,6 +777,13 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 logger.debug("screenshot_service.aclose() 완료")
             except Exception as exc:
                 logger.error(f"screenshot_service.aclose() 실패: {exc}")
+
+        if self.graph_rag_service is not None:
+            try:
+                self.graph_rag_service.close()
+                logger.debug("graph_rag_service.close() 완료")
+            except Exception as exc:
+                logger.error(f"graph_rag_service.close() 실패: {exc}")
 
         if self.rag_service is not None:
             try:

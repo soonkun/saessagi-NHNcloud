@@ -175,6 +175,15 @@ app:
     melo:
       speed: 1.2
   rag_min_score: 0.35
+  # M_19 GraphRAG (CR-18) — Neo4j 기반 그래프RAG 하이브리드. 기본 비활성.
+  # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 참조)
+  graphrag:
+    enabled: false
+    neo4j_uri: bolt://127.0.0.1:7687
+    neo4j_user: neo4j
+    neo4j_password: ""
+    neo4j_database: neo4j
+    max_hops: 2
   screenshot_continuous_interval_sec: 5
   meeting_minutes_prompt: "당신은 사내 공문서 표준에 맞는 '회의 결과 보고서'의 개조식 초안을 작성하는 전문가입니다.\n\n\
     ## 보고서 필수 구성 요소\n\n1. 제목 — 회의 주제를 명확히 반영\n2. 일시 및 장소 — 녹취록에서 추정 가능한 경우 기재 (불명확하면\

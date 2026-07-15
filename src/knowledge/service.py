@@ -201,6 +201,7 @@ class KnowledgeService:
         }
         self._path(slug).write_text(serialize(fm, content), encoding="utf-8")
         self._reembed(slug, title, content)
+        self._schedule_graph_index(slug)  # M_19
         return KnowledgeNote(
             slug=slug,
             title=title,
@@ -240,6 +241,7 @@ class KnowledgeService:
         # 본문이나 제목이 바뀌었으면 재임베딩
         if content is not None or title is not None:
             self._reembed(slug, new_title, new_content)
+            self._schedule_graph_index(slug)  # M_19
         return KnowledgeNote(
             slug=slug,
             title=new_title,
@@ -275,6 +277,20 @@ class KnowledgeService:
         if self._rag is None:
             return None
         return getattr(self._rag, "_embedder", None) or getattr(self._rag, "embedder", None)
+
+    def _schedule_graph_index(self, slug: str) -> None:
+        """M_19: 노트 저장/수정 후 그래프 인덱싱 스케줄 (graph_rag_service 주입 시에만).
+
+        graph_rag_service는 AppServiceContext.init_agent가 늦게 세팅한다 (attr 주입).
+        실패는 노트 저장을 실패시키지 않는다.
+        """
+        svc = getattr(self, "graph_rag_service", None)
+        if svc is None:
+            return
+        try:
+            svc.schedule_index_document(f"{KNOWLEDGE_CATEGORY}:{slug}")
+        except Exception as exc:
+            logger.warning("노트 그래프 인덱싱 스케줄 실패 (무시): %s", exc)
 
     def _reembed(self, slug: str, title: str, body: str) -> None:
         """기존 chunks 제거 후 본문을 다시 청킹·임베딩."""

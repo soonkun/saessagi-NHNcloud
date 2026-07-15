@@ -173,10 +173,12 @@ def _make_adapter_class() -> type:
             tts_brief_enabled: bool = True,
             tts_brief_max_chars: int = 80,
             tool_router: Any = None,  # ToolRouter | None — note_save 강제 폴백용 (E-45)
+            graph_rag_service: Any = None,  # GraphRagService | None (M_19 하이브리드)
         ) -> None:
             super().__init__()
             self._agent = agent
             self._rag_service = rag_service  # vector_search.RagService | None
+            self._graph_rag = graph_rag_service  # M_19: 있으면 hybrid_retrieve 사용
             self._intent_classifier = intent_classifier  # M_16: IntentClassifier | None
             # M_17: lazy 지침 조회 클로저. None이면 {} 취급 → M_16 기존 동작과 동일
             self._prompt_provider = prompt_provider
@@ -361,10 +363,16 @@ def _make_adapter_class() -> type:
                 # 첨부 있어도 검색은 트리거 키워드 있을 때만
                 retrieval = None
                 if should_search:
-                    retrieval = await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        lambda: self._rag_service.retrieve(user_text, 5, source=rag_source),
-                    )
+                    # M_19: GraphRAG 활성 시 하이브리드(벡터+그래프 RRF), 아니면 기존 벡터 경로
+                    if self._graph_rag is not None and self._graph_rag.available:
+                        retrieval = await self._graph_rag.hybrid_retrieve(
+                            user_text, 5, source=rag_source
+                        )
+                    else:
+                        retrieval = await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            lambda: self._rag_service.retrieve(user_text, 5, source=rag_source),
+                        )
 
                 # 일반 검색 hits (score 임계값 통과한 것만)
                 search_hits: list[dict[str, Any]] = []

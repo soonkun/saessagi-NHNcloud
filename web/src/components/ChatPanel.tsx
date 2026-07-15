@@ -15,6 +15,7 @@ import {
   RotateCcw,
   ExternalLink,
   Paperclip,
+  Network,
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
@@ -45,6 +46,10 @@ import { DocumentsView } from "./DocumentsView";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
 import { SettingsView } from "./SettingsView";
+import { lazy, Suspense } from "react";
+
+// M_19: 그래프 탭 — force-graph 번들은 탭 진입 시에만 로드
+const GraphRagView = lazy(() => import("./GraphRagView"));
 import type { Position, ChatTab } from "../types";
 
 const PANEL_W = 580;
@@ -85,6 +90,7 @@ const TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
   { id: "calendar", label: "일정표", Icon: Calendar },
   { id: "notes", label: "노트", Icon: BookOpen },
   { id: "documents", label: "문서", Icon: FolderOpen },
+  { id: "graph", label: "그래프", Icon: Network },
   { id: "meeting", label: "회의록", Icon: FileAudio },
   { id: "settings", label: "설정", Icon: Settings },
 ];
@@ -105,6 +111,7 @@ export function ChatContent({
   const llmInfo = useStore((s) => s.llmInfo);
   const setChatTab = useStore((s) => s.setChatTab);
   const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
+  const requestGraphEvidence = useStore((s) => s.requestGraphEvidence);
 
   const [input, setInput] = useState("");
   const [voiceActive, setVoiceActive] = useState(false);
@@ -620,6 +627,30 @@ export function ChatContent({
                       {c.filename}
                     </button>
                   ))}
+                  {/* M_19: 이 답변의 근거 서브그래프를 그래프 탭에서 하이라이트 */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      requestGraphEvidence();
+                    }}
+                    title="이 답변이 어떤 개체·문서를 근거로 나왔는지 그래프로 보기"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "2px 8px",
+                      fontSize: "var(--fs-11)",
+                      borderRadius: 10,
+                      background: "transparent",
+                      border: "1px dashed var(--color-border)",
+                      color: "var(--color-text-muted)",
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                    }}
+                  >
+                    <Network size={11} />
+                    근거 그래프
+                  </button>
                 </div>
               )}
             </div>
@@ -989,6 +1020,17 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
         {chatTab === "chat" && <ChatContent />}
         {chatTab === "calendar" && <CalendarView />}
         {chatTab === "documents" && <DocumentsView />}
+        {chatTab === "graph" && (
+          <Suspense
+            fallback={
+              <div style={{ padding: 20, fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
+                그래프 로딩 중...
+              </div>
+            }
+          >
+            <GraphRagView />
+          </Suspense>
+        )}
         {/* MeetingView 항상 마운트 — 탭 전환 시 state 보존 (E-19 연장) */}
         <div style={{
           display: chatTab === "meeting" ? "flex" : "none",

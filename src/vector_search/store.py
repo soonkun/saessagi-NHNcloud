@@ -431,6 +431,26 @@ class VectorStore:
             logger.warning("get_chunks_by_doc_id 실패 (doc_id=%s): %s", doc_id, exc)
             return []
 
+    def get_chunks_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """chunk_id 목록으로 청크 row를 가져온다 (M_19 GraphRAG — 그래프 검색 결과의 본문 조회).
+
+        존재하지 않는 chunk_id는 조용히 누락된다 (고아 링크 허용).
+        """
+        if not chunk_ids:
+            return []
+        try:
+            escaped = ", ".join("'" + cid.replace("'", "''") + "'" for cid in chunk_ids[:200])
+            rows: list[dict[str, Any]] = (
+                self._tbl.search()
+                .where(f"chunk_id IN ({escaped})")
+                .limit(len(chunk_ids))
+                .to_list()
+            )
+            return rows
+        except Exception as exc:
+            logger.warning("get_chunks_by_chunk_ids 실패 (%d건 요청): %s", len(chunk_ids), exc)
+            return []
+
     def delete_by_doc_id(self, doc_id: str) -> int:
         """특정 문서의 모든 청크 삭제 (스펙 §4.6).
 

@@ -8,7 +8,7 @@ from loguru import logger
 
 from .errors import PrivacyViolationError
 
-_ALLOWED_SCHEMES = {"http", "https", "ws", "wss"}
+_ALLOWED_SCHEMES = {"http", "https", "ws", "wss", "bolt", "neo4j"}  # bolt/neo4j: M_19 GraphRAG
 
 _PRIVATE_NETWORKS_V4 = [
     ipaddress.IPv4Network("127.0.0.0/8"),  # loopback

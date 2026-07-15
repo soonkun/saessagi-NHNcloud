@@ -116,6 +116,11 @@ pip download \
     "numpy>=1.26,<3" \
     --dest "${WHEELS_DIR}"
 
+# M_19 GraphRAG — Neo4j 드라이버 (CR-18). Neo4j 서버+JRE는 별도 동봉 필요 (CR-18 배포 주의)
+pip download \
+    "neo4j>=5.20,<6" \
+    --dest "${WHEELS_DIR}"
+
 echo ""
 echo "=== [bundle_deps.sh] M_07 BGE-M3 모델 다운로드 ==="
 echo "  빌드 머신에서만 실행 — 사내 PC에서 실행 금지."

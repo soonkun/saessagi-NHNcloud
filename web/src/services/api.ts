@@ -5,6 +5,9 @@ import type {
   KnowledgeNote,
   KnowledgeNoteMeta,
   KnowledgeGraphData,
+  GraphRagData,
+  GraphRagEvidence,
+  GraphRagStatus,
 } from "../types";
 
 // Electron은 file:// 로드 → 상대경로가 백엔드로 라우팅되지 않으므로 절대 URL 필요
@@ -245,6 +248,36 @@ export async function deleteNote(slug: string): Promise<void> {
 
 export async function fetchKnowledgeGraph(): Promise<KnowledgeGraphData> {
   return apiFetch<KnowledgeGraphData>("/api/knowledge/graph");
+}
+
+// ────────────────────────────────────────────────────────────
+// M_19 GraphRAG API (CR-18)
+// ────────────────────────────────────────────────────────────
+
+export async function fetchGraphRag(limit = 500, types: string[] = []): Promise<GraphRagData> {
+  const q = new URLSearchParams({ limit: String(limit) });
+  if (types.length > 0) q.set("types", types.join(","));
+  return apiFetch<GraphRagData>(`/api/graphrag/graph?${q.toString()}`);
+}
+
+export async function fetchGraphRagStatus(): Promise<GraphRagStatus> {
+  return apiFetch<GraphRagStatus>("/api/graphrag/status");
+}
+
+export async function requestGraphReindex(docId?: string): Promise<{ scheduled: boolean; count: number }> {
+  return apiFetch<{ scheduled: boolean; count: number }>("/api/graphrag/reindex", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ doc_id: docId ?? null }),
+  });
+}
+
+export async function fetchGraphEvidence(): Promise<GraphRagEvidence | null> {
+  try {
+    return await apiFetch<GraphRagEvidence>("/api/graphrag/evidence/latest");
+  } catch {
+    return null; // 404 = 아직 근거 없음
+  }
 }
 
 // ────────────────────────────────────────────────────────────

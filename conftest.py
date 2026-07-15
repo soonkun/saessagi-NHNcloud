@@ -211,5 +211,5 @@ def _register_src_module(name: str) -> None:
         sys.modules.pop(name, None)
 
 
-for _src_mod_name in ("app", "vad", "asr", "tts"):
+for _src_mod_name in ("app", "vad", "asr", "tts", "graph_rag"):
     _register_src_module(_src_mod_name)
