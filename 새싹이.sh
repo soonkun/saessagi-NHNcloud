@@ -4,7 +4,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-UPSTREAM="$ROOT/upstream/Open-LLM-VTuber"
 
 # ── conf.yaml 부트스트랩 (API 키 포함이라 git 미추적) ─────────────────────────
 if [ ! -f "$ROOT/conf.yaml" ]; then
@@ -15,18 +14,6 @@ if [ ! -f "$ROOT/conf.yaml" ]; then
         echo "[오류] conf.yaml / conf.example.yaml 둘 다 없음." >&2
         exit 1
     fi
-fi
-
-# ── upstream 확인 (gitignore된 외부 클론 — bootstrap.py 가 담당) ──────────────
-if [ ! -d "$UPSTREAM/.git" ]; then
-    echo "[오류] upstream/Open-LLM-VTuber 가 없습니다. 먼저 실행하세요:" >&2
-    echo "  python3 scripts/bootstrap.py" >&2
-    exit 1
-fi
-
-if [ ! -f "$UPSTREAM/frontend/index.html" ]; then
-    echo "frontend 서브모듈 초기화 중..."
-    git -C "$UPSTREAM" submodule update --init --recursive
 fi
 
 # ── 프론트엔드 빌드 (dist 없거나 소스가 더 새로울 때) ─────────────────────────
@@ -50,14 +37,10 @@ if ! node "$ROOT/web/scripts/check-rebuild.mjs"; then
     fi
 fi
 
-# ── upstream 이 CWD에서 읽는 파일 배치 ────────────────────────────────────────
-ln -sf "$ROOT/conf.yaml" "$UPSTREAM/conf.yaml" 2>/dev/null || true
-cp -f "$ROOT/assets/character/saessagi/neutral.png" "$UPSTREAM/avatars/saessagi.png" 2>/dev/null || true
-
-# ── 환경 변수 ─────────────────────────────────────────────────────────────────
+# ── 환경 변수 (CR-17: vendor/ 벤더링 — upstream 클론 불필요) ──────────────────
 export SAESSAGI_ROOT="$ROOT"
 export SAESSAGI_CONFIG_PATH="$ROOT/conf.yaml"
-export PYTHONPATH="$ROOT:$ROOT/src:$UPSTREAM/src:$UPSTREAM"
+export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 
 echo ""
 echo "새싹이 시작 중..."
@@ -91,7 +74,7 @@ fi
 LOG="$ROOT/data/logs/backend.log"
 mkdir -p "$(dirname "$LOG")"
 (
-    cd "$UPSTREAM"
+    cd "$ROOT"
     exec uv run --project "$ROOT" uvicorn "app.main:create_app" --factory \
         --host 127.0.0.1 --port 12393
 ) >"$LOG" 2>&1 &

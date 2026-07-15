@@ -1,6 +1,6 @@
 # CLAUDE.md — 프로젝트 인덱스
 
-사내 오프라인 AI 비서 (Electron + Python 백엔드). upstream: `Open-LLM-VTuber`.
+사내 오프라인 AI 비서 (Electron + Python 백엔드). 대화 엔진: `vendor/open_llm_vtuber` (Open-LLM-VTuber 벤더링, CR-17 — 클론 불필요).
 
 ---
 
@@ -65,7 +65,7 @@ cd web && ELECTRON_BUILD=1 npm run build
 **규칙**: Electron 앱 기능 테스트 시에는 반드시 백엔드도 함께 실행해야 한다. 빠른 테스트라도 아래 순서를 지킬 것:
 ```bash
 # 1. 백엔드 시작
-cd /프로젝트루트 && export SAESSAGI_ROOT="$(pwd)" && export SAESSAGI_CONFIG_PATH="$(pwd)/conf.yaml" && export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/upstream/Open-LLM-VTuber/src:$(pwd)/upstream/Open-LLM-VTuber" && uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393 &
+cd /프로젝트루트 && export SAESSAGI_ROOT="$(pwd)" && export SAESSAGI_CONFIG_PATH="$(pwd)/conf.yaml" && export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/vendor" && uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393 &
 # 2. 백엔드 준비 확인
 until curl -sf http://127.0.0.1:12393 >/dev/null 2>&1; do sleep 1; done
 # 3. Electron 실행

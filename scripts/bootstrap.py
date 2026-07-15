@@ -65,40 +65,8 @@ def which(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-# upstream을 고정할 알려진 정상 커밋. patches/ 는 이 커밋 기준으로 적용된다.
-UPSTREAM_PINNED_COMMIT = "19b58b1"
-
-
-def apply_upstream_patches(root: Path, upstream: Path) -> None:
-    """patches/*.patch 를 upstream clone에 적용 (멱등).
-
-    upstream은 참조용 외부 의존성이라 직접 수정하지 않는 게 원칙이지만,
-    대화 루프 내부처럼 외부 후크가 없어 EXTEND(상속·래핑)로 풀 수 없는
-    소수의 수정은 여기 patch로 관리한다. 이렇게 하면 clone/재clone 후에도
-    패치가 보존되고(재설치 시 조용히 유실되지 않음), 무결성 테스트의
-    baseline과도 일치한다. 자세한 사유는 patches/README.md 참조.
-    """
-    patch_dir = root / "patches"
-    if not patch_dir.is_dir():
-        return
-    for patch in sorted(patch_dir.glob("*.patch")):
-        # 이미 적용됐으면(reverse-check 성공) 건너뜀 — 멱등
-        already = run(
-            "git",
-            "-C",
-            str(upstream),
-            "apply",
-            "--reverse",
-            "--check",
-            str(patch),
-            check=False,
-            capture=True,
-        )
-        if already.returncode == 0:
-            skip(f"upstream patch already applied: {patch.name}")
-            continue
-        run("git", "-C", str(upstream), "apply", str(patch))
-        ok(f"applied upstream patch: {patch.name}")
+# CR-17: upstream은 vendor/open_llm_vtuber 로 벤더링됨 (patches 반영 완료 상태).
+# 과거의 clone/patch 체계는 제거 — 자세한 내력은 vendor/README.md 참조.
 
 
 # ── entrypoint ─────────────────────────────────────────────────────────────
@@ -140,27 +108,12 @@ def main() -> None:
         ok("uv installed")
     print()
 
-    # ── 1. upstream clone ──────────────────────────────────────────────────
-    info("[1/6] Open-LLM-VTuber upstream...")
-    upstream = root / "upstream" / "Open-LLM-VTuber"
-    if (upstream / ".git").exists():
-        skip(f"{upstream} already exists")
+    # ── 1. vendor 확인 (CR-17: upstream 클론 대신 vendor/ 벤더링) ──────────
+    info("[1/6] vendored open_llm_vtuber...")
+    if (root / "vendor" / "open_llm_vtuber" / "__init__.py").exists():
+        ok("vendor/open_llm_vtuber present (git에 포함 — 클론 불필요)")
     else:
-        if upstream.exists():
-            shutil.rmtree(upstream)
-        run("git", "clone", "https://github.com/Open-LLM-VTuber/Open-LLM-VTuber.git", str(upstream))
-        # 재현성: 알려진 정상 커밋에 고정 (patches/ 가 이 커밋 기준)
-        run("git", "-C", str(upstream), "checkout", "--quiet", UPSTREAM_PINNED_COMMIT)
-        ok(f"cloned to {upstream} @ {UPSTREAM_PINNED_COMMIT}")
-
-    # 사내 필수 upstream 패치 적용 (멱등 — 기존 clone에도 안전)
-    apply_upstream_patches(root, upstream)
-
-    # frontend is a git submodule -- initialize if missing
-    if not (upstream / "frontend" / "index.html").exists():
-        warn("Initializing frontend submodule...")
-        run("git", "-C", str(upstream), "submodule", "update", "--init", "--recursive")
-        ok("frontend submodule initialized")
+        die("vendor/open_llm_vtuber 가 없습니다. git checkout이 온전한지 확인하세요.")
     print()
 
     # ── 2. Ollama / Gemma4 ─────────────────────────────────────────────────
@@ -297,7 +250,7 @@ def main() -> None:
     if (root / "src" / "app" / "main.py").exists():
         print("To start the server:")
         sep = ";" if IS_WIN else ":"
-        print(f"  set PYTHONPATH=src{sep}upstream/Open-LLM-VTuber/src{sep}upstream/Open-LLM-VTuber")
+        print(f"  set PYTHONPATH=.{sep}src{sep}vendor")
         print('  uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393')
         print()
         print("Open http://127.0.0.1:12393 in your browser.")

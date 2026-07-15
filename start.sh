@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-UPSTREAM="$ROOT/upstream/Open-LLM-VTuber"
 
 # conf.yaml 부트스트랩 — API 키를 포함하므로 git 미추적(.gitignore).
 # 없으면 템플릿(conf.example.yaml)에서 생성하고 키 입력을 안내한다.
@@ -16,12 +15,6 @@ if [ ! -f "$ROOT/conf.yaml" ]; then
     fi
 fi
 
-# Ensure frontend submodule is initialized
-if [ ! -f "$UPSTREAM/frontend/index.html" ]; then
-    echo "Initializing frontend submodule..."
-    git -C "$UPSTREAM" submodule update --init --recursive
-fi
-
 # 프론트엔드 빌드 (dist 없을 때만)
 if [ ! -f "$ROOT/web/dist/index.html" ]; then
     echo "프론트엔드 빌드 중..."
@@ -31,20 +24,15 @@ if [ ! -f "$ROOT/web/dist/index.html" ]; then
     else
         npm install
     fi
-    npm run build
+    ELECTRON_BUILD=1 npm run build
     cd "$ROOT"
 fi
 
-# upstream 코드가 CWD에서 conf.yaml을 직접 읽으므로 심볼릭 링크 배치
-ln -sf "$ROOT/conf.yaml" "$UPSTREAM/conf.yaml" 2>/dev/null || true
-
-# 캐릭터 아바타 이미지를 upstream avatars/ 에 복사 (서빙 경로 맞춤)
-cp -f "$ROOT/assets/character/saessagi/neutral.png" "$UPSTREAM/avatars/saessagi.png" 2>/dev/null || true
-
 # Project root for resolving data/assets paths (PathsConfig reads this)
+# CR-17: vendor/ 벤더링 — upstream 클론 불필요
 export SAESSAGI_ROOT="$ROOT"
 export SAESSAGI_CONFIG_PATH="$ROOT/conf.yaml"
-export PYTHONPATH="$ROOT:$ROOT/src:$UPSTREAM/src:$UPSTREAM"
+export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 
 echo ""
 echo "Starting AI Assistant server..."
@@ -52,6 +40,6 @@ echo "Open http://127.0.0.1:12393 in your browser."
 echo "Press Ctrl+C to stop."
 echo ""
 
-# Run from upstream dir so frontend/, live2d-models/, model_dict.json resolve correctly
-cd "$UPSTREAM"
+# 프로젝트 루트에서 실행 (model_dict.json·conf.yaml·characters/ 가 루트에 있음)
+cd "$ROOT"
 uv run --project "$ROOT" uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393

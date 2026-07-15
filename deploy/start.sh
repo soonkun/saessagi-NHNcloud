@@ -12,7 +12,7 @@ if [ ! -d ".venv" ]; then
     exit 1
 fi
 
-export PYTHONPATH="src:upstream/Open-LLM-VTuber/src:upstream/Open-LLM-VTuber"
+export PYTHONPATH=".:src:vendor"
 
 echo "[start] Ollama 실행 확인 중..."
 if ! pgrep -x ollama >/dev/null 2>&1; then

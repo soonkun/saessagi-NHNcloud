@@ -17,15 +17,10 @@ _SRC = _PROJECT_ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# upstream/Open-LLM-VTuber/src (open_llm_vtuber 패키지)
-_UPSTREAM_SRC = _PROJECT_ROOT / "upstream" / "Open-LLM-VTuber" / "src"
-if str(_UPSTREAM_SRC) not in sys.path:
-    sys.path.insert(1, str(_UPSTREAM_SRC))
-
-# upstream/Open-LLM-VTuber (prompts 등 루트 패키지)
-_UPSTREAM_ROOT = _PROJECT_ROOT / "upstream" / "Open-LLM-VTuber"
-if str(_UPSTREAM_ROOT) not in sys.path:
-    sys.path.insert(2, str(_UPSTREAM_ROOT))
+# vendor/ (open_llm_vtuber·prompts 패키지 — CR-17 벤더링, upstream 클론 불필요)
+_VENDOR = _PROJECT_ROOT / "vendor"
+if str(_VENDOR) not in sys.path:
+    sys.path.insert(1, str(_VENDOR))
 
 
 # upstream의 선택적 의존성을 mock으로 등록 (테스트 환경에서 설치되지 않은 패키지들)
@@ -65,7 +60,8 @@ _MOCK_PACKAGES = [
     "soundfile",
     # M_05 LLMAgent — anthropic SDK는 사용 안 하지만 upstream import가 요구
     "anthropic",
-    # upstream Open-LLM-VTuber — git clone 없는 환경(macOS 개발 머신 등)에서 mock 등록
+    # open_llm_vtuber — vendor/에 항상 존재하므로 find_spec에 걸려 mock되지 않음.
+    # (선택 의존성 미설치로 vendor import가 실패하는 환경 대비 안전망으로만 유지)
     "open_llm_vtuber",
     "open_llm_vtuber.asr",
     "open_llm_vtuber.asr.asr_interface",

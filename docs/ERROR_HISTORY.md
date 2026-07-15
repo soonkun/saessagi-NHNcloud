@@ -5,6 +5,26 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-56: 테스트 순서 의존 PyO3 ImportError — patch.dict(sys.modules) 안에서 처음 import된 Rust 확장이 증발 (2026-07-15)
+
+**증상**: 전체 스위트에서만 `tests/e2e/test_e2e_08_citation_links`가 `ImportError: PyO3 modules compiled for CPython 3.8 or older may only be initialized once per interpreter process`로 실패. 단독·대부분의 부분 조합에서는 통과 (3자 이상 상호작용).
+**원인**: `tests/app/test_service_context.py`가 `patch.dict(sys.modules, {...})` 컨텍스트 **안에서** `load_app_services()`를 호출 → 그 안에서 sentence_transformers→transformers→safetensors(Rust/PyO3) 체인이 프로세스 **최초로** import됨 → patch.dict는 종료 시 "컨텍스트 중 추가된 키"를 전부 제거하므로 이 모듈들이 sys.modules에서 증발 → PyO3 확장은 프로세스당 1회만 초기화 가능하므로 이후 e2e_08의 재import가 폭발. (이 체인이 컨텍스트 밖에서 먼저 import된 적이 있으면 스냅샷에 포함되어 안 터짐 — 순서 의존의 정체.)
+**수정**: `test_service_context.py` 모듈 레벨에서 `import sentence_transformers`를 선행(try/except) — patch.dict 스냅샷에 체인이 항상 포함되도록 고정.
+**검증**: 최소 재현 조합(test_service_context + e2e_08)이 수정 전 실패 → 수정 후 통과. 전체 942개 통과.
+**교훈**: **`patch.dict(sys.modules, ...)` 안에서 실 코드를 실행하면, 그 코드가 처음 import한 모든 모듈이 컨텍스트 종료와 함께 제거된다.** 순수 Python 모듈은 재import되지만 PyO3/Rust 확장은 프로세스당 1회 제약으로 죽는다. sys.modules를 패치하는 테스트에서 무거운 실 코드를 부르려면 해당 import 체인을 컨텍스트 밖에서 선행시킬 것. 그리고 **순서 의존 플레이크는 pytest-timeout(--timeout)으로 돌리면 행 대신 스택을 얻는다.**
+
+---
+
+## E-55: pii_mask 정규식이 초대형 로그 메시지에서 O(n²) 백트래킹 — 테스트/프로세스가 수십 분 멈춤 (2026-07-15)
+
+**증상**: 전체 pytest가 75% 지점에서 100% CPU로 20분 이상 무진행. pytest-timeout 스택으로 `src/app/logging.py pii_mask`에서 스핀 확인. 발화 조건: 앞선 테스트가 `init_logging()`으로 PII 필터를 설치한 상태에서 `test_a3_search_docs_query_1mb`(1MB 쿼리 거부 검사)가 dispatch 로그에 1MB 문자열을 실음.
+**원인**: `_EMAIL_RE = r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}"` — @ 없는 1MB 문자열에서 각 위치마다 `[\w.+-]+`가 끝까지 먹고 실패·백트래킹을 반복 → O(n²) (10¹² 스텝급). **실서비스에서도 사용자가 초대형 텍스트를 입력하면 로깅 경로에서 백엔드가 얼어붙는 실제 버그** (단독 테스트에서는 로깅 미초기화라 필터가 없어 재현 안 됐던 것).
+**수정**: `_pii_filter`에서 마스킹 전 메시지를 10,000자로 절단(`... (truncated N chars)` 표시). 마스킹은 절단 후 본문에만 적용되므로 PII 유출 없음. 1MB짜리 로그 라인 자체가 비정상이므로 관측성 손실도 없음.
+**검증**: 수정 후 해당 테스트 포함 전체 942개가 77초에 통과 (이전: 무한 대기).
+**교훈**: (1) **로그 필터/포매터에 정규식을 쓸 때는 입력 길이 상한부터** — 사용자 유래 문자열이 로그로 흘러들면 정규식 백트래킹이 DoS가 된다. (2) `[\w.+-]+@` 류의 "구분자 앞 탐욕 반복"은 구분자가 없는 입력에서 파국적이다. (3) **"테스트가 안 끝난다" = 행이 아니라 매우 느린 계산일 수 있다** — ps로 CPU 100%인지 (스핀) 0%인지 (대기) 먼저 볼 것.
+
+---
+
 ## E-54: 새 PC(WSL) 이식 시 "아무것도 안 됨" — conf.yaml 템플릿 초기화 + TTS 자산 부재가 LLM까지 전멸시킴 (2026-07-14)
 
 **증상**: Windows→WSL로 프로젝트 이식 후 캐릭터는 뜨는데 대화·TTS 전부 무반응. WS 테스트 시 `Error processing agent response: 'NoneType' object has no attribute 'chat'`, `/api/tts/speak` 무한 503.

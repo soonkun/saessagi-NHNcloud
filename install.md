@@ -43,7 +43,7 @@ python3 scripts/bootstrap.py
 이 스크립트가 자동으로 처리하는 것:
 
 1. **uv** 설치 (없을 때)
-2. **upstream/Open-LLM-VTuber 클론** — 고정 커밋 `19b58b1` 체크아웃 + `patches/` 필수 패치 적용 + frontend 서브모듈 초기화
+2. **vendor/open_llm_vtuber 존재 확인** — 대화 엔진은 리포지토리에 벤더링되어 있어 (CR-17) 별도 클론이 없다
 3. **Ollama LLM 모델** `gemma4:e4b` 다운로드 (~9GB, 이미 gemma4 계열이 있으면 건너뜀)
 4. **Python 가상환경(.venv) + 패키지 설치** (`uv sync`) + MeloTTS 패키지 설치
 5. **BGE-M3 임베딩 모델** 다운로드 (~1.5GB → `assets/models/bge-m3`, RAG 문서 검색용)
@@ -136,7 +136,6 @@ grep "model: gemma" conf.yaml
 | LLM 응답 없음 | `ollama list` 태그와 conf.yaml `model:` 불일치 (4단계 참조), 또는 `curl http://127.0.0.1:11434/api/version`으로 Ollama 생존 확인 |
 | 목소리만 안 나옴 (`/api/tts/speak` 503) | 백엔드 시작 직후에는 TTS 초기화에 ~8초 더 걸려 일시 503이 정상. 지속되면 3단계 확인 |
 | 흰 화면 | `web/dist`가 `ELECTRON_BUILD=1` 없이 빌드된 것. `cd web && ELECTRON_BUILD=1 npm run build` 후 재실행 (E-22) |
-| upstream 없음 오류 | `python3 scripts/bootstrap.py` 먼저 실행 |
 
 **금지**: 브라우저로 `http://127.0.0.1:12393`을 열지 말 것 — Electron 전용 UI다.
 
@@ -154,9 +153,8 @@ grep "model: gemma" conf.yaml
 ```bash
 # 터미널 1 — 백엔드
 export SAESSAGI_ROOT="$(pwd)" SAESSAGI_CONFIG_PATH="$(pwd)/conf.yaml"
-export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/upstream/Open-LLM-VTuber/src:$(pwd)/upstream/Open-LLM-VTuber"
-cd upstream/Open-LLM-VTuber
-uv run --project "$OLDPWD" uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
+export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/vendor"
+uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
 
 # 터미널 2 — 프론트엔드
 cd frontend && npm run start

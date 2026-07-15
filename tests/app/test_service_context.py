@@ -11,6 +11,17 @@ from avatar_state import AvatarState
 from app.config import AppConfig
 from app.service_context import AppServiceContext
 
+# PyO3 이중 초기화 방지 (E-56): 아래 테스트들이 patch.dict(sys.modules, ...) 안에서
+# load_app_services()를 호출하는데, 그 안에서 sentence_transformers→safetensors(Rust)
+# 체인이 "처음" import되면 patch.dict 종료 시 해당 모듈들이 sys.modules에서 제거된다.
+# safetensors의 PyO3 확장은 프로세스당 1회만 초기화 가능하므로, 이후 다른 테스트
+# (예: e2e_08)의 재import가 ImportError로 죽는다. patch.dict 스냅샷 "이전"에 미리
+# import해 두면 스냅샷에 포함되어 제거되지 않는다.
+try:  # pragma: no cover - 환경에 없으면 조용히 넘어감 (해당 조합 자체가 발생 안 함)
+    import sentence_transformers  # noqa: F401
+except ImportError:
+    pass
+
 
 def _make_ctx_raw() -> AppServiceContext:
     """upstream ServiceContext.__init__을 mock해 AppServiceContext 인스턴스 생성."""

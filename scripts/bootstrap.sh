@@ -189,7 +189,7 @@ echo ""
 if [ -f "src/app/main.py" ]; then
     # 완성된 repo를 클론한 경우
     echo -e "${CYAN}서버 실행 방법:${RESET}"
-    echo '  export PYTHONPATH="src:upstream/Open-LLM-VTuber/src:upstream/Open-LLM-VTuber"'
+    echo '  export PYTHONPATH=".:src:vendor"'
     echo '  uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393'
     echo ""
     echo -e "${GREEN}브라우저에서 http://127.0.0.1:12393 접속하면 새싹이가 반겨줍니다.${RESET}"

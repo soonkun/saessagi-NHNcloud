@@ -11,14 +11,8 @@ from pathlib import Path
 import pytest
 
 
-_UPSTREAM_VAD_DIR = (
-    Path(__file__).parent.parent.parent
-    / "upstream"
-    / "Open-LLM-VTuber"
-    / "src"
-    / "open_llm_vtuber"
-    / "vad"
-)
+# CR-17: upstream 클론 대신 vendor/ 벤더링본을 검사 (파일 내용 동일 — 해시 유효)
+_UPSTREAM_VAD_DIR = Path(__file__).parent.parent.parent / "vendor" / "open_llm_vtuber" / "vad"
 _SILERO_VAD_PY = _UPSTREAM_VAD_DIR / "silero.py"
 _HASHES_FILE = Path(__file__).parent / "upstream_hashes.json"
 

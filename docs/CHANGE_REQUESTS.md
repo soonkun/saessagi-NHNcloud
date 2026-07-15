@@ -1263,3 +1263,34 @@ RAG 코퍼스 증가(14k+ 청크)로 검색 지연 체감. E-40 분석 결과 �
 
 **의존성 추가**: @blocknote/core·react·mantine 0.51.x, @mantine/core·hooks 8.x
 (React 18 호환을 위해 Mantine 8 고정. 런타임 네트워크 호출 없음 — 오프라인 OK)
+
+---
+
+## CR-17: upstream Open-LLM-VTuber 벤더링 — 클론 의존 제거
+
+**상태**: APPROVED (사용자 채팅 승인 2026-07-15)
+
+**배경**:
+upstream은 150MB(.git 81MB + 미사용 frontend 서브모듈 44MB + 미사용 live2d-models
+15MB)인데 실제 의존은 Python 패키지 1.6MB + prompts 패키지 + model_dict.json뿐.
+우리 캐릭터는 web/dist 번들 PNG 스프라이트라 Live2D·upstream frontend를 쓰지 않는다.
+이미 고정 커밋(19b58b1) + patches/ 직접 패치 운영이라 "upstream 추종" 명분도 없었고,
+설치 시 git clone 네트워크 필수 + 패치 적용 + 무결성 테스트 + PYTHONPATH 4단이라는
+관리 비용만 남아 있었다 (E-54: 새 머신 이식 실패의 한 원인).
+
+**결정**:
+- `upstream/Open-LLM-VTuber/src/open_llm_vtuber` (patches 3건 적용된 상태) +
+  `prompts/` 패키지를 `vendor/`로 복사. MIT LICENSE 동봉 (vendor/LICENSE-Open-LLM-VTuber).
+- `model_dict.json` 프로젝트 루트로 복사, 빈 `characters/` 생성 (config alt 전환용).
+- 백엔드 실행 cwd를 upstream → **프로젝트 루트**로 변경.
+  PYTHONPATH = `$ROOT:$ROOT/src:$ROOT/vendor` 로 단순화.
+- bootstrap.py의 upstream clone/패치 단계, patches/ 적용 체계,
+  tests/app/test_upstream_integrity.py(무결성 baseline) 제거 — vendor/ 코드는
+  git이 직접 추적하므로 변조 감지는 git diff로 대체.
+- 런처(새싹이.sh·cmd, start.sh, deploy/)·conftest·pyproject pythonpath 갱신.
+
+**효과**: 새 머신에서 `git clone` 한 번으로 코드 완비 (VTuber 클론 불필요).
+설치 다운로드는 모델류(Ollama·TTS·BGE-M3)만 남음.
+
+**주의**: vendor/open_llm_vtuber 수정은 이제 일반 코드 수정과 동일하게 취급하되,
+대규모 개조 전 기존 EXTEND(src/에서 상속·래핑) 원칙은 유지한다.

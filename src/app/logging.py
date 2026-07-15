@@ -49,9 +49,18 @@ def pii_mask(text: str) -> str:
     return text
 
 
+# 로그 한 줄 최대 길이. 이보다 긴 메시지는 자르고 마스킹한다.
+# 초대형 문자열(예: 1MB 사용자 입력이 로그에 섞임)에 이메일 정규식이
+# O(n²) 백트래킹으로 폭주해 프로세스가 수십 분 멈추는 것을 방지 (E-55).
+_MAX_LOG_MSG_CHARS = 10_000
+
+
 def _pii_filter(record: dict) -> bool:  # type: ignore[type-arg]
-    """loguru sink 필터: record["message"]에서 PII를 마스킹."""
-    record["message"] = pii_mask(record["message"])
+    """loguru sink 필터: record["message"]를 길이 제한 후 PII 마스킹."""
+    msg = record["message"]
+    if len(msg) > _MAX_LOG_MSG_CHARS:
+        msg = msg[:_MAX_LOG_MSG_CHARS] + f"... (truncated {len(msg) - _MAX_LOG_MSG_CHARS} chars)"
+    record["message"] = pii_mask(msg)
     # formatted message도 마스킹 (loguru는 message를 직접 수정해야 함)
     return True
 
