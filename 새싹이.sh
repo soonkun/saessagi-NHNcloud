@@ -42,6 +42,25 @@ export SAESSAGI_ROOT="$ROOT"
 export SAESSAGI_CONFIG_PATH="$ROOT/conf.yaml"
 export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 
+# ── 한글 입력기 (fcitx5) — WSLg는 Windows IME를 못 받으므로 리눅스 IME 필요 ────
+# 설치: sudo apt install -y fcitx5 fcitx5-hangul
+# 주의: WSLg Weston이 Wayland input_method 바인딩을 거부하므로 X11 전용으로 실행
+# (wayland 애드온이 켜지면 즉시 종료됨 — systemd 유저 서비스 fcitx5.service 참조)
+if command -v fcitx5 >/dev/null 2>&1; then
+    export GTK_IM_MODULE=fcitx
+    export QT_IM_MODULE=fcitx
+    export XMODIFIERS=@im=fcitx
+    if ! pgrep -x fcitx5 >/dev/null 2>&1; then
+        # systemd 유저 서비스가 있으면 그걸로 (상주 보장), 없으면 직접 실행
+        if ! systemctl --user start fcitx5.service 2>/dev/null; then
+            env -u WAYLAND_DISPLAY nohup fcitx5 -d --disable=wayland,waylandim \
+                >/dev/null 2>&1 &
+        fi
+        sleep 1
+    fi
+    echo "한글 입력기(fcitx5) 활성 — 한/영 전환: 한/영 키 또는 Ctrl+Space"
+fi
+
 echo ""
 echo "새싹이 시작 중..."
 echo ""

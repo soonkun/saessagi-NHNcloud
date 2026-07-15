@@ -5,6 +5,16 @@ Claude Code가 이 프로젝트 작업 시 반드시 참고해야 할 오류 이
 
 ---
 
+## E-57: WSL 한글 입력 불가 — fcitx5가 WSLg Weston의 Wayland input_method 거부로 침묵 종료 (2026-07-15)
+
+**증상**: WSL에서 한/영 전환 불가(입력기 부재). fcitx5 + fcitx5-hangul 설치·환경변수 설정 후에도 여전히 불가 — fcitx5 데몬이 시작 직후 **exit 0으로 조용히 종료**되어 있었음.
+**원인**: WSLg의 Weston이 Wayland `zwp_input_method_v1` 바인딩을 거부(`permission to bind input_method denied`) → fcitx5의 wayland 애드온이 연결 에러(71)로 전체 종료. `WAYLAND_DISPLAY`를 안 줘도 `$XDG_RUNTIME_DIR`의 소켓을 자동 탐지해 붙으므로 env 제거로는 부족.
+**수정**: fcitx5를 **X11 전용**으로 실행 — `fcitx5 --disable=wayland,waylandim`. systemd 유저 서비스(`~/.config/systemd/user/fcitx5.service`, Restart=on-failure)로 상주화. 프로파일에 hangul 엔진 + 전환키(Ctrl+Space·Hangul) 설정. 새싹이.sh가 `GTK_IM_MODULE=fcitx` 등 export 후 서비스 기동. 상세 절차는 install.md §6.
+**검증**: 미니 Electron 창 + XTEST 자동 시나리오로 Ctrl+Space → 'gks' → **"한 " 조합·커밋 확인**. 실제 앱에서도 사용자 확인(앱은 fcitx5 상주 "이후" 시작해야 IME가 붙음 — 재시작 필요했음).
+**교훈**: (1) **WSLg에서 IME는 X11 경로만 가능** — Wayland 애드온은 명시적으로 꺼야 하며, 데몬이 exit 0으로 죽으니 journal을 봐야 원인이 보인다. (2) WSLg I/O 제약 목록(install.md §7): 텍스트 클립보드만 동기화, 이미지·파일 클립보드·파일 드래그는 Windows↔WSLg 간 불가 — "앱 버그"로 오인하기 쉬움. (3) IME·클립보드류는 미니 Electron 창 + XTEST 리그로 사용자 손 없이 자동 검증 가능.
+
+---
+
 ## E-56: 테스트 순서 의존 PyO3 ImportError — patch.dict(sys.modules) 안에서 처음 import된 Rust 확장이 증발 (2026-07-15)
 
 **증상**: 전체 스위트에서만 `tests/e2e/test_e2e_08_citation_links`가 `ImportError: PyO3 modules compiled for CPython 3.8 or older may only be initialized once per interpreter process`로 실패. 단독·대부분의 부분 조합에서는 통과 (3자 이상 상호작용).

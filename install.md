@@ -127,7 +127,80 @@ grep "model: gemma" conf.yaml
 
 ---
 
-## 6. 문제 해결
+## 6. 한글 입력 설정 (WSL 필수)
+
+WSLg 창은 Windows 한/영 IME를 받지 못하므로 리눅스 입력기(fcitx5)가 필요하다:
+
+```bash
+sudo apt install -y fcitx5 fcitx5-hangul
+```
+
+**주의: WSLg의 Weston은 Wayland 입력기 등록을 거부하므로 fcitx5를 X11 전용으로
+실행해야 한다** (기본 실행 시 `permission to bind input_method denied`로 즉시 종료됨).
+systemd 유저 서비스로 상주시키는 것을 권장:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/fcitx5
+
+cat > ~/.config/systemd/user/fcitx5.service <<'EOF'
+[Unit]
+Description=Fcitx5 Input Method (WSLg 한글 입력)
+
+[Service]
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/fcitx5 --disable=wayland,waylandim
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+cat > ~/.config/fcitx5/profile <<'EOF'
+[Groups/0]
+Name=Default
+Default Layout=us
+DefaultIM=hangul
+
+[Groups/0/Items/0]
+Name=keyboard-us
+
+[Groups/0/Items/1]
+Name=hangul
+
+[GroupOrder]
+0=Default
+EOF
+
+cat > ~/.config/fcitx5/config <<'EOF'
+[Hotkey/TriggerKeys]
+0=Control+space
+1=Hangul
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now fcitx5.service
+```
+
+`새싹이.sh`가 IME 환경 변수(GTK_IM_MODULE 등)를 자동 설정하므로, 이후 앱을
+(재)시작하면 입력창에서 **Ctrl+Space**로 한/영 전환이 된다.
+
+---
+
+## 7. WSLg 입출력 제약 (알아둘 것)
+
+Windows ↔ WSLg 창 사이에는 다음이 **전달되지 않는다** (앱 버그 아님, 플랫폼 제약):
+
+| 동작 | 지원 | 대안 |
+|------|------|------|
+| 텍스트 복사/붙여넣기 | ✅ | — |
+| 이미지(스크린샷) 붙여넣기 | ❌ | 캡처를 파일로 저장 → "클릭해서 파일 선택"에서 `/mnt/c/Users/<이름>/Pictures/Screenshots/` |
+| 파일 복사→붙여넣기 | ❌ | "클릭해서 파일 선택" |
+| 탐색기에서 파일 드래그 | ❌ | "클릭해서 파일 선택" (Windows 파일은 `/mnt/c/...`) |
+
+---
+
+## 8. 문제 해결
 
 | 증상 | 원인/해법 |
 |------|-----------|
