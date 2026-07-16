@@ -1,12 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { useStore } from "../store";
 import {
-  MessageCircle,
-  Calendar,
-  FolderOpen,
-  FileAudio,
-  BookOpen,
-  Settings,
   LayoutGrid,
   PanelLeftClose,
   Power,
@@ -19,20 +13,21 @@ import {
 } from "lucide-react";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
+import { DeepResearchView } from "./DeepResearchView";
 import { DocumentsView } from "./DocumentsView";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
 import { SettingsView } from "./SettingsView";
-import type { ChatTab } from "../types";
+import { CHAT_TABS } from "../chatTabs";
 
-const SIDEBAR_TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
-  { id: "chat", label: "새싹이", Icon: MessageCircle },
-  { id: "calendar", label: "일정표", Icon: Calendar },
-  { id: "notes", label: "업무 노트", Icon: BookOpen },
-  { id: "documents", label: "문서", Icon: FolderOpen },
-  { id: "meeting", label: "회의록", Icon: FileAudio },
-  { id: "settings", label: "설정", Icon: Settings },
-];
+// ForceGraph2D 번들이 커서 lazy — ChatPanel과 동일 패턴 (청크 공유)
+const GraphRagView = lazy(() => import("./GraphRagView"));
+
+const SIDEBAR_TABS = CHAT_TABS.map(({ id, desktopLabel, Icon }) => ({
+  id,
+  label: desktopLabel,
+  Icon,
+}));
 
 const SAMPLE_PROMPTS = [
   { title: "오늘 한 업무 기록", body: "오늘 ⟨이 자료⟩로 ⟨이 업무⟩를 이렇게 처리했어" },
@@ -328,6 +323,29 @@ export function DesktopView(): React.ReactElement {
         </div>
         {chatTab === "calendar" && <CalendarView />}
         {chatTab === "documents" && <DocumentsView />}
+        {chatTab === "graph" && (
+          <Suspense
+            fallback={
+              <div style={{ padding: 20, fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
+                그래프 로딩 중...
+              </div>
+            }
+          >
+            <GraphRagView />
+          </Suspense>
+        )}
+        {/* DeepResearchView 항상 마운트 — 진행 중 리서치 state 보존 (E-19/E-20) */}
+        <div
+          style={{
+            display: chatTab === "research" ? "flex" : "none",
+            flexDirection: "column",
+            flex: 1,
+            overflow: "hidden",
+            minHeight: 0,
+          }}
+        >
+          <DeepResearchView desktop />
+        </div>
         <div
           style={{
             display: chatTab === "meeting" ? "flex" : "none",

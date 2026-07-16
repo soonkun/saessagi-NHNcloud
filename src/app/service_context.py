@@ -64,6 +64,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # M_19: GraphRagService 슬롯 (init_agent에서 조립 — 추출 LLM이 필요)
         self.graph_rag_service: Any = None  # GraphRagService | None
         self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
+        # M_20: DeepResearchService 슬롯 (init_agent에서 조립 — LLM·검색 서비스 필요)
+        self.deep_research_service: Any = None  # DeepResearchService | None
         self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
@@ -558,6 +560,26 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         if self.meeting_minutes_service is not None:
             self.meeting_minutes_service.set_agent(gemma_agent)
             logger.info("AppServiceContext.init_agent: MeetingMinutesService.set_agent 완료")
+
+        # (10) M_20 딥 리서치 — agent·검색 서비스 조립 (agent 재초기화마다 새 인스턴스)
+        if self.rag_service is not None:
+            try:
+                from deep_research import DeepResearchService
+
+                self.deep_research_service = DeepResearchService(
+                    agent=gemma_agent,
+                    rag_service=self.rag_service,
+                    graph_rag_service=self.graph_rag_service,
+                )
+                logger.info(
+                    "AppServiceContext.init_agent: DeepResearchService 배선 완료 "
+                    f"(graph={'on' if self.graph_rag_service is not None else 'off'})"
+                )
+            except Exception as exc:
+                logger.warning(f"DeepResearchService 조립 실패 (기능 비활성): {exc!r}")
+                self.deep_research_service = None
+        else:
+            self.deep_research_service = None
 
     async def load_app_services(self, app_config: "AppConfig") -> None:
         """본 프로젝트 고유 서비스(RAG/Calendar/Idle/Avatar/Proactive/Screenshot) 초기화.

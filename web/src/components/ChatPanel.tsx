@@ -2,11 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  MessageCircle,
-  Calendar,
-  FolderOpen,
-  FileAudio,
-  Settings,
   BookOpen,
   Send,
   Mic,
@@ -42,6 +37,7 @@ function stripNoteMarkers(text: string): string {
 }
 import { startVoice, stopVoice } from "../services/voice";
 import { CalendarView } from "./CalendarView";
+import { DeepResearchView } from "./DeepResearchView";
 import { DocumentsView } from "./DocumentsView";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
@@ -50,7 +46,8 @@ import { lazy, Suspense } from "react";
 
 // M_19: 그래프 탭 — force-graph 번들은 탭 진입 시에만 로드
 const GraphRagView = lazy(() => import("./GraphRagView"));
-import type { Position, ChatTab } from "../types";
+import type { Position } from "../types";
+import { CHAT_TABS } from "../chatTabs";
 
 // 그래프 탭 추가로 좌우 여유 확보 (사용자 요청 2026-07-16: 580 → 700)
 const PANEL_W = 700;
@@ -86,15 +83,7 @@ const STATUS_COLOR: Record<string, string> = {
   speaking: "#4caf84",
 };
 
-const TABS: { id: ChatTab; label: string; Icon: React.ElementType }[] = [
-  { id: "chat", label: "새싹이", Icon: MessageCircle },
-  { id: "calendar", label: "일정표", Icon: Calendar },
-  { id: "notes", label: "노트", Icon: BookOpen },
-  { id: "documents", label: "문서", Icon: FolderOpen },
-  { id: "graph", label: "그래프", Icon: Network },
-  { id: "meeting", label: "회의록", Icon: FileAudio },
-  { id: "settings", label: "설정", Icon: Settings },
-];
+const TABS = CHAT_TABS.map(({ id, petLabel, Icon }) => ({ id, label: petLabel, Icon }));
 
 // ────────────────────────────────────────────────────────────
 // Chat content
@@ -1032,6 +1021,16 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
             <GraphRagView />
           </Suspense>
         )}
+        {/* DeepResearchView 항상 마운트 — 진행 중 리서치 state 보존 (E-19/E-20) */}
+        <div style={{
+          display: chatTab === "research" ? "flex" : "none",
+          flexDirection: "column",
+          flex: 1,
+          overflow: "hidden",
+          minHeight: 0,
+        }}>
+          <DeepResearchView />
+        </div>
         {/* MeetingView 항상 마운트 — 탭 전환 시 state 보존 (E-19 연장) */}
         <div style={{
           display: chatTab === "meeting" ? "flex" : "none",

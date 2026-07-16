@@ -15,8 +15,6 @@ export type Emotion =
 
 export type AiStatus = "idle" | "thinking" | "speaking";
 
-export type SidebarView = "calendar" | "documents" | "settings";
-
 export type ChatTab =
   | "chat"
   | "calendar"
@@ -24,6 +22,7 @@ export type ChatTab =
   | "meeting"
   | "notes"
   | "graph"
+  | "research"
   | "settings";
 
 // ── M_19 GraphRAG (CR-18) ──────────────────────────────────────────────────

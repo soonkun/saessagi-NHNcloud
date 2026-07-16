@@ -459,6 +459,7 @@ Phase 1 산출물. 구현은 Phase 2에서 이 계약대로만 이루어진다.
 | M_16 | IntentGate | NEW | ✅ DONE (E2E 검증: calendar_add/doc_query/work_query 실데이터 확인) | M_05 GemmaChatAgent.complete_json, M_07 VectorSearch (소스 필터 보강) |
 | M_18 | SearchUpgrade (ANN 인덱스+리랭커+하이브리드) | NEW | ✅ DONE (실측: retrieve 259ms, recall@8 100%, 키워드 쿼리 적중 확인 — CR-06/E-40) | M_07 VectorSearch, bge-reranker-v2-m3 |
 | M_19 | GraphRAG (Neo4j 엔티티그래프 하이브리드 + 그래프 탭 시각화) | NEW | ✅ DONE (실측 2026-07-16: 문서 2건→엔티티 8·관계 9 추출, 교차 질의에 "하이브리드 융합: 벡터=2+그래프=2" 주입 로그, evidence API·그래프 탭 CDP 캡처 확인 — CR-18) | M_05 complete_json, M_07 VectorSearch, M_15 KnowledgeService, Neo4j 5.x(선택, graphrag.enabled) |
+| M_20 | DeepResearch (계획→반복검색→격차분석→종합, 3모드: 중복성검토·신규과제발굴·계획서초안) | NEW | ✅ DONE (실측 2026-07-16: duplication 모드 SSE E2E 30초 — 플래너 질의 5+보완 2, "하이브리드 융합: 벡터=5+그래프=2" 로그, 실문서 2건 [1][2] 인용 보고서 2,249자, 단위 10건 PASS — CR-20) | M_05 complete_json/complete_text, M_07/M_18 VectorSearch, M_19 GraphRAG(선택, 벡터-only 폴백), document_ingest 격리 파서 |
 
 ---
 

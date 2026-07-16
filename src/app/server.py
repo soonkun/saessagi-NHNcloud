@@ -68,6 +68,7 @@ class AppWebSocketServer:
         from .tts_routes import router as tts_router
         from .knowledge_routes import router as knowledge_router
         from .graphrag_routes import router as graphrag_router  # M_19
+        from .deep_research_routes import router as deep_research_router  # M_20
 
         # service_context를 request.app.state에서 접근 가능하도록 설정
         self.app.state.service_context = default_context_cache
@@ -78,6 +79,7 @@ class AppWebSocketServer:
         self.app.include_router(tts_router)
         self.app.include_router(knowledge_router)
         self.app.include_router(graphrag_router)  # M_19
+        self.app.include_router(deep_research_router)  # M_20
 
         # 캐시 디렉토리
         cache_dir = "cache"

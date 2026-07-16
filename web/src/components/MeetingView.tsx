@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { FileAudio, Download, Loader, ChevronRight, RotateCcw, X } from "lucide-react";
 import { API_BASE } from "../services/api";
+import { readSseStream } from "../services/sse";
 import { useStore, type MeetingStepStatus } from "../store";
 import { speak } from "../services/tts";
 
@@ -28,33 +29,7 @@ interface SseEvent {
   expires_at?: string;
 }
 
-async function readSseStream(
-  res: Response,
-  onEvent: (evt: SseEvent) => void,
-): Promise<void> {
-  if (!res.body) throw new Error("응답 스트림이 없습니다.");
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const parts = buf.split("\n\n");
-    buf = parts.pop() ?? "";
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data:")) continue;
-      let evt: SseEvent;
-      try {
-        evt = JSON.parse(line.slice(5).trim()) as SseEvent;
-      } catch {
-        continue; // JSON 파싱 실패만 무시
-      }
-      onEvent(evt); // 콜백 에러는 호출자로 전파
-    }
-  }
-}
+// SSE 리더는 services/sse.ts 공용 모듈 사용 (M_20에서 추출 — DeepResearchView와 공유)
 
 // ────────────────────────────────────────────────────────────
 // 공통 컴포넌트
@@ -226,7 +201,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       const res = await fetch(API_BASE + "/api/meeting-minutes/transcribe-stream", { method: "POST", body: form });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       let result = "";
-      await readSseStream(res, (evt) => {
+      await readSseStream<SseEvent>(res, (evt) => {
         if (evt.message) setStep1Steps((p) => [...p, evt.message!]);
         if (evt.stage === "done" && evt.transcript) result = evt.transcript;
         if (evt.stage === "error") throw new Error(evt.message ?? "전사 실패");
@@ -256,7 +231,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       const res = await fetch(API_BASE + "/api/meeting-minutes/summarize-stream", { method: "POST", body: form });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       let result = "";
-      await readSseStream(res, (evt) => {
+      await readSseStream<SseEvent>(res, (evt) => {
         if (evt.message) setStep2Steps((p) => [...p, evt.message!]);
         if (evt.stage === "done" && evt.meeting_notes) result = evt.meeting_notes;
         if (evt.stage === "error") throw new Error(evt.message ?? "회의록 작성 실패");
@@ -286,7 +261,7 @@ export function MeetingView({ desktop = false }: { desktop?: boolean }): React.R
       const res = await fetch(API_BASE + "/api/meeting-minutes/generate-stream", { method: "POST", body: form });
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       let dlUrl = "";
-      await readSseStream(res, (evt) => {
+      await readSseStream<SseEvent>(res, (evt) => {
         if (evt.message) setStep3Steps((p) => [...p, evt.message!]);
         if (evt.stage === "done" && evt.download_url) dlUrl = evt.download_url;
         if (evt.stage === "error") throw new Error(evt.message ?? "결과보고서 생성 실패");
