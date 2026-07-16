@@ -87,6 +87,17 @@ snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', cache_dir='ass
 "
 ```
 
+(선택) 이미지·스크린샷 첨부를 읽으려면 비전 모델을 받아둔다 (~6GB).
+gemma4 등 텍스트 전용 메인 모델은 이미지를 못 읽으므로, 이미지 턴만 이 모델이 대신 판독한다:
+
+```bash
+ollama pull qwen2.5vl:7b   # 한글 OCR 우수
+```
+
+받은 뒤 설정 화면 "보조 모델" 탭에서 비전 모델로 선택하거나, conf.yaml의
+`app.ollama.vision_model: "qwen2.5vl:7b"`로 지정한다. 없으면 이미지 첨부 시
+메인 모델이 그대로 처리를 시도한다 (텍스트 전용 모델이면 내용 파악 실패).
+
 ---
 
 ## 4. 설정 확인 (conf.yaml)

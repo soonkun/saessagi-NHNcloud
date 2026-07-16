@@ -103,7 +103,7 @@ async def set_model(body: SetModelRequest, request: Request) -> dict[str, str]:
             lambda m_: m_.group(1) + f'"{new_model}"',
             text,
         )
-        conf.write_text(encoding="utf-8",data=text)
+        conf.write_text(encoding="utf-8", data=text)
         logger.info(f"conf.yaml model 업데이트 완료: {new_model}")
     except Exception as exc:
         logger.warning(f"conf.yaml 업데이트 실패: {exc}")
@@ -229,8 +229,9 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
         _set_upstream_llm_provider(raw, "ollama_llm")
 
     try:
-        conf.write_text(encoding="utf-8",data=
-            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
         )
         logger.info(f"conf.yaml LLM 공급자 전환 완료: {provider}")
     except Exception as exc:
@@ -407,8 +408,9 @@ async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[
         ig_section["timeout_seconds"] = body.timeout_seconds
 
     try:
-        conf.write_text(encoding="utf-8",data=
-            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
         )
         logger.info("conf.yaml intent_gate 설정 저장 완료")
     except Exception as exc:
@@ -450,6 +452,184 @@ async def set_intent_gate(body: SetIntentGateRequest, request: Request) -> dict[
         return {"status": "ok"}
     except Exception as exc:
         logger.error(f"intent_gate agent 재초기화 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+
+# ── GET /api/settings/vision-model ───────────────────────────────────────────
+
+
+@router.get("/vision-model")
+async def get_vision_model(request: Request) -> dict[str, str]:
+    """이미지 첨부 턴 전용 비전 모델 설정을 반환한다.
+
+    빈 문자열이면 비전 라우팅 없이 메인 모델이 그대로 처리한다.
+    (OpenAI 공급자일 때는 gpt-4o 이상이 자체 비전 처리 — 이 설정은 Ollama 전용.)
+    """
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    vision_model = app_cfg.ollama.vision_model if app_cfg else ""
+    return {"vision_model": vision_model}
+
+
+# ── POST /api/settings/vision-model ──────────────────────────────────────────
+
+
+class SetVisionModelRequest(BaseModel):
+    vision_model: str  # 빈 문자열 = 비전 라우팅 해제 (메인 모델 사용)
+
+
+@router.post("/vision-model")
+async def set_vision_model(body: SetVisionModelRequest, request: Request) -> dict[str, Any]:
+    """비전 모델을 설정하고 agent를 재초기화한다.
+
+    conf.yaml의 app.ollama.vision_model을 갱신하고 in-memory 반영 후
+    agent 재초기화 (vision_model은 build_chat_agent에서 배선되므로 재초기화 필요).
+    """
+    new_model = body.vision_model.strip()
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+
+    conf = _conf_path()
+    try:
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    app_section = raw.setdefault("app", {})
+    app_section.setdefault("ollama", {})["vision_model"] = new_model
+
+    try:
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
+        )
+        logger.info(f"conf.yaml vision_model 저장 완료: {new_model or '(해제)'}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    if app_cfg:
+        app_cfg.ollama.vision_model = new_model
+
+    if ctx is None:
+        return {"vision_model": new_model, "status": "conf_only"}
+
+    ctx.agent_engine = None
+    try:
+        char_cfg = ctx.character_config
+        await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
+        logger.info(f"vision_model 변경 후 agent 재초기화 완료: {new_model or '(해제)'}")
+        return {"vision_model": new_model, "status": "ok"}
+    except Exception as exc:
+        logger.error(f"vision_model agent 재초기화 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+
+# ── GET /api/settings/graphrag-extraction ────────────────────────────────────
+
+
+@router.get("/graphrag-extraction")
+async def get_graphrag_extraction(request: Request) -> dict[str, Any]:
+    """지식그래프 인덱싱(문서 임베딩 시 개체·관계 추출)용 LLM 설정을 반환한다."""
+    from .config import GraphRagConfig
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    gr = app_cfg.graphrag if app_cfg else None
+
+    default = GraphRagConfig()
+    enabled = gr.enabled if gr else default.enabled
+    provider = gr.extraction_provider if gr else default.extraction_provider
+    provider_str = getattr(provider, "value", str(provider))
+    ollama_model = gr.extraction_ollama_model if gr else default.extraction_ollama_model
+    openai_model = gr.extraction_openai_model if gr else default.extraction_openai_model
+
+    return {
+        "enabled": enabled,
+        "provider": provider_str,
+        "ollama_model": ollama_model,
+        "openai_model": openai_model,
+    }
+
+
+# ── POST /api/settings/graphrag-extraction ───────────────────────────────────
+
+
+class SetGraphragExtractionRequest(BaseModel):
+    provider: str | None = None  # "same_as_chat" | "ollama" | "openai"
+    ollama_model: str | None = None
+    openai_model: str | None = None
+
+
+@router.post("/graphrag-extraction")
+async def set_graphrag_extraction(
+    body: SetGraphragExtractionRequest, request: Request
+) -> dict[str, Any]:
+    """지식그래프 추출 LLM 설정을 저장하고 즉시 적용한다.
+
+    conf.yaml의 app.graphrag.extraction_* 키를 갱신하고 in-memory 반영 후
+    agent 재초기화 (GraphRagService의 추출 LLM은 init_agent에서 조립되므로 재초기화 필요).
+    """
+    from .config import IntentGateProviderKind
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+
+    if body.provider is not None:
+        try:
+            IntentGateProviderKind(body.provider)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"provider는 'same_as_chat', 'ollama', 'openai' 중 하나여야 합니다: {body.provider!r}",
+            ) from None
+
+    conf = _conf_path()
+    try:
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    app_section = raw.setdefault("app", {})
+    gr_section = app_section.setdefault("graphrag", {})
+    if body.provider is not None:
+        gr_section["extraction_provider"] = body.provider
+    if body.ollama_model is not None:
+        gr_section["extraction_ollama_model"] = body.ollama_model
+    if body.openai_model is not None:
+        gr_section["extraction_openai_model"] = body.openai_model
+
+    try:
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
+        )
+        logger.info("conf.yaml graphrag extraction 설정 저장 완료")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    # in-memory 업데이트
+    if app_cfg:
+        updates: dict[str, Any] = {}
+        if body.provider is not None:
+            updates["extraction_provider"] = IntentGateProviderKind(body.provider)
+        if body.ollama_model is not None:
+            updates["extraction_ollama_model"] = body.ollama_model
+        if body.openai_model is not None:
+            updates["extraction_openai_model"] = body.openai_model
+        app_cfg.graphrag = app_cfg.graphrag.model_copy(update=updates)
+
+    if ctx is None:
+        return {"status": "conf_only"}
+
+    ctx.agent_engine = None
+    try:
+        char_cfg = ctx.character_config
+        await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
+        logger.info("graphrag extraction 변경 후 agent 재초기화 완료")
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.error(f"graphrag extraction agent 재초기화 실패: {exc}")
         raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
 
 
@@ -601,8 +781,9 @@ async def _save_prompt(
         app_section["meeting_minutes_prompt"] = prompt
 
     try:
-        conf.write_text(encoding="utf-8",data=
-            yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False)
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
         )
         logger.info(f"M_17: agent_prompts.{key} 저장 완료 (길이={len(prompt)})")
     except Exception as exc:

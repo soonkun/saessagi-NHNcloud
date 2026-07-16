@@ -153,7 +153,8 @@ app:
     base_url: http://127.0.0.1:11434
     model: gemma4:e4b
     # 이미지(스크린샷) 첨부 턴 전용 비전 모델. 비우면 메인 모델 사용.
-    # 메인 모델이 이미지 OCR을 못 할 때 지정 (예: qwen2.5vl:7b — 한글 OCR 우수).
+    # 메인 모델이 이미지 OCR을 못 할 때 지정 (예: qwen2.5vl:7b — 한글 OCR 우수, ollama pull 필요).
+    # 설정 화면 "보조 모델" 탭에서도 변경 가능.
     vision_model: ""
     keep_alive_seconds: 300
     request_timeout_seconds: 120
@@ -186,6 +187,7 @@ app:
     max_hops: 2
     # 추출 LLM: same_as_chat(기본) | ollama | openai — 업로드 시 개체·관계 추출용.
     # 예) 더 좋은 로컬 모델: extraction_provider: ollama + extraction_ollama_model: qwen3:14b
+    # 설정 화면 "보조 모델" 탭에서도 변경 가능.
     extraction_provider: same_as_chat
     extraction_ollama_model: gemma4:e4b
     extraction_openai_model: gpt-4o-mini

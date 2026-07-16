@@ -1328,3 +1328,31 @@ upstream은 150MB(.git 81MB + 미사용 frontend 서브모듈 44MB + 미사용 l
 **배포 주의**: 사내 오프라인 배포에서 GraphRAG를 켜려면 Neo4j 서버+JRE 동봉이 필요
 (번들 크기·설치 복잡도 증가). V2에서 Kuzu 전환을 결정하면 GraphStore 구현체 교체만으로
 해소된다 — 이것이 추상화를 두는 이유.
+
+---
+
+## CR-19: 보조 모델 설정 UI — 비전 모델·지식그래프 추출 LLM 분리 선택
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-16 — "세팅에서 비전모델은 뭘 쓸지, 임베딩 할 때 LLM 뭐 쓸지 분리해서 결정하게 해 달라")
+
+**배경**:
+- 비전 모델(`app.ollama.vision_model`, 이미지 첨부 턴 전용 OCR 분기)과 지식그래프
+  추출 LLM(`app.graphrag.extraction_*`, 문서 임베딩·인덱싱 시 개체·관계 추출)이
+  conf.yaml 직접 편집으로만 변경 가능했다. 사용자가 설정 화면에서 메인 대화 모델과
+  분리해 선택할 수 있기를 요청.
+- 비전 모델 실사용을 위해 `qwen2.5vl:7b`(~6GB, 한글 OCR 우수) 다운로드 절차도
+  install.md에 누락돼 있었다.
+
+**구현**:
+- 백엔드: `GET/POST /api/settings/vision-model`, `GET/POST /api/settings/graphrag-extraction`
+  (settings_routes.py — intent-gate와 동일 패턴: conf.yaml 갱신 → in-memory 반영 →
+  init_agent 재초기화. 두 모델 모두 init_agent에서 배선되므로 재초기화로 즉시 적용).
+- 프론트: SettingsView에 "보조 모델 (비전·그래프)" 섹션 신설 — 비전 Ollama 모델
+  드롭다운(빈값 = 메인 모델 직접 처리) + 추출 LLM 3-공급자 선택(same_as_chat/ollama/openai).
+  펫·데스크톱 두 레이아웃 모두 노출.
+- install.md: `ollama pull qwen2.5vl:7b` 선택 절차 추가. conf.yaml 기본 비전 모델 지정.
+
+**검증**: 실서버 E2E — GET/POST 왕복(해제↔재설정, provider 전환, 잘못된 provider 422),
+백엔드 로그에 `vision_model=qwen2.5vl:7b` 배선·`추출모델=` 라벨 전환 확인,
+qwen2.5vl:7b OCR 스모크(한글 프롬프트로 이미지 텍스트 정확 판독). pytest 969 passed.
+

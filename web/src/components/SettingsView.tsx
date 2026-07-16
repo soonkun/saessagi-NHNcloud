@@ -57,6 +57,68 @@ async function apiSetIntentGate(body: {
   }
 }
 
+// ── 비전 모델 (이미지 첨부 턴 전용) ──────────────────────────────────────────
+
+async function fetchVisionModel(): Promise<string | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/vision-model");
+    if (!res.ok) return null;
+    const data = (await res.json()) as { vision_model: string };
+    return data.vision_model;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSetVisionModel(visionModel: string): Promise<boolean> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/vision-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vision_model: visionModel }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── 지식그래프 추출 LLM (문서 인덱싱 시 개체·관계 추출) ─────────────────────
+
+interface GraphExtractionState {
+  enabled: boolean;
+  provider: "ollama" | "openai" | "same_as_chat";
+  ollama_model: string;
+  openai_model: string;
+}
+
+async function fetchGraphExtraction(): Promise<GraphExtractionState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/graphrag-extraction");
+    if (!res.ok) return null;
+    return (await res.json()) as GraphExtractionState;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSetGraphExtraction(body: {
+  provider?: string;
+  ollama_model?: string;
+  openai_model?: string;
+}): Promise<boolean> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/graphrag-extraction", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 // ── Agent Prompts (M_17) ────────────────────────────────────────────────────
 
 interface PromptInfo {
@@ -184,6 +246,7 @@ const petCardStyle: React.CSSProperties = {
 type SettingsSection =
   | "theme"
   | "llm"
+  | "models"
   | "intent"
   | "prompts"
   | "voice"
@@ -193,6 +256,7 @@ type SettingsSection =
 const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
   { id: "theme", label: "화면 (테마·글씨 크기)" },
   { id: "llm", label: "LLM" },
+  { id: "models", label: "보조 모델 (비전·그래프)" },
   { id: "intent", label: "의도 분류기" },
   { id: "prompts", label: "지침 관리" },
   { id: "voice", label: "음성" },
@@ -319,9 +383,71 @@ export function SettingsView({
   const [llmSaving, setLlmSaving] = useState(false);
   const [llmSaved, setLlmSaved] = useState(false);
 
+  // 비전 모델 상태 (이미지 첨부 턴 전용, Ollama)
+  const [visionModel, setVisionModel] = useState("");
+  const [visionSaving, setVisionSaving] = useState(false);
+  const [visionSaved, setVisionSaved] = useState(false);
+
+  // 지식그래프 추출 LLM 상태 (문서 인덱싱 시 개체·관계 추출)
+  const [gxEnabled, setGxEnabled] = useState(false);
+  const [gxProvider, setGxProvider] = useState<
+    "ollama" | "openai" | "same_as_chat"
+  >("same_as_chat");
+  const [gxOllamaModel, setGxOllamaModel] = useState("");
+  const [gxOpenaiModel, setGxOpenaiModel] = useState("gpt-4o-mini");
+  const [gxSaving, setGxSaving] = useState(false);
+  const [gxSaved, setGxSaved] = useState(false);
+
   // 데스크톱 마스터-디테일: 현재 선택된 카테고리
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("theme");
+
+  // 비전 모델·그래프 추출 LLM 초기 로드
+  useEffect(() => {
+    void fetchVisionModel().then((m) => {
+      if (m !== null) setVisionModel(m);
+    });
+    void fetchGraphExtraction().then((s) => {
+      if (!s) return;
+      setGxEnabled(s.enabled);
+      setGxProvider(s.provider);
+      setGxOllamaModel(s.ollama_model);
+      setGxOpenaiModel(s.openai_model || "gpt-4o-mini");
+    });
+  }, []);
+
+  async function handleVisionSave(): Promise<void> {
+    if (visionSaving) return;
+    setVisionSaving(true);
+    const ok = await apiSetVisionModel(visionModel);
+    setVisionSaving(false);
+    if (ok) {
+      setVisionSaved(true);
+      setTimeout(() => setVisionSaved(false), 2500);
+    }
+  }
+
+  async function handleGxSave(): Promise<void> {
+    if (gxSaving) return;
+    setGxSaving(true);
+    const body: {
+      provider: string;
+      ollama_model?: string;
+      openai_model?: string;
+    } = { provider: gxProvider };
+    if (gxProvider === "ollama" && gxOllamaModel) {
+      body.ollama_model = gxOllamaModel;
+    }
+    if (gxProvider === "openai" && gxOpenaiModel) {
+      body.openai_model = gxOpenaiModel;
+    }
+    const ok = await apiSetGraphExtraction(body);
+    setGxSaving(false);
+    if (ok) {
+      setGxSaved(true);
+      setTimeout(() => setGxSaved(false), 2500);
+    }
+  }
 
   // 의도 분류기 초기 로드 (M_16)
   useEffect(() => {
@@ -714,6 +840,174 @@ export function SettingsView({
             : llmSaved
               ? "전환 완료 ✓"
               : "LLM 적용 (백엔드 재초기화)"}
+        </button>
+      </>
+    );
+  }
+
+  function renderModels(): React.ReactElement {
+    return (
+      <>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
+          비전 모델 (이미지 인식)
+        </h3>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            marginBottom: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          이미지·스크린샷 첨부 시에만 사용하는 전용 모델입니다. 메인 모델(gemma4
+          등)이 이미지를 못 읽을 때 여기서 지정한 비전 모델이 먼저 이미지를
+          판독하고, 그 내용을 메인 모델에 넘깁니다. 한글 OCR은{" "}
+          <code>qwen2.5vl:7b</code>를 권장합니다. ChatGPT(GPT-4o 이상) 사용
+          중에는 자체 비전 처리라 이 설정이 적용되지 않습니다.
+        </p>
+        <label style={labelStyle}>비전 Ollama 모델</label>
+        <select
+          value={visionModel}
+          onChange={(e) => setVisionModel(e.target.value)}
+          style={{ ...inputStyle, cursor: "pointer", appearance: "auto" }}
+        >
+          <option value="">— 사용 안 함 (메인 모델이 직접 처리) —</option>
+          {ollamaModels.map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => {
+            void handleVisionSave();
+          }}
+          disabled={visionSaving}
+          style={{
+            marginTop: 10,
+            background: visionSaved ? "var(--color-accent)" : "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: visionSaved ? "#fff" : "var(--color-text)",
+            cursor: visionSaving ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: "var(--fs-13)",
+            width: "100%",
+            opacity: visionSaving ? 0.6 : 1,
+          }}
+        >
+          {visionSaving ? "적용 중..." : visionSaved ? "적용됨 ✓" : "비전 모델 적용"}
+        </button>
+
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: "24px 0 8px" }}>
+          지식그래프 추출 LLM (문서 등록 시)
+        </h3>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            marginBottom: 12,
+            lineHeight: 1.5,
+          }}
+        >
+          문서를 등록(임베딩·인덱싱)할 때 개체·관계를 추출해 지식그래프를 만드는
+          LLM입니다. 추출 품질이 그래프 품질을 좌우하므로 대화 모델보다 좋은
+          모델을 지정할 수 있습니다.
+          {!gxEnabled && (
+            <>
+              {" "}
+              <strong>현재 GraphRAG가 비활성 상태</strong>라 설정은 저장되지만
+              사용되지 않습니다 (conf.yaml의 graphrag.enabled 참조).
+            </>
+          )}
+        </p>
+
+        <label style={labelStyle}>추출 모델 공급자</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {(
+            [
+              { id: "same_as_chat" as const, label: "메인 모델과 동일" },
+              { id: "ollama" as const, label: "Ollama (별도 모델)" },
+              { id: "openai" as const, label: "OpenAI" },
+            ]
+          ).map(({ id, label }) => (
+            <button
+              key={id}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                setGxProvider(id);
+              }}
+              style={{
+                flex: 1,
+                padding: "7px 6px",
+                fontSize: "var(--fs-12)",
+                fontWeight: gxProvider === id ? 700 : 400,
+                background:
+                  gxProvider === id ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${gxProvider === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: gxProvider === id ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {gxProvider === "ollama" && (
+          <>
+            <label style={labelStyle}>추출 Ollama 모델</label>
+            <select
+              value={gxOllamaModel}
+              onChange={(e) => setGxOllamaModel(e.target.value)}
+              style={{
+                ...inputStyle,
+                cursor: "pointer",
+                appearance: "auto",
+                marginBottom: 6,
+              }}
+              disabled={ollamaModels.length === 0}
+            >
+              {ollamaModels.length === 0 ? (
+                <option value="">모델 목록 로딩 중...</option>
+              ) : (
+                ollamaModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))
+              )}
+            </select>
+          </>
+        )}
+
+        {gxProvider === "openai" && (
+          <>
+            <label style={labelStyle}>추출 OpenAI 모델</label>
+            <OpenaiModelSelect value={gxOpenaiModel} onChange={setGxOpenaiModel} />
+          </>
+        )}
+
+        <button
+          onClick={() => {
+            void handleGxSave();
+          }}
+          disabled={gxSaving}
+          style={{
+            marginTop: 10,
+            background: gxSaved ? "var(--color-accent)" : "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: gxSaved ? "#fff" : "var(--color-text)",
+            cursor: gxSaving ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: "var(--fs-13)",
+            width: "100%",
+            opacity: gxSaving ? 0.6 : 1,
+          }}
+        >
+          {gxSaving ? "적용 중..." : gxSaved ? "적용됨 ✓" : "추출 LLM 적용"}
         </button>
       </>
     );
@@ -1290,6 +1584,7 @@ export function SettingsView({
     const sectionContentMap: Record<SettingsSection, React.ReactElement> = {
       theme: renderTheme(),
       llm: renderLlm(),
+      models: renderModels(),
       intent: renderIntent(),
       prompts: (
         <>
@@ -1386,6 +1681,8 @@ export function SettingsView({
       <section style={petCardStyle}>{renderTheme()}</section>
 
       <section style={petCardStyle}>{renderLlm()}</section>
+
+      <section style={petCardStyle}>{renderModels()}</section>
 
       <section style={petCardStyle}>{renderIntent()}</section>
 
