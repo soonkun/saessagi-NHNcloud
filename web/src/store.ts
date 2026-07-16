@@ -4,7 +4,6 @@ import type {
   Emotion,
   AiStatus,
   Position,
-  SidebarView,
   ChatTab,
 } from "./types";
 
@@ -137,7 +136,6 @@ interface AvatarSlice {
 interface UiSlice {
   chatOpen: boolean;
   chatTab: ChatTab;
-  activeView: SidebarView | null;
   wsUrl: string;
   ttsRate: number;
   ttsVoiceName: string;
@@ -154,7 +152,6 @@ interface UiSlice {
   toggleChat: () => void;
   setChatOpen: (open: boolean) => void;
   setChatTab: (tab: ChatTab) => void;
-  setActiveView: (view: SidebarView | null) => void;
   setWindowMode: (mode: "pet" | "window") => void;
   setLlmInfo: (info: LlmInfo | null) => void;
   setSelectedNoteSlug: (slug: string | null) => void;
@@ -300,7 +297,6 @@ export const useStore = create<AppStore>((set, get) => ({
   // UI
   chatOpen: false,
   chatTab: "chat" as ChatTab,
-  activeView: "calendar" as SidebarView,
   wsUrl: loadWsUrl(),
   ttsRate: loadTtsRate(),
   ttsVoiceName: loadTtsVoiceName(),
@@ -316,7 +312,6 @@ export const useStore = create<AppStore>((set, get) => ({
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
-  setActiveView: (view) => set({ activeView: view }),
   setWindowMode: (mode) => set({ windowMode: mode }),
   setLlmInfo: (info) => {
     try {

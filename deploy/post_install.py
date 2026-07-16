@@ -6,7 +6,6 @@ install.sh / install.bat에서 venv 생성 후 호출된다.
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import site
