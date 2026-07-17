@@ -1,0 +1,144 @@
+// CR-23: 대화방 히스토리 목록 — 데스크톱 사이드바·펫 모드 드로어 공용.
+// 최신 대화가 위. 클릭 = 그 대화방으로 전환 (메시지 복원 + 백엔드 메모리 전환).
+import { useEffect } from "react";
+import { Plus, Trash2 } from "lucide-react";
+import { useStore } from "../store";
+import { send } from "../services/websocket";
+
+function stripPreview(content: string | undefined | null): string {
+  return (
+    (content ?? "")
+      .replace(/\[[a-z_]+\]/gi, "") // 감정 태그 제거
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 48) || "(빈 대화)"
+  );
+}
+
+export function HistoryList({ onSelect }: { onSelect?: () => void }): React.ReactElement {
+  const histories = useStore((s) => s.histories);
+  const currentHistoryUid = useStore((s) => s.currentHistoryUid);
+  const aiStatus = useStore((s) => s.aiStatus);
+
+  // 마운트 시 + 답변 완료(idle 전환)마다 목록 갱신 — 최신 미리보기 반영
+  useEffect(() => {
+    if (aiStatus === "idle") send({ type: "fetch-history-list" });
+  }, [aiStatus]);
+
+  function handleNew(): void {
+    send({ type: "create-new-history" });
+    useStore.getState().setChatTab("chat");
+    onSelect?.();
+  }
+
+  function handleSwitch(uid: string): void {
+    send({ type: "fetch-and-set-history", history_uid: uid });
+    useStore.getState().setCurrentHistoryUid(uid);
+    useStore.getState().setChatTab("chat");
+    onSelect?.();
+  }
+
+  function handleDelete(uid: string): void {
+    if (!window.confirm("이 대화를 삭제할까요? 되돌릴 수 없습니다.")) return;
+    send({ type: "delete-history", history_uid: uid });
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+      <button
+        onClick={handleNew}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 7,
+          margin: "6px 8px",
+          padding: "7px 10px",
+          background: "transparent",
+          border: "1px solid var(--color-border)",
+          borderRadius: 8,
+          color: "var(--color-text)",
+          cursor: "pointer",
+          fontSize: "var(--fs-12)",
+          fontWeight: 600,
+          flexShrink: 0,
+          fontFamily: "inherit",
+        }}
+      >
+        <Plus size={13} />새 대화
+      </button>
+
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 6px 8px" }}>
+        {histories.length === 0 && (
+          <div
+            style={{
+              padding: "12px 8px",
+              fontSize: "var(--fs-11)",
+              color: "var(--color-text-muted)",
+              textAlign: "center",
+            }}
+          >
+            저장된 대화가 없습니다.
+          </div>
+        )}
+        {histories.map((h) => {
+          const isCurrent = h.uid === currentHistoryUid;
+          const ts = h.timestamp ? h.timestamp.replace("T", " ").slice(5, 16) : "";
+          return (
+            <div
+              key={h.uid}
+              onClick={() => handleSwitch(h.uid)}
+              title={stripPreview(h.latest_message?.content)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                padding: "6px 8px",
+                marginBottom: 2,
+                borderRadius: 7,
+                cursor: "pointer",
+                background: isCurrent ? "rgba(100,140,220,0.12)" : "transparent",
+                border: `1px solid ${isCurrent ? "rgba(100,140,220,0.4)" : "transparent"}`,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "var(--fs-12)",
+                    color: isCurrent ? "var(--color-accent)" : "var(--color-text)",
+                    fontWeight: isCurrent ? 600 : 400,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {stripPreview(h.latest_message?.content)}
+                </div>
+                <div style={{ fontSize: "var(--fs-10)", color: "var(--color-text-muted)", marginTop: 1 }}>
+                  {ts}
+                </div>
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(h.uid);
+                }}
+                title="대화 삭제"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: "var(--color-text-muted)",
+                  display: "flex",
+                  padding: 3,
+                  flexShrink: 0,
+                }}
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

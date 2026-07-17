@@ -15,6 +15,7 @@ import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
 import { DocumentsView } from "./DocumentsView";
+import { HistoryList } from "./HistoryList";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
 import { SettingsView } from "./SettingsView";
@@ -204,7 +205,7 @@ export function DesktopView(): React.ReactElement {
         </div>
 
         {/* 탭 메뉴 */}
-        <nav style={{ flex: 1, padding: "10px 8px", overflowY: "auto" }}>
+        <nav style={{ flexShrink: 0, padding: "10px 8px" }}>
           {SIDEBAR_TABS.map(({ id, label, Icon }) => (
             <button
               key={id}
@@ -233,6 +234,31 @@ export function DesktopView(): React.ReactElement {
             </button>
           ))}
         </nav>
+
+        {/* CR-23: 대화방 히스토리 — 최신 대화부터 (ChatGPT 스타일) */}
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            borderTop: "1px solid var(--color-border)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "var(--fs-11)",
+              fontWeight: 700,
+              color: "var(--color-text-muted)",
+              padding: "10px 16px 2px",
+              letterSpacing: "0.06em",
+              flexShrink: 0,
+            }}
+          >
+            대화
+          </div>
+          <HistoryList />
+        </div>
 
         {/* 하단: 펫 모드 전환 + 종료 */}
         <div

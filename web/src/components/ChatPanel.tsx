@@ -6,13 +6,12 @@ import {
   Send,
   Mic,
   MicOff,
+  Menu,
   X,
   RotateCcw,
   ExternalLink,
-  History,
   Paperclip,
   Network,
-  Trash2,
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
@@ -50,6 +49,7 @@ import { lazy, Suspense } from "react";
 const GraphRagView = lazy(() => import("./GraphRagView"));
 import type { Position } from "../types";
 import { CHAT_TABS } from "../chatTabs";
+import { HistoryList } from "./HistoryList";
 
 // 그래프 탭 추가로 좌우 여유 확보 (사용자 요청 2026-07-16: 580 → 700)
 const PANEL_W = 700;
@@ -127,26 +127,6 @@ export function ChatContent({
     // 백엔드 응답(new-history-created)으로 clearMessages가 호출됨
   }
 
-  // CR-23: 대화 히스토리 (채팅방) 목록
-  const histories = useStore((s) => s.histories);
-  const currentHistoryUid = useStore((s) => s.currentHistoryUid);
-  const [historyOpen, setHistoryOpen] = useState(false);
-
-  function toggleHistoryList(): void {
-    if (!historyOpen) send({ type: "fetch-history-list" });
-    setHistoryOpen((v) => !v);
-  }
-
-  function handleSwitchHistory(uid: string): void {
-    send({ type: "fetch-and-set-history", history_uid: uid });
-    useStore.getState().setCurrentHistoryUid(uid);
-    setHistoryOpen(false);
-  }
-
-  function handleDeleteHistory(uid: string): void {
-    if (!window.confirm("이 대화를 삭제할까요? 되돌릴 수 없습니다.")) return;
-    send({ type: "delete-history", history_uid: uid });
-  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -383,27 +363,10 @@ export function ChatContent({
           </span>
         )}
         <button
-          onClick={toggleHistoryList}
-          title="지난 대화 목록"
-          style={{
-            marginLeft: "auto",
-            background: historyOpen ? "rgba(100,140,220,0.15)" : "transparent",
-            border: "none",
-            cursor: "pointer",
-            color: historyOpen ? "var(--color-accent)" : "var(--color-text-muted)",
-            display: "flex",
-            alignItems: "center",
-            padding: "2px 4px",
-            borderRadius: 4,
-            flexShrink: 0,
-          }}
-        >
-          <History size={13} />
-        </button>
-        <button
           onClick={handleNewHistory}
           title="새 대화 시작 (대화 기억 초기화)"
           style={{
+            marginLeft: "auto",
             background: "transparent",
             border: "none",
             cursor: "pointer",
@@ -418,97 +381,6 @@ export function ChatContent({
           <RotateCcw size={13} />
         </button>
       </div>
-
-      {/* CR-23: 지난 대화 목록 드롭다운 */}
-      {historyOpen && (
-        <div
-          style={{
-            position: "absolute",
-            top: 38,
-            right: 8,
-            width: 300,
-            maxHeight: 340,
-            overflowY: "auto",
-            zIndex: 30,
-            background: "var(--color-panel, var(--color-bg))",
-            border: "1px solid var(--color-border)",
-            borderRadius: 10,
-            padding: 6,
-            boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
-            display: "flex",
-            flexDirection: "column",
-            gap: 3,
-          }}
-        >
-          {histories.length === 0 && (
-            <div style={{ padding: "10px 8px", fontSize: "var(--fs-12)", color: "var(--color-text-muted)", textAlign: "center" }}>
-              저장된 대화가 없습니다.
-            </div>
-          )}
-          {histories.map((h) => {
-            const isCurrent = h.uid === currentHistoryUid;
-            const preview =
-              h.latest_message?.content
-                ?.replace(/\[[a-z_]+\]/gi, "") // 감정 태그([neutral] 등) 제거
-                .replace(/\s+/g, " ")
-                .trim()
-                .slice(0, 60) || "(빈 대화)";
-            const ts = h.timestamp ? h.timestamp.replace("T", " ").slice(0, 16) : "";
-            return (
-              <div
-                key={h.uid}
-                onClick={() => handleSwitchHistory(h.uid)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "7px 8px",
-                  borderRadius: 7,
-                  cursor: "pointer",
-                  background: isCurrent ? "rgba(100,140,220,0.12)" : "transparent",
-                  border: `1px solid ${isCurrent ? "var(--color-accent)" : "transparent"}`,
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: "var(--fs-12)",
-                      color: "var(--color-text)",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {preview}
-                  </div>
-                  <div style={{ fontSize: "var(--fs-10)", color: "var(--color-text-muted)", marginTop: 2 }}>
-                    {ts}
-                    {isCurrent ? " · 현재 대화" : ""}
-                  </div>
-                </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteHistory(h.uid);
-                  }}
-                  title="대화 삭제"
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    cursor: "pointer",
-                    color: "var(--color-text-muted)",
-                    display: "flex",
-                    padding: 3,
-                    flexShrink: 0,
-                  }}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
 
       {/* 메시지 목록 */}
       <div
@@ -1056,6 +928,8 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
   const setChatOpen = useStore((s) => s.setChatOpen);
   const chatTab = useStore((s) => s.chatTab);
   const setChatTab = useStore((s) => s.setChatTab);
+  // CR-23: 펫 모드 좌측 대화방 드로어
+  const [navOpen, setNavOpen] = useState(false);
 
   const panelStyle = calcPanelStyle(charPosition, charSize);
 
@@ -1078,6 +952,55 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
         pointerEvents: "auto",
       }}
     >
+      {/* CR-23: 좌측 대화방 드로어 (햄버거) */}
+      {navOpen && (
+        <>
+          <div
+            onClick={() => setNavOpen(false)}
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: "rgba(0,0,0,0.35)",
+              zIndex: 50,
+            }}
+          />
+          <div
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 240,
+              zIndex: 51,
+              background: "var(--color-panel)",
+              borderRight: "1px solid var(--color-border)",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "4px 0 16px rgba(0,0,0,0.3)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px 6px",
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ fontSize: "var(--fs-13)", fontWeight: 700 }}>대화</span>
+              <button
+                onClick={() => setNavOpen(false)}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 2 }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <HistoryList onSelect={() => setNavOpen(false)} />
+          </div>
+        </>
+      )}
+
       {/* 네비게이션 탭 */}
       <div
         style={{
@@ -1089,6 +1012,22 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
           paddingRight: 8,
         }}
       >
+        <button
+          onClick={() => setNavOpen(true)}
+          title="대화 목록"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            padding: "11px 10px 11px 12px",
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            color: "var(--color-text-muted)",
+            flexShrink: 0,
+          }}
+        >
+          <Menu size={15} />
+        </button>
         {TABS.map(({ id, label, Icon }) => (
           <button
             key={id}
