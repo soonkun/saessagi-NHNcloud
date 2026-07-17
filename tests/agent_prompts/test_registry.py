@@ -13,9 +13,9 @@ from agent_prompts.registry import get_label, get_risk
 # ── 정상 케이스 ─────────────────────────────────────────────────────────────────
 
 
-def test_N1_prompt_keys_has_six_entries() -> None:
-    """N-1: PROMPT_KEYS는 6개의 키를 가진다."""
-    assert len(PROMPT_KEYS) == 6
+def test_N1_prompt_keys_entries() -> None:
+    """N-1: PROMPT_KEYS는 7개의 키를 가진다."""
+    assert len(PROMPT_KEYS) == 7
     expected = {
         "persona",
         "knowledge_note",
@@ -23,6 +23,7 @@ def test_N1_prompt_keys_has_six_entries() -> None:
         "work_query_answer",
         "intent_classify",
         "meeting_minutes",
+        "graph_extract",
     }
     assert set(PROMPT_KEYS) == expected
 

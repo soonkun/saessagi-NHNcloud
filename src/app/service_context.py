@@ -513,7 +513,18 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 self.graph_rag_service = GraphRagService(
                     graph_store=_graph_store,
                     vector_store=_vstore,
-                    extractor=EntityExtractor(complete_json=_extract_complete_json),
+                    extractor=EntityExtractor(
+                        complete_json=_extract_complete_json,
+                        # M_17: 지식그래프 추출 지침 lazy 조회 (지침 저장 즉시 반영)
+                        prompt_provider=lambda: (
+                            getattr(
+                                getattr(self.app_config, "agent_prompts", None),
+                                "graph_extract",
+                                "",
+                            )
+                            or ""
+                        ),
+                    ),
                     rag_service=self.rag_service,
                     max_hops=graphrag_cfg.max_hops,
                 )

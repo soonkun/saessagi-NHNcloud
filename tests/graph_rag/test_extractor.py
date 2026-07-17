@@ -125,3 +125,42 @@ async def test_extract_duplicate_entities_merged() -> None:
     ext = EntityExtractor(complete_json=FakeCompleteJson({"대구시": resp}))
     result = await ext.extract("대구시가 추진하는 여러 사업들에 대한 설명 문서다.")
     assert len(result.entities) == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_uses_custom_prompt_from_provider() -> None:
+    """M_17 연동: prompt_provider가 커스텀 지침을 주면 그것이 system_prompt로 사용."""
+
+    class _Capturing(FakeCompleteJson):
+        def __init__(self) -> None:
+            super().__init__({"농림축산식품부": _GOOD_RESPONSE})
+            self.system_prompts: list[str] = []
+
+        async def __call__(self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any) -> dict[str, Any]:
+            self.system_prompts.append(system_prompt)
+            return await super().__call__(system_prompt, user_prompt, json_schema, **kw)
+
+    fake = _Capturing()
+    ext = EntityExtractor(complete_json=fake, prompt_provider=lambda: "커스텀 추출 지침")
+    await ext.extract(_TEXT)
+    assert fake.system_prompts == ["커스텀 추출 지침"]
+
+
+@pytest.mark.asyncio
+async def test_extract_empty_provider_falls_back_to_default() -> None:
+    """provider가 빈 문자열이면 기본값(EXTRACT_SYSTEM_PROMPT) 사용."""
+    from graph_rag.extractor import EXTRACT_SYSTEM_PROMPT
+
+    class _Capturing(FakeCompleteJson):
+        def __init__(self) -> None:
+            super().__init__({"농림축산식품부": _GOOD_RESPONSE})
+            self.system_prompts: list[str] = []
+
+        async def __call__(self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any) -> dict[str, Any]:
+            self.system_prompts.append(system_prompt)
+            return await super().__call__(system_prompt, user_prompt, json_schema, **kw)
+
+    fake = _Capturing()
+    ext = EntityExtractor(complete_json=fake, prompt_provider=lambda: "")
+    await ext.extract(_TEXT)
+    assert fake.system_prompts == [EXTRACT_SYSTEM_PROMPT]

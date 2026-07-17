@@ -271,6 +271,10 @@ class AgentPromptsConfig(BaseModel):
     meeting_minutes: str = Field(
         default="", description="회의록 작성 지침. 빈값이면 SYSTEM_PROMPT 사용."
     )
+    graph_extract: str = Field(
+        default="",
+        description="지식그래프 엔티티·관계 추출 지침. 빈값이면 EXTRACT_SYSTEM_PROMPT 사용.",
+    )
 
 
 class AppConfig(BaseModel):

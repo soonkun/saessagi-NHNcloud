@@ -106,8 +106,8 @@ def client(ctx: Any, tmp_conf: Path, monkeypatch: pytest.MonkeyPatch) -> TestCli
 # ── 정상 케이스 ────────────────────────────────────────────────────────────────
 
 
-def test_N1_get_prompts_returns_six_keys(client: TestClient) -> None:
-    """N-1: GET /prompts가 6개 키를 모두 반환, 각 키에 prompt/is_custom/default/risk/label 존재."""
+def test_N1_get_prompts_returns_all_keys(client: TestClient) -> None:
+    """N-1: GET /prompts가 7개 키를 모두 반환, 각 키에 prompt/is_custom/default/risk/label 존재."""
     resp = client.get("/api/settings/prompts")
     assert resp.status_code == 200
     data = resp.json()
@@ -120,6 +120,7 @@ def test_N1_get_prompts_returns_six_keys(client: TestClient) -> None:
         "work_query_answer",
         "intent_classify",
         "meeting_minutes",
+        "graph_extract",
     }
     assert set(prompts.keys()) == expected_keys
     for key, info in prompts.items():

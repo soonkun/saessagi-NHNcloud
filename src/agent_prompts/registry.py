@@ -18,6 +18,7 @@ PromptKey = Literal[
     "work_query_answer",
     "intent_classify",
     "meeting_minutes",
+    "graph_extract",
 ]
 
 PROMPT_KEYS: tuple[PromptKey, ...] = (
@@ -27,6 +28,7 @@ PROMPT_KEYS: tuple[PromptKey, ...] = (
     "work_query_answer",
     "intent_classify",
     "meeting_minutes",
+    "graph_extract",
 )
 
 
@@ -77,6 +79,12 @@ _REGISTRY: dict[PromptKey, PromptMeta] = {
         risk="low",
         apply_path="set_custom_prompt",
     ),
+    "graph_extract": PromptMeta(
+        key="graph_extract",
+        label="지식그래프 추출 지침 (문서 등록 시)",
+        risk="medium",
+        apply_path="gate_injection",
+    ),
 }
 
 
@@ -124,6 +132,14 @@ def get_default(key: PromptKey) -> str | None:
             return str(SYSTEM_PROMPT)
         except ImportError:
             logger.warning("meeting_minutes.prompts 임포트 실패")
+            return ""
+    if key == "graph_extract":
+        try:
+            from graph_rag.extractor import EXTRACT_SYSTEM_PROMPT
+
+            return str(EXTRACT_SYSTEM_PROMPT)
+        except ImportError:
+            logger.warning("graph_rag.extractor 임포트 실패")
             return ""
     return None
 

@@ -1207,6 +1207,7 @@ export function SettingsView({
             "knowledge_note",
             "doc_query_answer",
             "work_query_answer",
+            "graph_extract",
             "intent_classify",
             "meeting_minutes",
           ] as const

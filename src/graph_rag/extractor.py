@@ -25,13 +25,19 @@ EXTRACT_SYSTEM_PROMPT = """당신은 한국어 업무 문서에서 지식그래�
 규칙:
 - 엔티티 type은 반드시 다음 중 하나: 인물, 조직, 사업, 제도, 기술, 장소, 기타
 - 문서에 실제로 등장하는 고유한 대상만 추출 (일반명사·대명사 제외)
+- 과제번호·RFP번호·사업번호·특허출원번호 같은 공식 식별번호는 가장 중요한 엔티티다.
+  반드시 표기 원문 그대로(하이픈·자릿수·접두어 유지) type "사업"으로 추출하라.
+  RFP·연구계획서·결과보고서·논문 사사(Acknowledgment)·특허가 같은 번호로 연결되므로
+  절대 누락하거나 표기를 바꾸지 말 것
+- 식별번호와 그 과제명·사업명이 함께 등장하면 관계로 잇는다 (관계 type: 식별)
+- 같은 대상의 다른 표기(정식명칭 vs 약칭)는 문서에 더 자주 쓰인 하나의 name으로 통일
 - 관계(relations)의 source/target은 entities에 있는 name과 정확히 일치해야 함
-- 관계 type은 짧은 한국어 술어 (예: 주관, 소속, 협력, 적용, 위치, 참여)
+- 관계 type은 짧은 한국어 술어 (예: 주관, 소속, 협력, 적용, 위치, 참여, 식별)
 - 엔티티 3~10개, 관계 0~8개 수준으로 핵심만
 
-예시 입력: "농림축산식품부가 주관하는 스마트팜 혁신밸리 사업에 A대학이 참여한다."
+예시 입력: "본 연구는 농림축산식품부 과제(과제번호 RS-2024-00123456) '스마트팜 혁신밸리'의 지원을 받아 수행되었다."
 예시 출력:
-{"entities":[{"name":"농림축산식품부","type":"조직","description":"중앙행정기관"},{"name":"스마트팜 혁신밸리","type":"사업","description":"농림축산식품부 주관 사업"},{"name":"A대학","type":"조직","description":""}],"relations":[{"source":"농림축산식품부","target":"스마트팜 혁신밸리","type":"주관","description":""},{"source":"A대학","target":"스마트팜 혁신밸리","type":"참여","description":""}]}"""
+{"entities":[{"name":"RS-2024-00123456","type":"사업","description":"과제번호"},{"name":"스마트팜 혁신밸리","type":"사업","description":"농림축산식품부 과제"},{"name":"농림축산식품부","type":"조직","description":"중앙행정기관"}],"relations":[{"source":"RS-2024-00123456","target":"스마트팜 혁신밸리","type":"식별","description":"과제번호-과제명"},{"source":"농림축산식품부","target":"스마트팜 혁신밸리","type":"주관","description":""}]}"""
 
 EXTRACT_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -66,6 +72,12 @@ EXTRACT_JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+class PromptProviderFn(Protocol):
+    """추출 시스템 프롬프트 lazy 조회 — 빈 문자열이면 기본값(EXTRACT_SYSTEM_PROMPT)."""
+
+    def __call__(self) -> str: ...
+
+
 class CompleteJsonFn(Protocol):
     """intent_gate.types.CompleteJsonFn과 동일 계약 (모듈 결합 없이 재선언)."""
 
@@ -84,9 +96,26 @@ class CompleteJsonFn(Protocol):
 class EntityExtractor:
     """청크 텍스트 → (entities, relations). 실패 시 빈 결과 반환(예외 전파 금지)."""
 
-    def __init__(self, complete_json: CompleteJsonFn, timeout_seconds: float = 45.0) -> None:
+    def __init__(
+        self,
+        complete_json: CompleteJsonFn,
+        timeout_seconds: float = 45.0,
+        prompt_provider: "PromptProviderFn | None" = None,
+    ) -> None:
         self._complete_json = complete_json
         self._timeout_seconds = timeout_seconds
+        # M_17 연동: 호출 시점 lazy 조회 — 지침 저장 즉시 다음 추출부터 반영
+        self._prompt_provider = prompt_provider
+
+    def _system_prompt(self) -> str:
+        if self._prompt_provider is not None:
+            try:
+                custom = (self._prompt_provider() or "").strip()
+                if custom:
+                    return custom
+            except Exception as exc:
+                logger.warning("graph_extract 지침 조회 실패 (기본값 사용): %r", exc)
+        return EXTRACT_SYSTEM_PROMPT
 
     async def extract(self, text: str) -> ExtractionResult:
         clipped = (text or "")[:_MAX_INPUT_CHARS].strip()
@@ -96,7 +125,7 @@ class EntityExtractor:
         try:
             async with asyncio.timeout(self._timeout_seconds + 2.0):
                 raw: dict[str, Any] = await self._complete_json(
-                    EXTRACT_SYSTEM_PROMPT,
+                    self._system_prompt(),
                     clipped,
                     EXTRACT_JSON_SCHEMA,
                     max_tokens=1024,
