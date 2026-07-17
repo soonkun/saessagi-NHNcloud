@@ -1,4 +1,5 @@
-// 앱 시작 시 오늘 일정을 가져와 랜덤 인사 메시지를 채팅에 추가하고 TTS로 재생
+// 앱 시작 시 오늘 일정을 가져와 브리핑 — 말풍선 없이 첫 화면(데스크톱 히어로)에
+// 표시하고 TTS로만 말한다 (펫 모드는 캐릭터 음성만, 화면은 깔끔하게)
 import { useStore } from "../store";
 import type { CalendarEvent } from "../types";
 import { API_BASE } from "./api";
@@ -74,6 +75,8 @@ export async function showStartupGreeting(): Promise<void> {
       ? _pick(WITH_EVENTS)(todayEvents)
       : _pick(WITHOUT_EVENTS);
 
-  useStore.getState().addMessage({ role: "ai", text });
+  // 채팅 말풍선을 만들지 않는다 — 첫 화면(WelcomeHero)이 유지되고,
+  // 브리핑은 히어로 콜아웃 + 캐릭터 음성으로 전달된다.
+  useStore.getState().setStartupBriefing(text);
   void speak(text);
 }

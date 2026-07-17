@@ -1,6 +1,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useStore } from "../store";
 import {
+  Calendar,
   LayoutGrid,
   PanelLeftClose,
   Power,
@@ -451,6 +452,7 @@ function TitleBarBtn({
 
 function WelcomeHero(): React.ReactElement {
   const emotion = useStore((s) => s.emotion);
+  const startupBriefing = useStore((s) => s.startupBriefing);
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
 
   return (
@@ -499,6 +501,25 @@ function WelcomeHero(): React.ReactElement {
           <br />
           제 지식이 늘어날수록 주인님의 업무가 편해질거예요.
         </p>
+        {startupBriefing && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "rgba(100,140,220,0.08)",
+              border: "1px solid rgba(100,140,220,0.28)",
+              borderRadius: 10,
+              padding: "10px 16px",
+              fontSize: "var(--fs-13)",
+              lineHeight: 1.6,
+              maxWidth: 560,
+            }}
+          >
+            <Calendar size={14} style={{ color: "var(--color-accent)", flexShrink: 0 }} />
+            <span>{startupBriefing}</span>
+          </div>
+        )}
       </div>
 
       <div

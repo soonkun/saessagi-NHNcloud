@@ -154,6 +154,8 @@ interface UiSlice {
   notesRevision: number;
   // M_19: 채팅 답변의 "근거 그래프" 버튼 → 그래프 탭이 evidence 하이라이트를 로드하는 트리거
   graphEvidenceReq: number;
+  // 시작 브리핑 (오늘 일정 인사) — 말풍선 대신 첫 화면 히어로에 표시
+  startupBriefing: string | null;
   // CR-21: 딥 리서치 → 그래프 — 근거 문서를 그래프 탭에서 핀으로 표시하라는 요청
   graphPinDocs: string[] | null;
   // CR-21: 그래프 → 딥 리서치 — 핀 문서 범위 리서치 (id는 벡터스토어 doc_id 기준)
@@ -169,6 +171,7 @@ interface UiSlice {
   setSelectedNoteSlug: (slug: string | null) => void;
   bumpNotesRevision: () => void;
   requestGraphEvidence: () => void;
+  setStartupBriefing: (text: string | null) => void;
   requestGraphPins: (docIds: string[]) => void;
   clearGraphPinDocs: () => void;
   setResearchScope: (scope: { id: string; label: string }[] | null) => void;
@@ -326,6 +329,8 @@ export const useStore = create<AppStore>((set, get) => ({
   selectedNoteSlug: null as string | null,
   notesRevision: 0,
   graphEvidenceReq: 0,
+  startupBriefing: null as string | null,
+  setStartupBriefing: (text: string | null) => set({ startupBriefing: text }),
   graphPinDocs: null as string[] | null,
   researchScope: null as { id: string; label: string }[] | null,
   theme: loadTheme(),
