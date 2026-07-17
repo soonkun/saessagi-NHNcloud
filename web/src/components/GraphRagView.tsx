@@ -1,14 +1,16 @@
-// M_19 GraphRAG 지식그래프 탭 (CR-18)
+// M_19 GraphRAG 지식그래프 탭 (CR-18) + CR-21 실용화 개편.
 // 문서·엔티티·노트 통합 그래프 + 채팅 답변 근거(evidence) 하이라이트.
-// 캔버스 페인터 스타일은 NotesGraph.tsx의 패턴을 따른다.
+// CR-21: 클릭=핀 고정/해제(게시판 핀 UX), 핀 포커스(연계 문서 위주 보기),
+//        문서 상세/다운로드 패널, 시뮬레이션 안정화.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ForceGraph2D from "react-force-graph-2d";
-import { Network, RefreshCw, X } from "lucide-react";
+import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
+import { Download, ExternalLink, Network, Pin, PinOff, RefreshCw, X } from "lucide-react";
 import type { GraphRagData, GraphRagEvidence, GraphRagStatus, GraphRagNode } from "../types";
 import {
   fetchGraphEvidence,
   fetchGraphRag,
   fetchGraphRagStatus,
+  openDocument,
   requestGraphReindex,
 } from "../services/api";
 import { useStore } from "../store";
@@ -30,6 +32,8 @@ interface RFNode extends GraphRagNode {
   degree: number;
   x?: number;
   y?: number;
+  fx?: number;
+  fy?: number;
 }
 
 interface RFLink {
@@ -51,6 +55,7 @@ export default function GraphRagView(): React.ReactElement {
   const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const fgRef = useRef<ForceGraphMethods<RFNode, RFLink> | undefined>(undefined);
   const [size, setSize] = useState({ w: 400, h: 300 });
   const [data, setData] = useState<GraphRagData | null>(null);
   const [status, setStatus] = useState<GraphRagStatus | null>(null);
@@ -60,6 +65,11 @@ export default function GraphRagView(): React.ReactElement {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selected, setSelected] = useState<RFNode | null>(null);
   const [reindexing, setReindexing] = useState(false);
+
+  // CR-21: 핀 고정 — id → 고정 좌표. 데이터 리로드 후에도 좌표 복원.
+  const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [pinnedVersion, setPinnedVersion] = useState(0);
+  const didFitRef = useRef(false);
 
   const isDark = theme === "dark";
   const accent = readCssVar("--color-accent") || "#c96442";
@@ -103,7 +113,7 @@ export default function GraphRagView(): React.ReactElement {
   }, [evidenceReq]);
 
   // ── 그래프 데이터 변환 ─────────────────────────────────────────────────────
-  const { graphData, neighbors } = useMemo(() => {
+  const { graphData, neighbors, byId } = useMemo(() => {
     const nodes: RFNode[] = (data?.nodes ?? []).map((n) => ({ ...n, degree: 0 }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const links: RFLink[] = [];
@@ -118,13 +128,44 @@ export default function GraphRagView(): React.ReactElement {
       neighbors.get(e.source)!.add(e.target);
       neighbors.get(e.target)!.add(e.source);
     }
-    return { graphData: { nodes, links }, neighbors };
+    // 핀 좌표 복원 — 리로드로 노드 객체가 재생성돼도 고정 유지
+    for (const n of nodes) {
+      const pin = pinnedRef.current.get(n.id);
+      if (pin) {
+        n.fx = pin.x;
+        n.fy = pin.y;
+        n.x = pin.x;
+        n.y = pin.y;
+      }
+    }
+    return { graphData: { nodes, links }, neighbors, byId };
   }, [data]);
 
   const evidenceIds = useMemo(() => {
     if (!evidence) return null;
     return new Set(evidence.nodes.map((n) => n.id));
   }, [evidence]);
+
+  // CR-21: 핀 포커스 집합 — 핀 노드 + 직접 이웃 + 엔티티 경유 2-hop 문서·노트
+  const focusSet = useMemo(() => {
+    void pinnedVersion; // 핀 변경 시 재계산
+    const pinnedAlive = [...pinnedRef.current.keys()].filter((id) => byId.has(id));
+    if (pinnedAlive.length === 0) return null;
+    const set = new Set<string>(pinnedAlive);
+    for (const id of pinnedAlive) {
+      for (const nb of neighbors.get(id) ?? []) {
+        set.add(nb);
+        const nbNode = byId.get(nb);
+        if (nbNode?.kind === "entity") {
+          for (const nb2 of neighbors.get(nb) ?? []) {
+            const n2 = byId.get(nb2);
+            if (n2 && n2.kind !== "entity") set.add(nb2); // 연계 문서·노트
+          }
+        }
+      }
+    }
+    return set;
+  }, [pinnedVersion, neighbors, byId]);
 
   // ── 크기 추적 ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -136,49 +177,113 @@ export default function GraphRagView(): React.ReactElement {
     return () => ro.disconnect();
   }, []);
 
-  // ── 노드 활성 판정: evidence 모드 > 호버 ──────────────────────────────────
+  // ── 핀 조작 ────────────────────────────────────────────────────────────────
+  const isPinned = useCallback(
+    (id: string): boolean => pinnedRef.current.has(id),
+    // pinnedVersion으로 참조 무효화 (Map은 mutate되므로)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pinnedVersion]
+  );
+
+  const pinNode = useCallback((n: RFNode) => {
+    if (n.x === undefined || n.y === undefined) return;
+    n.fx = n.x;
+    n.fy = n.y;
+    pinnedRef.current.set(n.id, { x: n.x, y: n.y });
+    setPinnedVersion((v) => v + 1);
+  }, []);
+
+  const unpinNode = useCallback((n: RFNode) => {
+    n.fx = undefined;
+    n.fy = undefined;
+    pinnedRef.current.delete(n.id);
+    setPinnedVersion((v) => v + 1);
+  }, []);
+
+  const unpinAll = useCallback(() => {
+    pinnedRef.current.clear();
+    for (const n of graphData.nodes) {
+      n.fx = undefined;
+      n.fy = undefined;
+    }
+    setPinnedVersion((v) => v + 1);
+    fgRef.current?.d3ReheatSimulation();
+  }, [graphData.nodes]);
+
+  // ── 노드 활성 판정: evidence > 핀 포커스 > 호버 ───────────────────────────
   const isActive = useCallback(
     (id: string): boolean => {
       if (evidenceIds) return evidenceIds.has(id);
+      if (focusSet) return focusSet.has(id);
       if (!hoveredNodeId) return true;
       if (id === hoveredNodeId) return true;
       return neighbors.get(hoveredNodeId)?.has(id) ?? false;
     },
-    [evidenceIds, hoveredNodeId, neighbors]
+    [evidenceIds, focusSet, hoveredNodeId, neighbors]
   );
 
   const nodeColor = useCallback(
     (n: RFNode): string => {
-      if (n.kind === "document") return isDark ? "#8892a5" : "#6b7688";
+      if (n.kind === "document") return isDark ? "#9fb3d1" : "#5b7396";
       if (n.kind === "note") return accent;
       return TYPE_COLORS[n.type] ?? TYPE_COLORS["기타"];
     },
     [accent, isDark]
   );
 
-  const radiusFor = useCallback(
-    (n: RFNode): number => 4 + Math.min(7, Math.sqrt(n.degree) * 1.7),
-    []
-  );
+  // 문서·노트는 탐색의 주 대상 — 엔티티보다 크게
+  const radiusFor = useCallback((n: RFNode): number => {
+    const base = n.kind === "entity" ? 4 : 6;
+    return base + Math.min(8, Math.sqrt(n.degree) * 1.7);
+  }, []);
 
+  // 클릭 = 핀 토글 + 상세 패널 (CR-21)
   const handleNodeClick = useCallback(
     (raw: unknown) => {
       const n = raw as RFNode;
-      if (n.kind === "document") {
-        setChatTab("documents");
-      } else if (n.kind === "note") {
-        setSelectedNoteSlug(n.id);
-        setChatTab("notes");
+      if (isPinned(n.id)) {
+        unpinNode(n);
+        setSelected((prev) => (prev?.id === n.id ? null : prev));
       } else {
+        pinNode(n);
         setSelected(n);
       }
     },
-    [setChatTab, setSelectedNoteSlug]
+    [isPinned, pinNode, unpinNode]
   );
+
+  // 상세 패널의 연결 칩 클릭 — 해당 노드로 카메라 이동 + 핀 + 선택
+  const focusNodeById = useCallback(
+    (id: string) => {
+      const n = byId.get(id);
+      if (!n || n.x === undefined || n.y === undefined) return;
+      pinNode(n);
+      setSelected(n);
+      fgRef.current?.centerAt(n.x, n.y, 500);
+    },
+    [byId, pinNode]
+  );
+
+  // 선택 노드의 연결 목록 (패널용) — degree 높은 순, 문서·노트 우선
+  const selectedConnections = useMemo(() => {
+    if (!selected) return [];
+    const ids = [...(neighbors.get(selected.id) ?? [])];
+    const nodes = ids
+      .map((id) => byId.get(id))
+      .filter((n): n is RFNode => n !== undefined);
+    nodes.sort((a, b) => {
+      const ka = a.kind === "entity" ? 1 : 0;
+      const kb = b.kind === "entity" ? 1 : 0;
+      if (ka !== kb) return ka - kb;
+      return b.degree - a.degree;
+    });
+    return nodes.slice(0, 10);
+  }, [selected, neighbors, byId]);
 
   // ── 렌더 ──────────────────────────────────────────────────────────────────
   const notConnected = status !== null && (!status.enabled || !status.connected);
   const stats = data?.stats ?? status?.stats ?? {};
+  const pinnedCount = pinnedRef.current.size;
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
@@ -229,6 +334,27 @@ export default function GraphRagView(): React.ReactElement {
         })}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          {pinnedCount > 0 && (
+            <button
+              onClick={unpinAll}
+              title="모든 핀을 뽑고 전체 보기로 복귀"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: "var(--fs-11)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: `1px solid ${accent}`,
+                background: accent + (isDark ? "26" : "1a"),
+                color: "var(--color-text)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              <PinOff size={11} />핀 {pinnedCount}개 모두 해제
+            </button>
+          )}
           {hasActiveIndexing && (
             <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>
               인덱싱 중…{" "}
@@ -331,27 +457,45 @@ export default function GraphRagView(): React.ReactElement {
           </CenterHint>
         ) : (
           <ForceGraph2D
+            ref={fgRef}
             width={size.w}
             height={size.h}
             graphData={graphData}
             backgroundColor={bg}
-            d3AlphaDecay={0.022}
-            d3VelocityDecay={0.32}
-            cooldownTime={4000}
+            // CR-21: 빠른 정착 — 흐물거림 최소화
+            d3AlphaDecay={0.05}
+            d3VelocityDecay={0.5}
+            cooldownTime={2500}
+            onEngineStop={() => {
+              if (!didFitRef.current) {
+                didFitRef.current = true;
+                fgRef.current?.zoomToFit(400, 60);
+                // 노드가 적을 때 zoomToFit이 과도하게 확대하는 것 방지
+                setTimeout(() => {
+                  const fg = fgRef.current;
+                  if (fg && fg.zoom() > 2.2) fg.zoom(2.2, 300);
+                }, 500);
+              }
+            }}
             nodeRelSize={1}
-            nodeLabel={(n) => (n as RFNode).label}
+            nodeLabel={() => ""}
             onNodeHover={(node) => {
               const id = node ? (node as RFNode).id : null;
               setHoveredNodeId(id);
               if (wrapRef.current) wrapRef.current.style.cursor = id ? "pointer" : "default";
             }}
             onNodeClick={handleNodeClick}
+            // 드래그로 옮겨 놓으면 그 자리에 핀 고정 (게시판 핀 UX)
+            onNodeDragEnd={(raw) => {
+              const n = raw as RFNode;
+              pinNode(n);
+            }}
             linkColor={(l) => {
               const link = l as RFLink;
               const s = typeof link.source === "string" ? link.source : link.source.id;
               const t = typeof link.target === "string" ? link.target : link.target.id;
               const active = isActive(s) && isActive(t);
-              if (!active) return isDark ? "rgba(120,125,140,0.06)" : "rgba(180,185,195,0.12)";
+              if (!active) return isDark ? "rgba(120,125,140,0.05)" : "rgba(180,185,195,0.10)";
               return link.kind === "rel"
                 ? accent + (isDark ? "88" : "77")
                 : isDark
@@ -370,6 +514,7 @@ export default function GraphRagView(): React.ReactElement {
               const n = rawNode as RFNode;
               if (n.x === undefined || n.y === undefined) return;
               const active = isActive(n.id);
+              const pinned = isPinned(n.id);
               const r = radiusFor(n);
               const color = nodeColor(n);
               const dimColor = isDark ? "#2a2d33" : "#dde1e7";
@@ -410,21 +555,42 @@ export default function GraphRagView(): React.ReactElement {
               ctx.strokeStyle = bg;
               ctx.stroke();
 
-              if (scale < 0.7 && !active) return;
-              if (!active && evidenceIds) return; // evidence 모드: dim 노드 라벨 생략
+              // CR-21: 핀 표시 — 액센트 링 + 우상단 핀헤드
+              if (pinned) {
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
+                ctx.lineWidth = 1.8;
+                ctx.strokeStyle = accent;
+                ctx.stroke();
+                const px = n.x + r * 0.95;
+                const py = n.y - r * 0.95;
+                ctx.beginPath();
+                ctx.arc(px, py, 3, 0, Math.PI * 2);
+                ctx.fillStyle = accent;
+                ctx.fill();
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = bg;
+                ctx.stroke();
+              }
 
-              const fontSize = Math.max(10, 12 / Math.max(scale, 0.85));
-              ctx.font = `${hoveredNodeId === n.id ? 600 : 400} ${fontSize}px -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif`;
+              // 라벨 — 문서·노트는 상시, 엔티티는 확대/활성 시. 딤 노드는 생략.
+              if (!active) return;
+              if (n.kind === "entity" && scale < 0.9 && hoveredNodeId !== n.id && !pinned) return;
+
+              const isDocLike = n.kind !== "entity";
+              // 화면 픽셀 기준 고정 크기 — 줌 수준과 무관하게 항상 같은 크기로 보인다
+              const screenPx = isDocLike ? 12.5 : 11;
+              const fontSize = screenPx / scale;
+              const weight = pinned || hoveredNodeId === n.id || isDocLike ? 600 : 400;
+              ctx.font = `${weight} ${fontSize}px -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif`;
               ctx.textAlign = "center";
               ctx.textBaseline = "top";
-              ctx.fillStyle = active
-                ? isDark
-                  ? "#c8ccd2"
-                  : "#3a3d44"
-                : isDark
-                  ? "#444851"
-                  : "#c1c5cd";
-              const label = n.label.length > 16 ? n.label.slice(0, 15) + "…" : n.label;
+              const label = n.label.length > 18 ? n.label.slice(0, 17) + "…" : n.label;
+              // 헤일로(배경색 테두리)로 겹침 가독성 확보
+              ctx.lineWidth = 3 / scale;
+              ctx.strokeStyle = bg;
+              ctx.strokeText(label, n.x, n.y + r + 4);
+              ctx.fillStyle = isDark ? "#d5d9df" : "#2e3138";
               ctx.fillText(label, n.x, n.y + r + 4);
             }}
             nodePointerAreaPaint={(node, color, ctx) => {
@@ -438,50 +604,155 @@ export default function GraphRagView(): React.ReactElement {
           />
         )}
 
-        {/* 엔티티 상세 미니 패널 */}
+        {/* CR-21: 상세 패널 (문서=다운로드, 노트=열기, 공통=연결 칩) */}
         {selected && (
           <div
             style={{
               position: "absolute",
               right: 10,
               top: 10,
-              width: 220,
-              background: isDark ? "rgba(22,24,28,0.92)" : "rgba(255,255,255,0.95)",
+              width: 250,
+              maxHeight: "calc(100% - 60px)",
+              overflowY: "auto",
+              background: isDark ? "rgba(22,24,28,0.94)" : "rgba(255,255,255,0.96)",
               border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              padding: "10px 12px",
+              borderRadius: 10,
+              padding: "12px 14px",
               fontSize: "var(--fs-12)",
               backdropFilter: "blur(4px)",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 6 }}>
               <span
                 style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
+                  width: 9,
+                  height: 9,
+                  borderRadius: selected.kind === "document" ? 2 : "50%",
                   background: nodeColor(selected),
                   flexShrink: 0,
+                  marginTop: 3,
                 }}
               />
-              <strong style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+              <strong style={{ flex: 1, lineHeight: 1.4, wordBreak: "break-all" }}>
                 {selected.label}
               </strong>
               <button
                 onClick={() => setSelected(null)}
-                style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--color-text-muted)" }}
+                title="패널 닫기"
+                style={{ border: "none", background: "transparent", cursor: "pointer", color: "var(--color-text-muted)", flexShrink: 0 }}
               >
                 <X size={12} />
               </button>
             </div>
-            <div style={{ color: "var(--color-text-muted)" }}>타입: {selected.type || "기타"}</div>
-            <div style={{ color: "var(--color-text-muted)" }}>
-              연결: {selected.degree}건 — 연결된 문서·노트는 점선 엣지를 따라가세요
+
+            <div style={{ color: "var(--color-text-muted)", marginBottom: 8 }}>
+              {selected.kind === "document"
+                ? "문서"
+                : selected.kind === "note"
+                  ? "업무 노트"
+                  : `엔티티 · ${selected.type || "기타"}`}
+              {" · 연결 "}
+              {selected.degree}건
+              {isPinned(selected.id) && (
+                <span style={{ color: accent }}> · 📌 고정됨</span>
+              )}
             </div>
+
+            {/* 액션 버튼 */}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
+              {selected.kind === "document" && (
+                <>
+                  <PanelBtn
+                    onClick={() => openDocument(selected.id, selected.label)}
+                    accent={accent}
+                    primary
+                  >
+                    <Download size={11} /> 다운로드
+                  </PanelBtn>
+                  <PanelBtn onClick={() => setChatTab("documents")} accent={accent}>
+                    <ExternalLink size={11} /> 문서 탭
+                  </PanelBtn>
+                </>
+              )}
+              {selected.kind === "note" && (
+                <PanelBtn
+                  onClick={() => {
+                    setSelectedNoteSlug(selected.id);
+                    setChatTab("notes");
+                  }}
+                  accent={accent}
+                  primary
+                >
+                  <ExternalLink size={11} /> 노트 열기
+                </PanelBtn>
+              )}
+              <PanelBtn
+                onClick={() =>
+                  isPinned(selected.id) ? unpinNode(selected) : pinNode(selected)
+                }
+                accent={accent}
+              >
+                {isPinned(selected.id) ? (
+                  <>
+                    <PinOff size={11} /> 핀 뽑기
+                  </>
+                ) : (
+                  <>
+                    <Pin size={11} /> 핀 꽂기
+                  </>
+                )}
+              </PanelBtn>
+            </div>
+
+            {/* 연결 항목 — 클릭 시 해당 노드로 이동 + 핀 */}
+            {selectedConnections.length > 0 && (
+              <>
+                <div style={{ fontWeight: 600, marginBottom: 5, fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+                  연결된 항목 (클릭 = 이동·핀)
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {selectedConnections.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => focusNodeById(c.id)}
+                      title={c.label}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        border: "1px solid var(--color-border)",
+                        background: "transparent",
+                        borderRadius: 6,
+                        padding: "4px 8px",
+                        cursor: "pointer",
+                        color: "var(--color-text)",
+                        fontSize: "var(--fs-11)",
+                        fontFamily: "inherit",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: c.kind === "document" ? 2 : "50%",
+                          background: nodeColor(c),
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {c.label}
+                      </span>
+                      {isPinned(c.id) && <Pin size={9} style={{ color: accent, flexShrink: 0 }} />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {/* 좌하단 범례 */}
+        {/* 좌하단 범례 + 조작 힌트 */}
         <div
           style={{
             position: "absolute",
@@ -494,20 +765,59 @@ export default function GraphRagView(): React.ReactElement {
             borderRadius: 6,
             padding: "6px 8px",
             display: "flex",
-            gap: 10,
-            alignItems: "center",
+            flexDirection: "column",
+            gap: 3,
             backdropFilter: "blur(4px)",
             pointerEvents: "none",
           }}
         >
-          <span>● 엔티티</span>
-          <span>■ 문서</span>
-          <span>◆ 노트</span>
-          <span>— 관계</span>
-          <span>┄ 언급</span>
+          <div style={{ display: "flex", gap: 10 }}>
+            <span>● 엔티티</span>
+            <span>■ 문서</span>
+            <span>◆ 노트</span>
+            <span>— 관계</span>
+            <span>┄ 언급</span>
+          </div>
+          <div style={{ opacity: 0.8 }}>
+            클릭 = 핀 고정·해제 · 드래그 = 원하는 위치에 고정 · 핀 있으면 연계 항목만 강조
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function PanelBtn({
+  onClick,
+  accent,
+  primary = false,
+  children,
+}: {
+  onClick: () => void;
+  accent: string;
+  primary?: boolean;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: "var(--fs-11)",
+        padding: "4px 9px",
+        borderRadius: 6,
+        border: `1px solid ${primary ? accent : "var(--color-border)"}`,
+        background: primary ? accent : "transparent",
+        color: primary ? "#fff" : "var(--color-text)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        fontWeight: primary ? 600 : 400,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 
