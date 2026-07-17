@@ -224,6 +224,40 @@ def _require_rag(ctx: Any) -> Any:
     return svc
 
 
+@router.get("/search")
+async def search_content(
+    request: Request,
+    q: str = Query(..., min_length=1, max_length=500),
+    top_k: int = Query(5, ge=1, le=20),
+) -> dict[str, Any]:
+    """CR-22: 내용 기반 문서 검색 (그래프 탭 검색창 등 프론트 직접 호출용).
+
+    파일명이 아니라 본문 임베딩+키워드 하이브리드로 찾는다. 그래프RAG가 켜져 있으면
+    그래프 융합 검색을 사용한다.
+    """
+    ctx = _get_context(request)
+    graph_rag = getattr(ctx, "graph_rag_service", None)
+    if graph_rag is not None:
+        result = await graph_rag.hybrid_retrieve(q, top_k=top_k)
+    else:
+        rag = _require_rag(ctx)
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, lambda: rag.retrieve(q, top_k))
+    return {
+        "hits": [
+            {
+                "doc_id": h.doc_id,
+                "doc_name": h.doc_name,
+                "page": h.page,
+                "snippet": (h.text or "")[:160],
+                "score": round(float(h.score), 3),
+            }
+            for h in result.hits
+        ],
+        "found": result.found,
+    }
+
+
 def _chunk_with_meta(text: str, doc_name: str, page: int | None) -> str:
     """청크 텍스트 앞에 출처 메타정보를 삽입해 LLM이 자연스럽게 인식하도록 한다."""
     if page is not None:

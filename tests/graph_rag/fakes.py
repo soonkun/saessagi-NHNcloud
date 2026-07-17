@@ -147,6 +147,33 @@ class FakeGraphStore(GraphStore):
         linked = {eid for eid, _cid in self.chunk_links}
         self.entities = {i: e for i, e in self.entities.items() if i in linked}
 
+    def all_entities(self, limit: int = 2000) -> list[Entity]:
+        return list(self.entities.values())[:limit]
+
+    def merge_entities(self, target_id: str, source_ids: list[str]) -> int:
+        source_ids = [s for s in source_ids if s and s != target_id and s in self.entities]
+        if not source_ids or target_id not in self.entities:
+            return 0
+        srcs = set(source_ids)
+        # 청크 언급 이전
+        self.chunk_links = {
+            (target_id if eid in srcs else eid, cid) for eid, cid in self.chunk_links
+        }
+        # 관계 이전 (source/target 재지정, 자기참조 제거)
+        new_rels: dict[tuple[str, str, str], Relation] = {}
+        for (s, t, ty), r in self.relations.items():
+            ns = target_id if s in srcs else s
+            nt = target_id if t in srcs else t
+            if ns == nt:
+                continue
+            new_rels[(ns, nt, ty)] = Relation(
+                source_id=ns, target_id=nt, type=ty, description=r.description, weight=r.weight
+            )
+        self.relations = new_rels
+        for sid in source_ids:
+            self.entities.pop(sid, None)
+        return len(source_ids)
+
     def stats(self) -> dict[str, int]:
         return {
             "entities": len(self.entities),

@@ -314,6 +314,67 @@ class Neo4jGraphStore(GraphStore):
 
         return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
 
+    def all_entities(self, limit: int = 2000) -> list[Entity]:
+        rows = self._run(
+            "MATCH (e:Entity) "
+            "RETURN e.id AS id, e.name AS name, e.type AS type, "
+            "  coalesce(e.description, '') AS description "
+            "LIMIT $limit",
+            limit=limit,
+        )
+        return [Entity(**row) for row in rows]
+
+    def merge_entities(self, target_id: str, source_ids: list[str]) -> int:
+        """CR-22 정규화: 언급(MENTIONED_IN)·관계(REL)를 target으로 이전 후 source 삭제."""
+        source_ids = [s for s in source_ids if s and s != target_id]
+        if not source_ids:
+            return 0
+        # 병합 대상 수 선계수 (존재하는 것만)
+        rows = self._run(
+            "MATCH (s:Entity) WHERE s.id IN $sources RETURN count(s) AS n",
+            sources=source_ids,
+        )
+        count = int(rows[0]["n"]) if rows else 0
+        if count == 0:
+            return 0
+        # 청크 언급 이전 (중복은 MERGE로 흡수)
+        self._run(
+            "MATCH (s:Entity)-[m:MENTIONED_IN]->(c:Chunk) WHERE s.id IN $sources "
+            "MATCH (t:Entity {id: $target}) "
+            "MERGE (t)-[:MENTIONED_IN]->(c) "
+            "DELETE m",
+            sources=source_ids,
+            target=target_id,
+        )
+        # 나가는 관계 이전
+        self._run(
+            "MATCH (s:Entity)-[r:REL]->(b:Entity) "
+            "WHERE s.id IN $sources AND b.id <> $target AND NOT b.id IN $sources "
+            "MATCH (t:Entity {id: $target}) "
+            "MERGE (t)-[nr:REL {type: r.type}]->(b) "
+            "ON CREATE SET nr.description = r.description, nr.weight = coalesce(r.weight, 1) "
+            "DELETE r",
+            sources=source_ids,
+            target=target_id,
+        )
+        # 들어오는 관계 이전
+        self._run(
+            "MATCH (a:Entity)-[r:REL]->(s:Entity) "
+            "WHERE s.id IN $sources AND a.id <> $target AND NOT a.id IN $sources "
+            "MATCH (t:Entity {id: $target}) "
+            "MERGE (a)-[nr:REL {type: r.type}]->(t) "
+            "ON CREATE SET nr.description = r.description, nr.weight = coalesce(r.weight, 1) "
+            "DELETE r",
+            sources=source_ids,
+            target=target_id,
+        )
+        # 잔여 간선 포함 삭제
+        self._run(
+            "MATCH (s:Entity) WHERE s.id IN $sources DETACH DELETE s",
+            sources=source_ids,
+        )
+        return count
+
     def delete_by_doc_id(self, doc_id: str) -> None:
         # 문서/노트 + 소속 청크 삭제
         self._run(

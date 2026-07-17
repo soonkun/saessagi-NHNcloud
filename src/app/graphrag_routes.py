@@ -128,6 +128,23 @@ async def reindex(request: Request, body: ReindexReq) -> ReindexResp:
     return ReindexResp(scheduled=True, count=count)
 
 
+class NormalizeResp(BaseModel):
+    groups: list[list[str]]
+    merged: int
+
+
+@router.post("/normalize", response_model=NormalizeResp)
+async def normalize(request: Request) -> NormalizeResp:
+    """CR-22: 엔티티 정규화 — 표기 변형(정식명/약칭 등)을 LLM 제안으로 병합."""
+    svc = _get_service(request)
+    if not svc.available:
+        raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    result = await svc.normalize_entities()
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail=str(result["error"]))
+    return NormalizeResp(groups=result["groups"], merged=result["merged"])
+
+
 @router.get("/evidence/latest", response_model=EvidenceResp)
 async def latest_evidence(request: Request) -> EvidenceResp:
     svc = _get_service(request)

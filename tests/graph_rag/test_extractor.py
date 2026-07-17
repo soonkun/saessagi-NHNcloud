@@ -136,7 +136,9 @@ async def test_extract_uses_custom_prompt_from_provider() -> None:
             super().__init__({"농림축산식품부": _GOOD_RESPONSE})
             self.system_prompts: list[str] = []
 
-        async def __call__(self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any) -> dict[str, Any]:
+        async def __call__(
+            self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any
+        ) -> dict[str, Any]:
             self.system_prompts.append(system_prompt)
             return await super().__call__(system_prompt, user_prompt, json_schema, **kw)
 
@@ -156,7 +158,9 @@ async def test_extract_empty_provider_falls_back_to_default() -> None:
             super().__init__({"농림축산식품부": _GOOD_RESPONSE})
             self.system_prompts: list[str] = []
 
-        async def __call__(self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any) -> dict[str, Any]:
+        async def __call__(
+            self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any
+        ) -> dict[str, Any]:
             self.system_prompts.append(system_prompt)
             return await super().__call__(system_prompt, user_prompt, json_schema, **kw)
 

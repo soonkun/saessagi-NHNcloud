@@ -71,6 +71,17 @@ class GraphStore(ABC):
         """문서/노트와 소속 청크 삭제 + 고아 엔티티 정리."""
 
     @abstractmethod
+    def all_entities(self, limit: int = 2000) -> list[Entity]:
+        """전체 엔티티 목록 (정규화 후보 수집용)."""
+
+    @abstractmethod
+    def merge_entities(self, target_id: str, source_ids: list[str]) -> int:
+        """CR-22 정규화: source 엔티티들의 관계·언급을 target으로 이전 후 삭제.
+
+        Returns: 실제 병합(삭제)된 엔티티 수.
+        """
+
+    @abstractmethod
     def stats(self) -> dict[str, int]:
         """{entities, relations, chunks, documents, notes}."""
 

@@ -21,7 +21,10 @@ import {
   fetchGraphRag,
   fetchGraphRagStatus,
   openDocument,
+  requestGraphNormalize,
   requestGraphReindex,
+  searchRagContent,
+  type ContentSearchHit,
 } from "../services/api";
 import { useStore } from "../store";
 
@@ -101,6 +104,9 @@ export default function GraphRagView(): React.ReactElement {
   const [selected, setSelected] = useState<RFNode | null>(null);
   const [reindexing, setReindexing] = useState(false);
   const [search, setSearch] = useState("");
+  const [contentHits, setContentHits] = useState<ContentSearchHit[]>([]);
+  const [normalizing, setNormalizing] = useState(false);
+  const [normResult, setNormResult] = useState<string>("");
 
   // CR-21: 핀 고정 — id → 고정 좌표. 데이터 리로드 후에도 좌표 복원.
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
@@ -369,6 +375,53 @@ export default function GraphRagView(): React.ReactElement {
     return graphData.nodes.filter((n) => n.label.toLowerCase().includes(q)).slice(0, 8);
   }, [search, graphData]);
 
+  // CR-22: 내용 기반 검색 (본문 임베딩+키워드) — 파일명이 엉망이어도 내용으로 찾는다
+  useEffect(() => {
+    const q = search.trim();
+    if (q.length < 2) {
+      setContentHits([]);
+      return;
+    }
+    const t = setTimeout(() => {
+      void searchRagContent(q, 5)
+        .then((hits) => {
+          // 그래프에 실제 존재하는 문서·노트 노드만 (doc_id → 노드 id 매핑)
+          const seen = new Set<string>();
+          const mapped = hits.filter((h) => {
+            const nodeId = h.doc_id.startsWith("__knowledge__:")
+              ? h.doc_id.slice("__knowledge__:".length)
+              : h.doc_id;
+            if (seen.has(nodeId) || !byId.has(nodeId)) return false;
+            seen.add(nodeId);
+            return true;
+          });
+          setContentHits(mapped);
+        })
+        .catch(() => setContentHits([]));
+    }, 350); // 디바운스
+    return () => clearTimeout(t);
+  }, [search, byId]);
+
+  // CR-22: 엔티티 정규화 실행
+  const handleNormalize = useCallback(() => {
+    if (!window.confirm("같은 대상의 표기 변형(정식명/약칭 등) 엔티티를 AI 판단으로 병합합니다.\n병합은 되돌릴 수 없습니다 (재인덱싱으로 재구축은 가능). 진행할까요?")) {
+      return;
+    }
+    setNormalizing(true);
+    setNormResult("");
+    void requestGraphNormalize()
+      .then((r) => {
+        setNormResult(
+          r.merged === 0
+            ? "병합할 표기 변형이 없습니다."
+            : `${r.groups.length}개 그룹, ${r.merged}개 병합: ${r.groups.map((g) => g.join("=")).join(", ")}`
+        );
+        return load();
+      })
+      .catch((e) => setNormResult(`정규화 실패: ${e instanceof Error ? e.message : String(e)}`))
+      .finally(() => setNormalizing(false));
+  }, [load]);
+
   // 선택 노드의 연결 목록 (패널용) — degree 높은 순, 문서·노트 우선
   const selectedConnections = useMemo(() => {
     if (!selected) return [];
@@ -471,13 +524,13 @@ export default function GraphRagView(): React.ReactElement {
                 fontFamily: "inherit",
               }}
             />
-            {searchMatches.length > 0 && (
+            {(searchMatches.length > 0 || contentHits.length > 0) && (
               <div
                 style={{
                   position: "absolute",
                   top: "calc(100% + 4px)",
                   right: 0,
-                  width: 230,
+                  width: 270,
                   zIndex: 20,
                   background: isDark ? "rgba(22,24,28,0.97)" : "rgba(255,255,255,0.98)",
                   border: "1px solid var(--color-border)",
@@ -487,8 +540,15 @@ export default function GraphRagView(): React.ReactElement {
                   flexDirection: "column",
                   gap: 2,
                   boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+                  maxHeight: 340,
+                  overflowY: "auto",
                 }}
               >
+                {searchMatches.length > 0 && (
+                  <div style={{ fontSize: "var(--fs-10)", fontWeight: 700, color: "var(--color-text-muted)", padding: "3px 7px 1px" }}>
+                    이름 일치
+                  </div>
+                )}
                 {searchMatches.map((m) => (
                   <button
                     key={m.id}
@@ -528,6 +588,47 @@ export default function GraphRagView(): React.ReactElement {
                     </span>
                   </button>
                 ))}
+                {contentHits.length > 0 && (
+                  <div style={{ fontSize: "var(--fs-10)", fontWeight: 700, color: "var(--color-text-muted)", padding: "5px 7px 1px", borderTop: searchMatches.length > 0 ? "1px solid var(--color-border)" : "none" }}>
+                    내용 일치 (본문 검색)
+                  </div>
+                )}
+                {contentHits.map((h) => {
+                  const nodeId = h.doc_id.startsWith("__knowledge__:")
+                    ? h.doc_id.slice("__knowledge__:".length)
+                    : h.doc_id;
+                  return (
+                    <button
+                      key={h.doc_id}
+                      onClick={() => {
+                        focusNodeById(nodeId);
+                        setSearch("");
+                      }}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                        border: "none",
+                        background: "transparent",
+                        borderRadius: 5,
+                        padding: "4px 7px",
+                        cursor: "pointer",
+                        color: "var(--color-text)",
+                        fontSize: "var(--fs-11)",
+                        fontFamily: "inherit",
+                        textAlign: "left",
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                        {h.doc_name}
+                        {h.page ? ` · p.${h.page}` : ""}
+                      </span>
+                      <span style={{ color: "var(--color-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
+                        {h.snippet}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -590,6 +691,28 @@ export default function GraphRagView(): React.ReactElement {
             </span>
           )}
           <button
+            onClick={handleNormalize}
+            disabled={normalizing || notConnected}
+            title="같은 대상의 표기 변형(정식명·약칭 등) 엔티티를 AI 판단으로 병합"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: "var(--fs-11)",
+              padding: "3px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--color-border)",
+              background: "var(--color-bg)",
+              color: "var(--color-text)",
+              cursor: notConnected || normalizing ? "not-allowed" : "pointer",
+              fontFamily: "inherit",
+              opacity: notConnected || normalizing ? 0.5 : 1,
+            }}
+          >
+            <Network size={11} />
+            {normalizing ? "정규화 중…" : "정규화"}
+          </button>
+          <button
             onClick={() => {
               setReindexing(true);
               void requestGraphReindex()
@@ -618,6 +741,33 @@ export default function GraphRagView(): React.ReactElement {
           </button>
         </div>
       </div>
+
+      {/* 정규화 결과 배너 */}
+      {normResult && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            background: "rgba(86,179,128,0.1)",
+            borderBottom: "1px solid var(--color-border)",
+            fontSize: "var(--fs-12)",
+            flexShrink: 0,
+          }}
+        >
+          <span style={{ color: "#3d9668", fontWeight: 600, flexShrink: 0 }}>정규화</span>
+          <span style={{ color: "var(--color-text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {normResult}
+          </span>
+          <button
+            onClick={() => setNormResult("")}
+            style={{ border: "none", background: "transparent", color: "var(--color-text-muted)", cursor: "pointer", display: "flex" }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
 
       {/* evidence 모드 배너 */}
       {evidence && (

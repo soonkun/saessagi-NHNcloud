@@ -289,3 +289,68 @@ def test_delete_document_cascades() -> None:
     svc.delete_document("docG")
     assert graph.stats()["chunks"] == 0
     assert graph.stats()["entities"] == 0
+
+
+# ── CR-22 엔티티 정규화 ───────────────────────────────────────────────────────
+
+
+class _NormalizeLLM:
+    """propose_merges용 fake — 고정 그룹 제안."""
+
+    def __init__(self, groups: list[list[str]]) -> None:
+        self.groups = groups
+
+    async def __call__(
+        self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any
+    ) -> dict[str, Any]:
+        return {"groups": self.groups}
+
+
+@pytest.mark.asyncio
+async def test_normalize_merges_variant_entities() -> None:
+    """정규화: 약칭 엔티티가 정식명으로 병합 — 관계·언급 이전, 노드 삭제."""
+    from graph_rag.types import ChunkLink, Relation
+
+    graph = FakeGraphStore()
+    full = Entity(id="농림축산식품부:조직", name="농림축산식품부", type="조직")
+    abbr = Entity(id="농식품부:조직", name="농식품부", type="조직")
+    biz = Entity(id="스마트팜:사업", name="스마트팜", type="사업")
+    graph.upsert_entities([full, abbr, biz])
+    graph.upsert_relations([Relation(source_id=abbr.id, target_id=biz.id, type="주관", weight=1)])
+    graph.link_chunks([ChunkLink(entity_id=abbr.id, chunk_id="c1")], "doc1", "document")
+
+    svc, _, _ = _make_service(graph=graph)
+    svc._extractor = EntityExtractor(complete_json=_NormalizeLLM([["농림축산식품부", "농식품부"]]))  # type: ignore[arg-type]
+
+    result = await svc.normalize_entities()
+    assert result["merged"] == 1
+    assert result["groups"] == [["농림축산식품부", "농식품부"]]
+    # 약칭 노드 삭제, 관계·언급이 정식명으로 이전
+    assert abbr.id not in graph.entities
+    assert (full.id, biz.id, "주관") in graph.relations
+    assert (full.id, "c1") in graph.chunk_links
+
+
+@pytest.mark.asyncio
+async def test_normalize_store_down_returns_error() -> None:
+    """정규화: 저장소 미연결이면 병합 없이 error 반환."""
+    graph = FakeGraphStore(alive=False)
+    svc, _, _ = _make_service(graph=graph)
+    result = await svc.normalize_entities()
+    assert result["merged"] == 0
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_propose_merges_conservative_parsing() -> None:
+    """propose_merges: 목록에 없는 이름·1개짜리 그룹·중복 소속은 걸러진다."""
+    llm = _NormalizeLLM(
+        [
+            ["농림축산식품부", "농식품부", "창작된이름"],  # 창작된이름 제거돼도 2개라 유지
+            ["경상북도"],  # 1개 → 제거
+            ["농식품부", "또다른것"],  # 농식품부는 이미 사용됨 → 그룹 무효
+        ]
+    )
+    ext = EntityExtractor(complete_json=llm)  # type: ignore[arg-type]
+    groups = await ext.propose_merges(["농림축산식품부", "농식품부", "경상북도", "또다른것"])
+    assert groups == [["농림축산식품부", "농식품부"]]

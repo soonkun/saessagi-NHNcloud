@@ -272,6 +272,27 @@ export async function requestGraphReindex(docId?: string): Promise<{ scheduled: 
   });
 }
 
+export async function requestGraphNormalize(): Promise<{ groups: string[][]; merged: number }> {
+  return apiFetch<{ groups: string[][]; merged: number }>("/api/graphrag/normalize", {
+    method: "POST",
+  });
+}
+
+export interface ContentSearchHit {
+  doc_id: string;
+  doc_name: string;
+  page: number | null;
+  snippet: string;
+  score: number;
+}
+
+export async function searchRagContent(q: string, topK = 5): Promise<ContentSearchHit[]> {
+  const data = await apiFetch<{ hits: ContentSearchHit[] }>(
+    `/api/rag/search?q=${encodeURIComponent(q)}&top_k=${topK}`
+  );
+  return data.hits;
+}
+
 export async function fetchGraphEvidence(): Promise<GraphRagEvidence | null> {
   try {
     return await apiFetch<GraphRagEvidence>("/api/graphrag/evidence/latest");

@@ -72,6 +72,35 @@ EXTRACT_JSON_SCHEMA: dict[str, Any] = {
 }
 
 
+NORMALIZE_SYSTEM_PROMPT = """당신은 지식그래프의 엔티티 목록에서 같은 대상의 표기 변형(정식명칭/약칭/영문 표기/오탈자)을
+찾아 병합 그룹을 제안하는 정리기입니다. JSON으로만 답하세요: {"groups": [["대표 표기", "변형1", ...], ...]}
+
+규칙:
+- 확실히 같은 실체인 경우만 묶는다. 조금이라도 애매하면 묶지 않는다 (보수적으로)
+- 상하위 관계는 절대 묶지 않는다 (예: '경상북도'와 '경상북도 축산과'는 다른 대상)
+- 서로 다른 과제번호·식별번호는 절대 묶지 않는다 (한 글자만 달라도 다른 과제일 수 있음)
+- 각 그룹의 첫 원소는 가장 정식·완전한 표기로 한다
+- 목록에 있는 이름만 사용한다 (새 이름 창작 금지)
+- 병합할 것이 없으면 {"groups": []}
+
+예시 입력:
+- 농림축산식품부
+- 농식품부
+- 경상북도 축산과
+예시 출력: {"groups": [["농림축산식품부", "농식품부"]]}"""
+
+NORMALIZE_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "groups": {
+            "type": "array",
+            "items": {"type": "array", "items": {"type": "string"}},
+        },
+    },
+    "required": ["groups"],
+}
+
+
 class PromptProviderFn(Protocol):
     """추출 시스템 프롬프트 lazy 조회 — 빈 문자열이면 기본값(EXTRACT_SYSTEM_PROMPT)."""
 
@@ -139,6 +168,47 @@ class EntityExtractor:
             return ExtractionResult()
 
         return self._parse(raw)
+
+    async def propose_merges(self, names: list[str]) -> list[list[str]]:
+        """CR-22 정규화: 같은 타입 엔티티 이름 목록 → 병합 그룹 제안 (보수적 검증).
+
+        반환 그룹은 첫 원소 = 대표 표기. 실패·무효 시 빈 목록 (예외 전파 금지).
+        """
+        uniq = [n for n in dict.fromkeys(n.strip() for n in names) if n]
+        if len(uniq) < 2:
+            return []
+        user = "\n".join(f"- {n}" for n in uniq[:300])
+        try:
+            async with asyncio.timeout(self._timeout_seconds + 2.0):
+                raw = await self._complete_json(
+                    NORMALIZE_SYSTEM_PROMPT,
+                    user,
+                    NORMALIZE_JSON_SCHEMA,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    timeout_seconds=self._timeout_seconds,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("propose_merges 실패 (정규화 스킵): %s", type(exc).__name__)
+            return []
+
+        valid = set(uniq)
+        out: list[list[str]] = []
+        used: set[str] = set()  # 한 이름이 두 그룹에 들어가는 모순 방지
+        for g in (raw.get("groups") if isinstance(raw, dict) else None) or []:
+            if not isinstance(g, list):
+                continue
+            members: list[str] = []
+            for x in g:
+                m = str(x).strip()
+                if m in valid and m not in used and m not in members:
+                    members.append(m)
+            if len(members) >= 2:
+                out.append(members)
+                used.update(members)
+        return out
 
     def _parse(self, raw: dict[str, Any]) -> ExtractionResult:
         """LLM 출력 dict → 검증된 ExtractionResult (견고 파싱)."""

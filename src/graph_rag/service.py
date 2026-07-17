@@ -245,6 +245,50 @@ class GraphRagService:
     def index_statuses(self) -> list[dict[str, Any]]:
         return [st.as_dict() for st in self._statuses.values()]
 
+    # ── CR-22 엔티티 정규화 ───────────────────────────────────────────────────
+
+    async def normalize_entities(self) -> dict[str, Any]:
+        """같은 대상의 표기 변형 엔티티를 LLM 제안으로 병합 (타입별, 보수적).
+
+        Returns: {"groups": [[대표, 변형...], ...], "merged": 병합된 엔티티 수}
+        """
+        if not self.available:
+            return {"groups": [], "merged": 0, "error": "그래프 저장소 연결 불가"}
+
+        loop = asyncio.get_running_loop()
+        entities = await loop.run_in_executor(None, lambda: self._graph.all_entities(2000))
+        by_type: dict[str, list[Any]] = {}
+        for e in entities:
+            by_type.setdefault(e.type, []).append(e)
+
+        merged_groups: list[list[str]] = []
+        merged_count = 0
+        for type_, ents in by_type.items():
+            if len(ents) < 2:
+                continue
+            groups = await self._extractor.propose_merges([e.name for e in ents])
+            name_to_ent = {e.name: e for e in ents}
+            for g in groups:
+                target = name_to_ent.get(g[0])
+                source_ids = [name_to_ent[n].id for n in g[1:] if n in name_to_ent]
+                if target is None or not source_ids:
+                    continue
+                try:
+                    n = await loop.run_in_executor(
+                        None, lambda t=target, s=source_ids: self._graph.merge_entities(t.id, s)
+                    )
+                except Exception as exc:
+                    logger.warning("정규화 병합 실패 (그룹 스킵, type=%s): %s", type_, exc)
+                    continue
+                if n > 0:
+                    merged_count += n
+                    merged_groups.append(g)
+
+        logger.info(
+            "GraphRAG 정규화 완료: 그룹 %d개, 엔티티 %d개 병합", len(merged_groups), merged_count
+        )
+        return {"groups": merged_groups, "merged": merged_count}
+
     def delete_document(self, doc_id: str) -> None:
         """문서 삭제 연쇄 (sync — 라우트에서 executor로 호출)."""
         try:
