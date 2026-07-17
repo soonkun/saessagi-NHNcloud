@@ -82,10 +82,16 @@ class DeepResearchService:
     # ── 파이프라인 ────────────────────────────────────────────────────────────
 
     async def run(
-        self, mode: str, prompt: str, attachment_text: str = ""
+        self,
+        mode: str,
+        prompt: str,
+        attachment_text: str = "",
+        scope_doc_ids: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """딥 리서치 실행 — 진행 이벤트를 순차 yield (스펙 §3).
 
+        scope_doc_ids가 주어지면 검색 근거를 해당 문서들로 제한한다
+        (CR-21 연동: 그래프 탭에서 핀 꽂은 문서 범위 리서치).
         마지막 이벤트는 {stage:"done", report, sources, sub_queries} 또는
         {stage:"error", message}.
         """
@@ -111,11 +117,20 @@ class DeepResearchService:
             }
             return
 
+        scope = {s for s in (scope_doc_ids or []) if s}
+        if scope:
+            yield {
+                "stage": "notice",
+                "message": f"검색 범위를 지정 문서 {len(scope)}건으로 제한합니다.",
+            }
+
         async with self._lock:
-            async for event in self._run_pipeline(mode, user_input):
+            async for event in self._run_pipeline(mode, user_input, scope or None):
                 yield event
 
-    async def _run_pipeline(self, mode: str, user_input: str) -> AsyncIterator[dict[str, Any]]:
+    async def _run_pipeline(
+        self, mode: str, user_input: str, scope: set[str] | None = None
+    ) -> AsyncIterator[dict[str, Any]]:
         # 1. 계획
         yield {"stage": "planning", "message": "검색 계획 수립 중..."}
         sub_queries = await self._plan(mode, user_input)
@@ -135,7 +150,7 @@ class DeepResearchService:
         pool: dict[str, SearchHit] = {}  # chunk_id → hit (중복 제거)
         for i, q in enumerate(sub_queries, 1):
             yield {"stage": "searching", "message": f"자료 검색 {i}/{len(sub_queries)}: {q}"}
-            hits = await self._retrieve(q)
+            hits = await self._retrieve(q, scope)
             new = self._merge_hits(pool, hits)
             yield {
                 "stage": "searched",
@@ -149,7 +164,7 @@ class DeepResearchService:
             gap_queries = await self._gap_queries(mode, user_input, pool)
             for i, q in enumerate(gap_queries, 1):
                 yield {"stage": "searching", "message": f"보완 검색 {i}/{len(gap_queries)}: {q}"}
-                hits = await self._retrieve(q)
+                hits = await self._retrieve(q, scope)
                 new = self._merge_hits(pool, hits)
                 yield {
                     "stage": "searched",
@@ -224,20 +239,26 @@ class DeepResearchService:
             logger.warning("DeepResearch 계획 실패 (단일 질의 폴백): %s", exc)
         return [user_input[:200].strip()]
 
-    async def _retrieve(self, query: str) -> list[SearchHit]:
-        """하이브리드 검색 (그래프 미가용 시 벡터-only). 실패 시 빈 목록."""
+    async def _retrieve(self, query: str, scope: set[str] | None = None) -> list[SearchHit]:
+        """하이브리드 검색 (그래프 미가용 시 벡터-only). 실패 시 빈 목록.
+
+        scope가 있으면 넉넉히 검색한 뒤 doc_id로 사후 필터링해 top_k를 채운다.
+        """
+        top_k = _TOP_K_PER_QUERY * 4 if scope else _TOP_K_PER_QUERY
         try:
             if self._graph_rag is not None:
-                result = await self._graph_rag.hybrid_retrieve(query, top_k=_TOP_K_PER_QUERY)
-                return list(result.hits)
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(
-                None, lambda: self._rag.retrieve(query, _TOP_K_PER_QUERY)
-            )
-            return list(result.hits)
+                result = await self._graph_rag.hybrid_retrieve(query, top_k=top_k)
+                hits = list(result.hits)
+            else:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, lambda: self._rag.retrieve(query, top_k))
+                hits = list(result.hits)
         except Exception as exc:
             logger.warning("DeepResearch 검색 실패 (query=%r): %s", query[:50], exc)
             return []
+        if scope:
+            hits = [h for h in hits if h.doc_id in scope]
+        return hits[:_TOP_K_PER_QUERY]
 
     async def _gap_queries(
         self, mode: str, user_input: str, pool: dict[str, SearchHit]

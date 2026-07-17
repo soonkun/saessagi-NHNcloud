@@ -31,6 +31,7 @@ async def run_deep_research_stream(
     request: Request,
     mode: str = Form(...),
     prompt: str = Form(""),
+    scope_doc_ids: str = Form(""),  # JSON 배열 — 그래프 핀 문서 범위 (CR-21 연동)
     file: UploadFile | None = File(None),
 ) -> StreamingResponse:
     """딥 리서치 실행 — SSE로 진행 이벤트 + 최종 보고서 스트리밍."""
@@ -44,6 +45,15 @@ async def run_deep_research_stream(
     if file is not None and file.filename:
         attachment_name = file.filename
         attachment_bytes = await file.read()
+
+    scope: list[str] = []
+    if scope_doc_ids.strip():
+        try:
+            parsed = json.loads(scope_doc_ids)
+            if isinstance(parsed, list):
+                scope = [str(s) for s in parsed if s]
+        except Exception:
+            logger.warning("scope_doc_ids 파싱 실패 (무시): %r", scope_doc_ids[:100])
 
     async def event_stream() -> Any:
         if service is None:
@@ -85,7 +95,7 @@ async def run_deep_research_stream(
                 return
 
         try:
-            async for event in service.run(mode, prompt, attachment_text):
+            async for event in service.run(mode, prompt, attachment_text, scope_doc_ids=scope):
                 yield _sse(event)
         except Exception as exc:  # 파이프라인 밖 예외 — SSE로 전달 (연결 하드 종료 방지)
             logger.error("딥 리서치 스트림 예외: %s", exc)

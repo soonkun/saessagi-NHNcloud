@@ -4,7 +4,17 @@
 //        문서 상세/다운로드 패널, 시뮬레이션 안정화.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
-import { Download, ExternalLink, Network, Pin, PinOff, RefreshCw, X } from "lucide-react";
+import {
+  Download,
+  ExternalLink,
+  Network,
+  Pin,
+  PinOff,
+  RefreshCw,
+  Search,
+  Telescope,
+  X,
+} from "lucide-react";
 import type { GraphRagData, GraphRagEvidence, GraphRagStatus, GraphRagNode } from "../types";
 import {
   fetchGraphEvidence,
@@ -47,12 +57,37 @@ function readCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+// hex(#rrggbb) 색을 흰색과 amt(0~1)만큼 혼합 — 노드 그라디언트용
+function lighten(hex: string, amt: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const v = parseInt(m[1], 16);
+  const r = Math.round(((v >> 16) & 255) + (255 - ((v >> 16) & 255)) * amt);
+  const g = Math.round(((v >> 8) & 255) + (255 - ((v >> 8) & 255)) * amt);
+  const b = Math.round((v & 255) + (255 - (v & 255)) * amt);
+  return `rgb(${r},${g},${b})`;
+}
+
+// hex 색을 검정과 amt만큼 혼합
+function darken(hex: string, amt: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const v = parseInt(m[1], 16);
+  const r = Math.round(((v >> 16) & 255) * (1 - amt));
+  const g = Math.round(((v >> 8) & 255) * (1 - amt));
+  const b = Math.round((v & 255) * (1 - amt));
+  return `rgb(${r},${g},${b})`;
+}
+
 export default function GraphRagView(): React.ReactElement {
   const theme = useStore((s) => s.theme);
   const chatTab = useStore((s) => s.chatTab);
   const evidenceReq = useStore((s) => s.graphEvidenceReq);
   const setChatTab = useStore((s) => s.setChatTab);
   const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
+  const graphPinDocs = useStore((s) => s.graphPinDocs);
+  const clearGraphPinDocs = useStore((s) => s.clearGraphPinDocs);
+  const setResearchScope = useStore((s) => s.setResearchScope);
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const fgRef = useRef<ForceGraphMethods<RFNode, RFLink> | undefined>(undefined);
@@ -65,6 +100,7 @@ export default function GraphRagView(): React.ReactElement {
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selected, setSelected] = useState<RFNode | null>(null);
   const [reindexing, setReindexing] = useState(false);
+  const [search, setSearch] = useState("");
 
   // CR-21: 핀 고정 — id → 고정 좌표. 데이터 리로드 후에도 좌표 복원.
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
@@ -185,13 +221,42 @@ export default function GraphRagView(): React.ReactElement {
     [pinnedVersion]
   );
 
-  const pinNode = useCallback((n: RFNode) => {
-    if (n.x === undefined || n.y === undefined) return;
-    n.fx = n.x;
-    n.fy = n.y;
-    pinnedRef.current.set(n.id, { x: n.x, y: n.y });
-    setPinnedVersion((v) => v + 1);
-  }, []);
+  // 핀 시 이웃을 방사형으로 정렬 — 문서·노트를 먼저(위쪽부터 시계방향) 배치
+  const arrangeNeighbors = useCallback(
+    (hub: RFNode) => {
+      if (hub.x === undefined || hub.y === undefined) return;
+      const nbs = [...(neighbors.get(hub.id) ?? [])]
+        .map((id) => byId.get(id))
+        .filter((m): m is RFNode => m !== undefined && !pinnedRef.current.has(m.id));
+      if (nbs.length === 0) return;
+      nbs.sort(
+        (a, b) =>
+          (a.kind === "entity" ? 1 : 0) - (b.kind === "entity" ? 1 : 0) ||
+          b.degree - a.degree
+      );
+      const radius = 46 + Math.sqrt(nbs.length) * 14;
+      nbs.forEach((m, i) => {
+        const ang = (2 * Math.PI * i) / nbs.length - Math.PI / 2;
+        m.x = hub.x! + radius * Math.cos(ang);
+        m.y = hub.y! + radius * Math.sin(ang);
+        (m as { vx?: number; vy?: number }).vx = 0;
+        (m as { vx?: number; vy?: number }).vy = 0;
+      });
+    },
+    [neighbors, byId]
+  );
+
+  const pinNode = useCallback(
+    (n: RFNode) => {
+      if (n.x === undefined || n.y === undefined) return;
+      n.fx = n.x;
+      n.fy = n.y;
+      pinnedRef.current.set(n.id, { x: n.x, y: n.y });
+      arrangeNeighbors(n);
+      setPinnedVersion((v) => v + 1);
+    },
+    [arrangeNeighbors]
+  );
 
   const unpinNode = useCallback((n: RFNode) => {
     n.fx = undefined;
@@ -264,6 +329,46 @@ export default function GraphRagView(): React.ReactElement {
     [byId, pinNode]
   );
 
+  // CR-21: 딥 리서치 근거 → 그래프 핀 요청 소비 (좌표가 잡힐 때까지 재시도)
+  useEffect(() => {
+    if (!graphPinDocs || chatTab !== "graph") return;
+    let tries = 0;
+    const t = setInterval(() => {
+      tries += 1;
+      const nodes = graphPinDocs
+        .map((id) => byId.get(id))
+        .filter((n): n is RFNode => n !== undefined);
+      const ready = nodes.filter((n) => n.x !== undefined);
+      if ((nodes.length > 0 && ready.length === nodes.length) || tries > 20) {
+        clearInterval(t);
+        for (const n of ready) {
+          if (!pinnedRef.current.has(n.id)) pinNode(n);
+        }
+        if (ready[0]) {
+          setSelected(ready[0]);
+          fgRef.current?.centerAt(ready[0].x!, ready[0].y!, 600);
+        }
+        clearGraphPinDocs();
+      }
+    }, 250);
+    return () => clearInterval(t);
+  }, [graphPinDocs, byId, chatTab, pinNode, clearGraphPinDocs]);
+
+  // 핀 꽂힌 문서·노트 (범위 리서치 대상)
+  const pinnedDocNodes = useMemo(() => {
+    void pinnedVersion;
+    return [...pinnedRef.current.keys()]
+      .map((id) => byId.get(id))
+      .filter((n): n is RFNode => n !== undefined && n.kind !== "entity");
+  }, [pinnedVersion, byId]);
+
+  // 검색 매치 (라벨 부분 일치, 최대 8)
+  const searchMatches = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    return graphData.nodes.filter((n) => n.label.toLowerCase().includes(q)).slice(0, 8);
+  }, [search, graphData]);
+
   // 선택 노드의 연결 목록 (패널용) — degree 높은 순, 문서·노트 우선
   const selectedConnections = useMemo(() => {
     if (!selected) return [];
@@ -334,6 +439,126 @@ export default function GraphRagView(): React.ReactElement {
         })}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          {/* 노드 검색 — 선택 시 해당 노드로 이동+핀 */}
+          <div style={{ position: "relative" }}>
+            <Search
+              size={12}
+              style={{
+                position: "absolute",
+                left: 7,
+                top: "50%",
+                transform: "translateY(-50%)",
+                color: "var(--color-text-muted)",
+                pointerEvents: "none",
+              }}
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onClick={() => window.electronAPI?.restoreFocus()}
+              onMouseDown={(e) => e.stopPropagation()}
+              placeholder="노드 검색…"
+              spellCheck={false}
+              style={{
+                width: 150,
+                padding: "4px 8px 4px 24px",
+                fontSize: "var(--fs-11)",
+                borderRadius: 6,
+                border: "1px solid var(--color-border)",
+                background: "var(--color-bg)",
+                color: "var(--color-text)",
+                outline: "none",
+                fontFamily: "inherit",
+              }}
+            />
+            {searchMatches.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "calc(100% + 4px)",
+                  right: 0,
+                  width: 230,
+                  zIndex: 20,
+                  background: isDark ? "rgba(22,24,28,0.97)" : "rgba(255,255,255,0.98)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 8,
+                  padding: 4,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 2,
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
+                }}
+              >
+                {searchMatches.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      focusNodeById(m.id);
+                      setSearch("");
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      border: "none",
+                      background: "transparent",
+                      borderRadius: 5,
+                      padding: "4px 7px",
+                      cursor: "pointer",
+                      color: "var(--color-text)",
+                      fontSize: "var(--fs-11)",
+                      fontFamily: "inherit",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 7,
+                        height: 7,
+                        borderRadius: m.kind === "document" ? 2 : "50%",
+                        background: nodeColor(m),
+                        flexShrink: 0,
+                      }}
+                    />
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m.label}
+                    </span>
+                    <span style={{ color: "var(--color-text-muted)", flexShrink: 0 }}>
+                      {m.kind === "document" ? "문서" : m.kind === "note" ? "노트" : m.type}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {pinnedDocNodes.length > 0 && (
+            <button
+              onClick={() =>
+                setResearchScope(
+                  pinnedDocNodes.map((n) => ({
+                    id: n.kind === "note" ? `__knowledge__:${n.id}` : n.id,
+                    label: n.label,
+                  }))
+                )
+              }
+              title="핀 꽂은 문서·노트 범위로 딥 리서치 실행"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: "var(--fs-11)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--color-border)",
+                background: "var(--color-bg)",
+                color: "var(--color-text)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              <Telescope size={11} />핀 문서로 리서치 ({pinnedDocNodes.length})
+            </button>
+          )}
           {pinnedCount > 0 && (
             <button
               onClick={unpinAll}
@@ -530,30 +755,119 @@ export default function GraphRagView(): React.ReactElement {
                 ctx.fill();
               }
 
-              ctx.fillStyle = active ? color : dimColor;
+              // 호버 글로우 — 부드러운 강조
+              const hovered = hoveredNodeId === n.id;
+              if (active && (hovered || pinned)) {
+                ctx.shadowColor = color + "aa";
+                ctx.shadowBlur = 10;
+              }
+
               if (n.kind === "document") {
-                // 문서 = 둥근 사각형
-                const s2 = r * 1.6;
+                // 문서 = 접힌 귀가 있는 페이지
+                const w = r * 1.75;
+                const h = r * 2.1;
+                const x0 = n.x - w / 2;
+                const y0 = n.y - h / 2;
+                const fold = w * 0.34;
                 ctx.beginPath();
-                ctx.roundRect(n.x - s2 / 2, n.y - s2 / 2, s2, s2, 2.5);
-                ctx.fill();
-              } else if (n.kind === "note") {
-                // 노트 = 마름모
-                ctx.beginPath();
-                ctx.moveTo(n.x, n.y - r * 1.25);
-                ctx.lineTo(n.x + r * 1.25, n.y);
-                ctx.lineTo(n.x, n.y + r * 1.25);
-                ctx.lineTo(n.x - r * 1.25, n.y);
+                ctx.moveTo(x0, y0);
+                ctx.lineTo(x0 + w - fold, y0);
+                ctx.lineTo(x0 + w, y0 + fold);
+                ctx.lineTo(x0 + w, y0 + h);
+                ctx.lineTo(x0, y0 + h);
                 ctx.closePath();
+                if (active) {
+                  const g = ctx.createLinearGradient(x0, y0, x0, y0 + h);
+                  g.addColorStop(0, lighten(color, 0.25));
+                  g.addColorStop(1, color);
+                  ctx.fillStyle = g;
+                } else {
+                  ctx.fillStyle = dimColor;
+                }
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = bg;
+                ctx.stroke();
+                // 접힌 귀
+                ctx.beginPath();
+                ctx.moveTo(x0 + w - fold, y0);
+                ctx.lineTo(x0 + w - fold, y0 + fold);
+                ctx.lineTo(x0 + w, y0 + fold);
+                ctx.closePath();
+                ctx.fillStyle = active ? darken(color, 0.25) : darken("#888e99", 0.35);
+                ctx.fill();
+                // 본문 줄 암시
+                if (active) {
+                  ctx.strokeStyle = isDark ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.75)";
+                  ctx.lineWidth = Math.max(0.7, h * 0.05);
+                  for (const fy of [0.45, 0.6, 0.75]) {
+                    ctx.beginPath();
+                    ctx.moveTo(x0 + w * 0.18, y0 + h * fy);
+                    ctx.lineTo(x0 + w * (fy === 0.75 ? 0.6 : 0.82), y0 + h * fy);
+                    ctx.stroke();
+                  }
+                }
+              } else if (n.kind === "note") {
+                // 노트 = 스티키 노트 (모서리 접힘)
+                const s2 = r * 1.9;
+                const x0 = n.x - s2 / 2;
+                const y0 = n.y - s2 / 2;
+                const fold = s2 * 0.3;
+                ctx.beginPath();
+                ctx.moveTo(x0, y0);
+                ctx.lineTo(x0 + s2, y0);
+                ctx.lineTo(x0 + s2, y0 + s2 - fold);
+                ctx.lineTo(x0 + s2 - fold, y0 + s2);
+                ctx.lineTo(x0, y0 + s2);
+                ctx.closePath();
+                if (active) {
+                  const g = ctx.createLinearGradient(x0, y0, x0 + s2, y0 + s2);
+                  g.addColorStop(0, lighten(color, 0.3));
+                  g.addColorStop(1, color);
+                  ctx.fillStyle = g;
+                } else {
+                  ctx.fillStyle = dimColor;
+                }
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = bg;
+                ctx.stroke();
+                // 접힌 모서리
+                ctx.beginPath();
+                ctx.moveTo(x0 + s2 - fold, y0 + s2);
+                ctx.lineTo(x0 + s2 - fold, y0 + s2 - fold);
+                ctx.lineTo(x0 + s2, y0 + s2 - fold);
+                ctx.closePath();
+                ctx.fillStyle = active ? darken(color, 0.3) : darken("#888e99", 0.35);
                 ctx.fill();
               } else {
+                // 엔티티 = 그라디언트 구슬
                 ctx.beginPath();
                 ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+                if (active) {
+                  const g = ctx.createRadialGradient(
+                    n.x - r * 0.35,
+                    n.y - r * 0.35,
+                    r * 0.15,
+                    n.x,
+                    n.y,
+                    r
+                  );
+                  g.addColorStop(0, lighten(color, 0.45));
+                  g.addColorStop(1, color);
+                  ctx.fillStyle = g;
+                } else {
+                  ctx.fillStyle = dimColor;
+                }
                 ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.lineWidth = 1.1;
+                ctx.strokeStyle = active ? darken(color, 0.2) : bg;
+                ctx.stroke();
               }
-              ctx.lineWidth = 1.1;
-              ctx.strokeStyle = bg;
-              ctx.stroke();
+              ctx.shadowBlur = 0;
 
               // CR-21: 핀 표시 — 액센트 링 + 우상단 핀헤드
               if (pinned) {
@@ -773,8 +1087,8 @@ export default function GraphRagView(): React.ReactElement {
         >
           <div style={{ display: "flex", gap: 10 }}>
             <span>● 엔티티</span>
-            <span>■ 문서</span>
-            <span>◆ 노트</span>
+            <span>▤ 문서</span>
+            <span>◪ 노트</span>
             <span>— 관계</span>
             <span>┄ 언급</span>
           </div>

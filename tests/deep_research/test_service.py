@@ -232,3 +232,33 @@ class TestGuards:
 
         await _collect(svc.run("proposal", "RFP 요약", attachment_text="첨부 RFP 전문"))
         assert "첨부 RFP 전문" in captured["planner_user"]
+
+
+class TestScopeFilter:
+    @pytest.mark.asyncio
+    async def test_scope_filters_hits_to_given_docs(self) -> None:
+        """scope_doc_ids 지정 시 해당 문서의 hit만 근거로 채택."""
+        agent = FakeAgent(plan_queries=["q1"])
+        in_scope = _hit("c1", doc="범위문서")
+        out_scope = _hit("c2", doc="다른문서", score=0.95)
+        graph = FakeGraphRag({"q1": [in_scope, out_scope]})
+        svc = DeepResearchService(agent, FakeRag([]), graph)
+
+        events = await _collect(svc.run("duplication", "내용", scope_doc_ids=["doc-범위문서"]))
+        done = events[-1]
+        assert done["stage"] == "done"
+        assert [s["doc_id"] for s in done["sources"]] == ["doc-범위문서"]
+        # 범위 고지 이벤트
+        assert any(e["stage"] == "notice" and "범위" in e.get("message", "") for e in events)
+
+    @pytest.mark.asyncio
+    async def test_scope_all_filtered_out_yields_no_evidence(self) -> None:
+        """범위 밖 hit만 나오면 근거 0건 처리 (환각 방지 경로)."""
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1", doc="다른문서")]})
+        svc = DeepResearchService(agent, FakeRag([]), graph)
+
+        events = await _collect(svc.run("discovery", "내용", scope_doc_ids=["doc-없는문서"]))
+        done = events[-1]
+        assert done["sources"] == []
+        assert agent.text_calls == 0

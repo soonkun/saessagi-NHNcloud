@@ -3,9 +3,21 @@
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Copy, FileSearch, Lightbulb, FileText, Paperclip, Play, X } from "lucide-react";
-import { API_BASE } from "../services/api";
+import {
+  BookOpen,
+  Copy,
+  FileDown,
+  FileSearch,
+  Lightbulb,
+  FileText,
+  Network,
+  Paperclip,
+  Play,
+  X,
+} from "lucide-react";
+import { API_BASE, createNote } from "../services/api";
 import { readSseStream } from "../services/sse";
+import { useStore } from "../store";
 
 type ResearchMode = "duplication" | "discovery" | "proposal";
 
@@ -49,7 +61,44 @@ const MODES: {
 
 const ACCEPT = ".pdf,.docx,.pptx,.hwpx,.txt,.md";
 
+function ResultBtn({
+  onClick,
+  title,
+  children,
+}: {
+  onClick: () => void;
+  title: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        background: "transparent",
+        border: "1px solid var(--color-border)",
+        borderRadius: 6,
+        color: "var(--color-text-muted)",
+        cursor: "pointer",
+        padding: "4px 10px",
+        fontSize: "var(--fs-11)",
+        fontFamily: "inherit",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function DeepResearchView({ desktop }: { desktop?: boolean }): React.ReactElement {
+  const researchScope = useStore((s) => s.researchScope);
+  const setResearchScope = useStore((s) => s.setResearchScope);
+  const requestGraphPins = useStore((s) => s.requestGraphPins);
+  const bumpNotesRevision = useStore((s) => s.bumpNotesRevision);
+
   const [mode, setMode] = useState<ResearchMode>("duplication");
   const [prompt, setPrompt] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -59,6 +108,8 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
   const [sources, setSources] = useState<NonNullable<SseEvent["sources"]>>([]);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  const [noteSaved, setNoteSaved] = useState(false);
+  const [noteSaving, setNoteSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeMode = MODES.find((m) => m.id === mode) ?? MODES[0];
@@ -75,6 +126,9 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
       const form = new FormData();
       form.append("mode", mode);
       form.append("prompt", prompt);
+      if (researchScope && researchScope.length > 0) {
+        form.append("scope_doc_ids", JSON.stringify(researchScope.map((s) => s.id)));
+      }
       if (file) form.append("file", file);
       const res = await fetch(API_BASE + "/api/deep-research/run-stream", {
         method: "POST",
@@ -109,6 +163,55 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
     } catch {
       /* ignore */
     }
+  }
+
+  function reportWithSources(): string {
+    const src = sources.length
+      ? "\n\n## 참고 자료\n" +
+        sources.map((s) => `- [${s.n}] ${s.doc_name}${s.page ? ` p.${s.page}` : ""}`).join("\n")
+      : "";
+    return report + src;
+  }
+
+  // 근거 문서를 그래프 탭에 핀으로 표시 — 노트 doc_id(__knowledge__:slug)는 slug로 매핑
+  function handlePinInGraph(): void {
+    const ids = [...new Set(sources.map((s) => s.doc_id))].map((id) =>
+      id.startsWith("__knowledge__:") ? id.slice("__knowledge__:".length) : id
+    );
+    if (ids.length > 0) requestGraphPins(ids);
+  }
+
+  async function handleSaveNote(): Promise<void> {
+    if (noteSaving || !report) return;
+    setNoteSaving(true);
+    try {
+      const title = `[딥리서치·${activeMode.label}] ${(prompt.trim() || "첨부 기반").slice(0, 40)}`;
+      await createNote({
+        title,
+        content: reportWithSources(),
+        tags: ["딥리서치"],
+        related_docs: [...new Set(sources.map((s) => s.doc_id))],
+      });
+      bumpNotesRevision();
+      setNoteSaved(true);
+      setTimeout(() => setNoteSaved(false), 2500);
+    } catch (e) {
+      setError(`노트 저장 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setNoteSaving(false);
+    }
+  }
+
+  function handleDownloadMd(): void {
+    const blob = new Blob([reportWithSources()], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `딥리서치_${activeMode.label}_${new Date().toISOString().slice(0, 10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -168,6 +271,56 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
           </button>
         ))}
       </div>
+
+      {/* 그래프 핀 문서 범위 (CR-21 연동) */}
+      {researchScope && researchScope.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            padding: "8px 12px",
+            background: "rgba(100,140,220,0.08)",
+            border: "1px solid rgba(100,140,220,0.3)",
+            borderRadius: 10,
+            fontSize: "var(--fs-12)",
+          }}
+        >
+          <Network size={13} style={{ color: "var(--color-accent)", flexShrink: 0 }} />
+          <span style={{ fontWeight: 600 }}>검색 범위: 그래프 핀 문서 {researchScope.length}건</span>
+          <span
+            style={{
+              color: "var(--color-text-muted)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            {researchScope.map((s) => s.label).join(" · ")}
+          </span>
+          <button
+            onClick={() => setResearchScope(null)}
+            title="범위 해제 — 전체 지식 기반 검색"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 3,
+              border: "none",
+              background: "transparent",
+              color: "var(--color-text-muted)",
+              cursor: "pointer",
+              fontSize: "var(--fs-11)",
+              fontFamily: "inherit",
+              flexShrink: 0,
+            }}
+          >
+            <X size={12} /> 해제
+          </button>
+        </div>
+      )}
 
       {/* 입력 */}
       <textarea
@@ -322,25 +475,23 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
             padding: desktop ? "18px 22px" : 14,
           }}
         >
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
-            <button
-              onClick={() => void handleCopy()}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                background: "transparent",
-                border: "1px solid var(--color-border)",
-                borderRadius: 6,
-                color: "var(--color-text-muted)",
-                cursor: "pointer",
-                padding: "4px 10px",
-                fontSize: "var(--fs-11)",
-              }}
-            >
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+            {sources.length > 0 && (
+              <ResultBtn onClick={handlePinInGraph} title="근거 문서를 그래프 탭에 핀으로 표시">
+                <Network size={11} /> 그래프에 핀
+              </ResultBtn>
+            )}
+            <ResultBtn onClick={() => void handleSaveNote()} title="보고서를 업무 노트로 저장">
+              <BookOpen size={11} />
+              {noteSaving ? "저장 중..." : noteSaved ? "노트 저장됨 ✓" : "업무노트로 저장"}
+            </ResultBtn>
+            <ResultBtn onClick={handleDownloadMd} title="마크다운 파일로 다운로드">
+              <FileDown size={11} /> MD 저장
+            </ResultBtn>
+            <ResultBtn onClick={() => void handleCopy()} title="보고서 본문 복사">
               <Copy size={11} />
               {copied ? "복사됨 ✓" : "복사"}
-            </button>
+            </ResultBtn>
           </div>
           <div className="md-body" style={{ fontSize: "var(--fs-13)", lineHeight: 1.7 }}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
