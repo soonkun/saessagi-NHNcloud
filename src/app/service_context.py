@@ -66,6 +66,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
         # M_20: DeepResearchService 슬롯 (init_agent에서 조립 — LLM·검색 서비스 필요)
         self.deep_research_service: Any = None  # DeepResearchService | None
+        # CR-23: REST 라우트용 비스트리밍 완성 agent (init_agent에서 설정)
+        self.gemma_agent: Any = None  # GemmaChatAgent | None
         self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
         # load_full_config 후 주입
         self.app_config: "AppConfig | None" = None
@@ -568,6 +570,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self.system_prompt = system_prompt
 
         # (9) MeetingMinutesService에 agent 주입 (load_app_services에서 None으로 초기화됨)
+        # CR-23: 노트 AI 편집 등 REST 라우트에서 비스트리밍 완성이 필요해 슬롯으로도 노출
+        self.gemma_agent = gemma_agent
         if self.meeting_minutes_service is not None:
             self.meeting_minutes_service.set_agent(gemma_agent)
             logger.info("AppServiceContext.init_agent: MeetingMinutesService.set_agent 완료")

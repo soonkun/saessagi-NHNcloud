@@ -4,12 +4,62 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from .types import IntentResult, RagSource
 
 logger = logging.getLogger(__name__)
+
+# ── 후속 질문(follow-up) 감지 (CR-23) ─────────────────────────────────────────
+# 직전 답변을 참조하는 후속 질문은 분류·RAG 재검색 없이 대화 맥락으로 처리해야 한다.
+# ("그럼 내용을 요약해줘"를 독립 분류하면 doc_query로 빠져 무관한 청크가 주입되는 문제)
+
+# 직전 내용을 가리키는 지시어 — 담화 표지 단독("그럼")은 새 요청 앞에도 붙으므로 제외
+_FOLLOWUP_ANAPHORA = re.compile(
+    r"(그\s?내용|그\s?결과|그\s?답변|그거|그것|그건|그중|그\s?중에|위\s?내용|위\s?답변|"
+    r"위에서|방금|아까|앞서|앞의|이\s?내용|이거를|이걸|이건|거기서|둘\s?중|셋\s?중)"
+)
+# 재표현 요청 — 짧은 문장이면 거의 항상 직전 답변 대상
+_FOLLOWUP_REPHRASE = re.compile(
+    r"(요약|정리)\s?해|짧게|간단히|한\s?문장|한\s?줄|표로\s?(만들|정리|보여)|"
+    r"다시\s?(설명|말해)|풀어서|쉽게\s?(설명|말해)|번역해"
+)
+# 새 검색 대상을 특정하는 단서 — 있으면 후속이 아니라 새 질의로 본다
+_FOLLOWUP_NEW_TARGET = re.compile(r"(문서|보고서|파일|자료|계획서|RFP|규정|노트)에?\s?(에서|의|를|을)?")
+
+
+def looks_like_followup(text: str) -> bool:
+    """직전 답변을 참조하는 후속 질문인지 판정 (보수적 휴리스틱).
+
+    True 조건:
+    1. 내용 지시어(그 내용/그거/방금/아까 등) 포함, 또는
+    2. 60자 이하의 재표현 요청(요약/짧게/한 문장/표로 등)
+    단, 새 검색 대상(문서/보고서/파일명 등)을 명시하면 False.
+    """
+    t = " ".join((text or "").split())
+    if not t:
+        return False
+    if _FOLLOWUP_NEW_TARGET.search(t):
+        return False
+    if _FOLLOWUP_ANAPHORA.search(t):
+        return True
+    return len(t) <= 60 and _FOLLOWUP_REPHRASE.search(t) is not None
+
+
+def followup_decision() -> "RoutingDecision":
+    """후속 질문용 라우팅 — 재검색·도구 유도 없이 대화 맥락(메모리)만으로 답한다."""
+    return RoutingDecision(
+        inject_rag=False,
+        rag_source="both",
+        tool_hint=(
+            "직전 대화에 이어지는 후속 요청입니다. 새로 검색하지 말고 "
+            "바로 위 대화에서 당신이 답한 내용을 대상으로 요청을 수행하세요."
+        ),
+        autonomous=False,
+        answer_guide=None,
+    )
 
 # ── tool_hint 문구 상수 ────────────────────────────────────────────────────────
 

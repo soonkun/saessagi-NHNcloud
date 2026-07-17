@@ -490,7 +490,31 @@ def _make_adapter_class() -> type:
             # 진행 상태 1: 의도 분류는 LLM 1회 호출(~1초)이라 먼저 알린다
             yield _status_event("질문을 살펴보고 있어요…")
 
-            if self._intent_classifier is not None and user_text_for_classify.strip():
+            # ── CR-23: 후속 질문 감지 — 직전 답변 참조 요청은 분류·재검색 없이
+            # 대화 맥락(메모리)으로 처리 ("그럼 요약해줘"가 doc_query로 빠져 무관한
+            # 청크가 주입되고 딴소리하던 문제)
+            _followup_handled = False
+            if (
+                self._last_intent is not None  # 이전 턴이 있어야 후속이 성립
+                and not has_attachment
+                and user_text_for_classify.strip()
+            ):
+                from intent_gate.routing import followup_decision, looks_like_followup
+
+                if looks_like_followup(user_text_for_classify):
+                    self._last_routing = followup_decision()
+                    self._last_intent = "followup"
+                    _followup_handled = True
+                    logger.info(
+                        "IntentGate 후속 질문 감지 — 분류·RAG 재검색 생략, 대화 맥락으로 처리 (query=%r)",
+                        user_text_for_classify[:50],
+                    )
+
+            if (
+                not _followup_handled
+                and self._intent_classifier is not None
+                and user_text_for_classify.strip()
+            ):
                 try:
                     from intent_gate import decide_with_confidence
 

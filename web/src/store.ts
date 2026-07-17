@@ -5,6 +5,7 @@ import type {
   AiStatus,
   Position,
   ChatTab,
+  HistoryInfo,
 } from "./types";
 
 // ────────────────────────────────────────────────────────────
@@ -103,11 +104,17 @@ interface ChatSlice {
   /** 진행 상태 말풍선 텍스트 ("문서를 찾아보고 있어요…" 등). null이면 비표시 */
   agentStatus: string | null;
   isMicOn: boolean;
+  // CR-23: 대화 히스토리 (채팅방) 목록·현재 방
+  histories: HistoryInfo[];
+  currentHistoryUid: string | null;
   addMessage: (msg: Omit<Message, "id" | "timestamp">) => string;
   setAiStatus: (status: AiStatus) => void;
   setAgentStatus: (text: string | null) => void;
   setMicOn: (on: boolean) => void;
   clearMessages: () => void;
+  setMessages: (messages: Message[]) => void;
+  setHistories: (histories: HistoryInfo[]) => void;
+  setCurrentHistoryUid: (uid: string | null) => void;
   attachCitations: (messageId: string, citedDocs: import("./types").CitedDoc[]) => void;
   attachNoteCitations: (messageId: string, citedNotes: import("./types").CitedNote[]) => void;
 }
@@ -262,6 +269,11 @@ export const useStore = create<AppStore>((set, get) => ({
   setAgentStatus: (text) => set({ agentStatus: text }),
   setMicOn: (on) => set({ isMicOn: on }),
   clearMessages: () => set({ messages: [] }),
+  setMessages: (messages) => set({ messages }),
+  histories: [] as HistoryInfo[],
+  currentHistoryUid: null as string | null,
+  setHistories: (histories) => set({ histories }),
+  setCurrentHistoryUid: (uid) => set({ currentHistoryUid: uid }),
   attachCitations: (messageId, citedDocs) =>
     set((state) => ({
       messages: state.messages.map((m) =>

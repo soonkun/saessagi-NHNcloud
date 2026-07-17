@@ -224,6 +224,31 @@ export async function createNote(body: {
   });
 }
 
+// CR-23: 노트 AI 편집 — 지시(선택 영역·첨부 포함)로 본문 재작성/부분 대체 텍스트 생성
+export async function aiEditNote(body: {
+  instruction: string;
+  content: string;
+  title?: string;
+  selection?: string;
+  file?: File | null;
+}): Promise<{ mode: "whole" | "selection"; result: string }> {
+  const form = new FormData();
+  form.append("instruction", body.instruction);
+  form.append("content", body.content);
+  if (body.title) form.append("title", body.title);
+  if (body.selection) form.append("selection", body.selection);
+  if (body.file) form.append("file", body.file);
+  const res = await fetch(API_BASE + "/api/knowledge/notes/ai-edit", {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(err.detail ?? `AI 편집 실패 (${res.status})`);
+  }
+  return (await res.json()) as { mode: "whole" | "selection"; result: string };
+}
+
 export async function updateNote(
   slug: string,
   body: {

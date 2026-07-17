@@ -12,6 +12,8 @@ import {
   Search,
   Paperclip,
   ExternalLink,
+  Sparkles,
+  X,
 } from "lucide-react";
 import type {
   KnowledgeNote,
@@ -26,6 +28,7 @@ import {
   deleteNote,
   fetchKnowledgeGraph,
   openDocument,
+  aiEditNote,
 } from "../services/api";
 import { useStore } from "../store";
 import { invalidateNotesCache } from "../services/websocket";
@@ -75,6 +78,215 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
   const [editTags, setEditTags] = useState("");
   const [editContent, setEditContent] = useState("");
   const [dirty, setDirty] = useState(false);
+
+  // ── CR-23: 노트 AI 편집 ────────────────────────────────────────────────────
+  const [aiInstruction, setAiInstruction] = useState("");
+  const [aiFile, setAiFile] = useState<File | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState("");
+  // 데스크톱 BlockNote는 마운트 시 1회만 마크다운을 파싱하므로, AI가 editContent를
+  // 바꾸면 key를 바꿔 강제 remount한다
+  const [aiEditVersion, setAiEditVersion] = useState(0);
+  // 선택 영역 스냅샷 — 프롬프트 입력 클릭 시 DOM 선택이 풀리므로 미리 캡처해 둔다
+  const selectedTextRef = useRef("");
+  const [selectedPreview, setSelectedPreview] = useState("");
+  const aiFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // BlockNote(데스크톱)·미리보기의 DOM 선택을 추적
+  useEffect(() => {
+    function onSelectionChange(): void {
+      const sel = window.getSelection()?.toString() ?? "";
+      if (sel.trim()) {
+        selectedTextRef.current = sel;
+        setSelectedPreview(sel.trim().slice(0, 40));
+      }
+    }
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
+  function clearAiSelection(): void {
+    selectedTextRef.current = "";
+    setSelectedPreview("");
+  }
+
+  function renderAiBar(desktopPad = false): React.ReactElement {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+          padding: desktopPad ? "10px 46px 16px" : "8px 0 0",
+          flexShrink: 0,
+        }}
+      >
+        {(selectedPreview || aiFile || aiError) && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            {selectedPreview && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: "var(--fs-11)",
+                  background: "rgba(100,140,220,0.12)",
+                  border: "1px solid rgba(100,140,220,0.35)",
+                  borderRadius: 6,
+                  padding: "2px 8px",
+                  color: "var(--color-text)",
+                }}
+              >
+                선택 부분만: “{selectedPreview}…”
+                <button
+                  onClick={clearAiSelection}
+                  title="선택 해제 — 노트 전체 대상으로"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 0 }}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+            {aiFile && (
+              <span
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: "var(--fs-11)",
+                  background: "var(--color-panel, var(--color-bg))",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 6,
+                  padding: "2px 8px",
+                  color: "var(--color-text)",
+                }}
+              >
+                {aiFile.name}
+                <button
+                  onClick={() => setAiFile(null)}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 0 }}
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            )}
+            {aiError && (
+              <span style={{ fontSize: "var(--fs-11)", color: "#e05050" }}>{aiError}</span>
+            )}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            ref={aiFileInputRef}
+            type="file"
+            accept=".pdf,.docx,.pptx,.hwpx,.txt,.md"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              setAiFile(e.target.files?.[0] ?? null);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => aiFileInputRef.current?.click()}
+            disabled={aiBusy}
+            title="참고 자료 첨부 — 내용을 읽어 노트에 반영"
+            style={{
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: "var(--color-text-muted)",
+              cursor: aiBusy ? "not-allowed" : "pointer",
+              padding: "7px 9px",
+              display: "flex",
+              alignItems: "center",
+              flexShrink: 0,
+            }}
+          >
+            <Paperclip size={13} />
+          </button>
+          <input
+            value={aiInstruction}
+            onChange={(e) => setAiInstruction(e.target.value)}
+            onClick={() => window.electronAPI?.restoreFocus()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.nativeEvent.isComposing) void handleAiEdit();
+            }}
+            disabled={aiBusy}
+            placeholder={
+              selectedPreview
+                ? "선택한 부분을 어떻게 바꿀까요? (예: 이 부분을 개조식으로)"
+                : "AI에게 지시 (예: 첨부 내용으로 회의 결과 정리해줘 / 전체를 개조식으로)"
+            }
+            style={{
+              flex: 1,
+              background: "var(--color-bg)",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: "var(--color-text)",
+              padding: "8px 12px",
+              fontSize: "var(--fs-13)",
+              outline: "none",
+            }}
+          />
+          <button
+            onClick={() => void handleAiEdit()}
+            disabled={aiBusy || !aiInstruction.trim()}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              background: aiBusy || !aiInstruction.trim() ? "transparent" : "var(--color-accent)",
+              border: `1px solid ${aiBusy || !aiInstruction.trim() ? "var(--color-border)" : "var(--color-accent)"}`,
+              borderRadius: 8,
+              color: aiBusy || !aiInstruction.trim() ? "var(--color-text-muted)" : "#fff",
+              cursor: aiBusy || !aiInstruction.trim() ? "not-allowed" : "pointer",
+              padding: "7px 14px",
+              fontSize: "var(--fs-12)",
+              fontWeight: 600,
+              flexShrink: 0,
+            }}
+          >
+            <Sparkles size={13} />
+            {aiBusy ? "편집 중…" : "AI 적용"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  async function handleAiEdit(): Promise<void> {
+    const instruction = aiInstruction.trim();
+    if (!instruction || aiBusy) return;
+    setAiBusy(true);
+    setAiError("");
+    // 선택 영역이 실제 본문에 존재할 때만 부분 편집 (미리보기 등 다른 곳 선택 방지)
+    const sel = selectedTextRef.current.trim();
+    const useSelection = sel.length >= 2 && editContent.includes(sel);
+    try {
+      const r = await aiEditNote({
+        instruction,
+        content: editContent,
+        title: editTitle,
+        selection: useSelection ? sel : undefined,
+        file: aiFile,
+      });
+      if (r.mode === "selection" && useSelection) {
+        setEditContent(editContent.replace(sel, r.result));
+      } else {
+        setEditContent(r.result);
+      }
+      setDirty(true);
+      setAiEditVersion((v) => v + 1);
+      setAiInstruction("");
+      setAiFile(null);
+      clearAiSelection();
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  }
 
   // 목록 새로고침
   const refreshList = useCallback(async () => {
@@ -497,6 +709,15 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                 value={editContent}
                 onChange={(e) => { setEditContent(e.target.value); setDirty(true); }}
                 onClick={() => window.electronAPI?.restoreFocus()}
+                onSelect={(e) => {
+                  // CR-23: textarea 선택은 window.getSelection에 안 잡힘 — 직접 캡처
+                  const el = e.currentTarget;
+                  const sel = el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0);
+                  if (sel.trim()) {
+                    selectedTextRef.current = sel;
+                    setSelectedPreview(sel.trim().slice(0, 40));
+                  }
+                }}
                 placeholder={"## 상황\n...\n\n## 절차\n...\n\n## 사용 자료\n- [[doc:파일명_xxx]]\n\n## 관련 업무\n- [[다른-슬러그]]"}
                 style={{
                   flex: 1,
@@ -513,6 +734,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   minHeight: 250,
                 }}
               />
+              {renderAiBar()}
               <RelatedDocsSection note={current} />
               <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 slug: <code>{current.slug}</code> · 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
@@ -568,12 +790,13 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                 }
               >
                 <NoteRichEditor
-                  key={current.slug}
+                  key={`${current.slug}:${aiEditVersion}`}
                   markdown={editContent}
                   theme={theme === "dark" ? "dark" : "light"}
                   onChangeMarkdown={(md) => { setEditContent(md); setDirty(true); }}
                 />
               </Suspense>
+              {renderAiBar(true)}
             </div>
           )}
           {current && subTab === "preview" && (

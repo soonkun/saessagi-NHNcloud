@@ -232,3 +232,42 @@ def test_M17_RoutingDecision_answer_guide_default_none() -> None:
     """RoutingDecision.answer_guide 기본값은 None이다."""
     dec = RoutingDecision(inject_rag=False, rag_source="both", tool_hint=None, autonomous=False)
     assert dec.answer_guide is None
+
+
+# ── CR-23 후속 질문 감지 ──────────────────────────────────────────────────────
+
+
+class TestLooksLikeFollowup:
+    def test_rephrase_requests_detected(self) -> None:
+        from intent_gate.routing import looks_like_followup
+
+        assert looks_like_followup("그럼 내용을 간단히 한 문장으로 요약해줘")
+        assert looks_like_followup("짧게 정리해줘")
+        assert looks_like_followup("표로 정리해서 보여줘")
+        assert looks_like_followup("다시 설명해줘")
+
+    def test_anaphora_detected(self) -> None:
+        from intent_gate.routing import looks_like_followup
+
+        assert looks_like_followup("그 내용에서 예산 부분만 알려줘")
+        assert looks_like_followup("방금 말한 두번째 항목 자세히")
+        assert looks_like_followup("아까 답변 중에 날짜가 뭐였지")
+
+    def test_new_queries_not_followup(self) -> None:
+        from intent_gate.routing import looks_like_followup
+
+        # 새 검색 대상을 특정 → 후속 아님
+        assert not looks_like_followup("연구책임자 변경신청 방법을 알려줘")
+        assert not looks_like_followup("청정축산 보고서에서 예산을 요약해줘")
+        assert not looks_like_followup("RFP에서 핵심 요구사항 정리해줘")
+        # 담화 표지 "그럼"만으로는 후속 아님 (새 요청 앞에도 붙음)
+        assert not looks_like_followup("그럼 내일 오후 2시에 회의 잡아줘")
+        assert not looks_like_followup("")
+
+    def test_followup_decision_no_rag(self) -> None:
+        from intent_gate.routing import followup_decision
+
+        d = followup_decision()
+        assert d.inject_rag is False
+        assert d.autonomous is False
+        assert d.tool_hint and "후속" in d.tool_hint

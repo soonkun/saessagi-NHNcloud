@@ -453,6 +453,37 @@ function dispatch(msg: WsIncomingMessage): void {
       store.clearMessages();
       store.setEmotion("neutral");
       store.setAiStatus("idle");
+      store.setCurrentHistoryUid(msg.history_uid);
+      break;
+
+    // CR-23: 대화 히스토리 (채팅방)
+    case "history-list":
+      store.setHistories(
+        [...msg.histories].sort((a, b) => (b.timestamp ?? "").localeCompare(a.timestamp ?? ""))
+      );
+      break;
+
+    case "history-data": {
+      // 과거 대화방 복원 — 백엔드 메모리는 fetch-and-set-history가 이미 설정함
+      let seq = 0;
+      store.setMessages(
+        msg.messages
+          .filter((m) => m.role === "human" || m.role === "ai")
+          .map((m) => ({
+            id: `hist-${Date.now()}-${seq++}`,
+            role: m.role,
+            text: m.content,
+            timestamp: m.timestamp ? Date.parse(m.timestamp) || Date.now() : Date.now(),
+          }))
+      );
+      store.setAiStatus("idle");
+      break;
+    }
+
+    case "history-deleted":
+      if (msg.success) {
+        send({ type: "fetch-history-list" });
+      }
       break;
 
     default:

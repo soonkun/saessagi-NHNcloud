@@ -172,6 +172,35 @@ export interface WsNewHistoryCreated {
   history_uid: string;
 }
 
+// CR-23: 대화 히스토리 (upstream chat_history_manager 형식)
+export interface HistoryMessage {
+  role: "human" | "ai";
+  content: string;
+  timestamp?: string | null;
+}
+
+export interface HistoryInfo {
+  uid: string;
+  latest_message: HistoryMessage | null;
+  timestamp: string | null;
+}
+
+export interface WsHistoryListMessage {
+  type: "history-list";
+  histories: HistoryInfo[];
+}
+
+export interface WsHistoryDataMessage {
+  type: "history-data";
+  messages: HistoryMessage[];
+}
+
+export interface WsHistoryDeletedMessage {
+  type: "history-deleted";
+  success: boolean;
+  history_uid: string;
+}
+
 export type WsIncomingMessage =
   | WsControlMessage
   | WsAudioMessage
@@ -179,7 +208,10 @@ export type WsIncomingMessage =
   | WsAvatarStateMessage
   | WsToolCallStatusMessage
   | WsBackendSynthComplete
-  | WsNewHistoryCreated;
+  | WsNewHistoryCreated
+  | WsHistoryListMessage
+  | WsHistoryDataMessage
+  | WsHistoryDeletedMessage;
 
 /**
  * upstream ImageData dataclass 매칭 — `{source, data, mime_type}` 필수.
@@ -213,11 +245,29 @@ export interface WsSendPlaybackComplete {
   type: "frontend-playback-complete";
 }
 
+// CR-23: 대화 히스토리 송신 메시지 (upstream websocket_handler 계약)
+export interface WsSendFetchHistoryList {
+  type: "fetch-history-list";
+}
+
+export interface WsSendFetchAndSetHistory {
+  type: "fetch-and-set-history";
+  history_uid: string;
+}
+
+export interface WsSendDeleteHistory {
+  type: "delete-history";
+  history_uid: string;
+}
+
 export type WsOutgoingMessage =
   | WsSendUserMessage
   | WsSendNewHistory
   | WsSendInterrupt
-  | WsSendPlaybackComplete;
+  | WsSendPlaybackComplete
+  | WsSendFetchHistoryList
+  | WsSendFetchAndSetHistory
+  | WsSendDeleteHistory;
 
 // Calendar 타입
 export interface CalendarEvent {
