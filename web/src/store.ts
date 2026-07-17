@@ -66,7 +66,8 @@ export interface LlmInfo {
 export type ThemeMode = "dark" | "light";
 
 function loadTheme(): ThemeMode {
-  return localStorage.getItem("saessagi_theme") === "light" ? "light" : "dark";
+  // 기본 라이트 모드 — 저장된 선택이 명시적으로 "dark"일 때만 다크
+  return localStorage.getItem("saessagi_theme") === "dark" ? "dark" : "light";
 }
 
 // UI 글씨 크기 배율 (CSS zoom). 캐릭터(Live2D)에는 적용하지 않음.
