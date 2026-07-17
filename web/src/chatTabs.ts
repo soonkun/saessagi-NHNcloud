@@ -1,6 +1,6 @@
 import type { ElementType } from "react";
 import {
-  MessageCircle,
+  SquarePen,
   Calendar,
   BookOpen,
   FolderOpen,
@@ -20,8 +20,10 @@ export interface ChatTabDef {
   Icon: ElementType;
 }
 
+// "새 대화": 클릭 시 채팅 탭 이동 + (대화 중이면) 새 대화 시작 — ChatGPT의 New chat과 동일.
+// 각 뷰의 onClick에서 id==="chat" 특례로 처리한다 (chatTabs는 표시 정의만).
 export const CHAT_TABS: ChatTabDef[] = [
-  { id: "chat", petLabel: "새싹이", desktopLabel: "새싹이", Icon: MessageCircle },
+  { id: "chat", petLabel: "새 대화", desktopLabel: "새 대화", Icon: SquarePen },
   { id: "calendar", petLabel: "일정표", desktopLabel: "일정표", Icon: Calendar },
   { id: "notes", petLabel: "노트", desktopLabel: "업무 노트", Icon: BookOpen },
   { id: "documents", petLabel: "문서", desktopLabel: "문서", Icon: FolderOpen },

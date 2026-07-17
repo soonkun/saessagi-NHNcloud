@@ -1,5 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useStore } from "../store";
+import { send } from "../services/websocket";
 import {
   Calendar,
   LayoutGrid,
@@ -210,7 +211,13 @@ export function DesktopView(): React.ReactElement {
           {SIDEBAR_TABS.map(({ id, label, Icon }) => (
             <button
               key={id}
-              onClick={() => setChatTab(id)}
+              onClick={() => {
+                // "새 대화" 탭: 진행 중 대화가 있으면 새 히스토리 시작 (빈 대화면 이동만)
+                if (id === "chat" && useStore.getState().messages.length > 0) {
+                  send({ type: "create-new-history" });
+                }
+                setChatTab(id);
+              }}
               style={{
                 width: "100%",
                 display: "flex",

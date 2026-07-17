@@ -1,7 +1,7 @@
 // CR-23: 대화방 히스토리 목록 — 데스크톱 사이드바·펫 모드 드로어 공용.
 // 최신 대화가 위. 클릭 = 그 대화방으로 전환 (메시지 복원 + 백엔드 메모리 전환).
 import { useEffect } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
 
@@ -25,12 +25,6 @@ export function HistoryList({ onSelect }: { onSelect?: () => void }): React.Reac
     if (aiStatus === "idle") send({ type: "fetch-history-list" });
   }, [aiStatus]);
 
-  function handleNew(): void {
-    send({ type: "create-new-history" });
-    useStore.getState().setChatTab("chat");
-    onSelect?.();
-  }
-
   function handleSwitch(uid: string): void {
     send({ type: "fetch-and-set-history", history_uid: uid });
     useStore.getState().setCurrentHistoryUid(uid);
@@ -45,29 +39,7 @@ export function HistoryList({ onSelect }: { onSelect?: () => void }): React.Reac
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      <button
-        onClick={handleNew}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          margin: "6px 8px",
-          padding: "7px 10px",
-          background: "transparent",
-          border: "1px solid var(--color-border)",
-          borderRadius: 8,
-          color: "var(--color-text)",
-          cursor: "pointer",
-          fontSize: "var(--fs-12)",
-          fontWeight: 600,
-          flexShrink: 0,
-          fontFamily: "inherit",
-        }}
-      >
-        <Plus size={13} />새 대화
-      </button>
-
-      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "0 6px 8px" }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "6px 6px 8px" }}>
         {histories.length === 0 && (
           <div
             style={{

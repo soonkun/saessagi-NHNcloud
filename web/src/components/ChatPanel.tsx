@@ -1006,6 +1006,10 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
                 <button
                   key={id}
                   onClick={() => {
+                    // "새 대화" 탭: 진행 중 대화가 있으면 새 히스토리 시작
+                    if (id === "chat" && useStore.getState().messages.length > 0) {
+                      send({ type: "create-new-history" });
+                    }
                     setChatTab(id);
                     setNavOpen(false);
                   }}
@@ -1081,7 +1085,7 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
 
         {/* 현재 탭 이름 + LLM 표시 (탭 버튼들은 햄버거 드로어로 이동) */}
         <span style={{ fontSize: "var(--fs-13)", fontWeight: 700, color: "var(--color-text)", flexShrink: 0 }}>
-          {TABS.find((t) => t.id === chatTab)?.label ?? "새싹이"}
+          {chatTab === "chat" ? "새싹이" : (TABS.find((t) => t.id === chatTab)?.label ?? "새싹이")}
         </span>
         {llmInfoTop && (
           <span
