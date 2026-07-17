@@ -101,6 +101,8 @@ export function ChatContent({
   const agentStatus = useStore((s) => s.agentStatus);
   const addMessage = useStore((s) => s.addMessage);
   const llmInfo = useStore((s) => s.llmInfo);
+  // 펫 모드는 패널 상단 바에 LLM 배지가 있으므로 상태줄에선 숨김 (중복 방지)
+  const windowModeForBadge = useStore((s) => s.windowMode);
   const setChatTab = useStore((s) => s.setChatTab);
   const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
   const requestGraphEvidence = useStore((s) => s.requestGraphEvidence);
@@ -334,7 +336,7 @@ export function ChatContent({
         <span style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>
           {STATUS_LABEL[aiStatus] ?? ""}
         </span>
-        {llmInfo && (
+        {llmInfo && windowModeForBadge === "window" && (
           <span
             title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
             style={{
@@ -928,8 +930,9 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
   const setChatOpen = useStore((s) => s.setChatOpen);
   const chatTab = useStore((s) => s.chatTab);
   const setChatTab = useStore((s) => s.setChatTab);
-  // CR-23: 펫 모드 좌측 대화방 드로어
+  // CR-23: 펫 모드 좌측 메뉴·대화방 드로어
   const [navOpen, setNavOpen] = useState(false);
+  const llmInfoTop = useStore((s) => s.llmInfo);
 
   const panelStyle = calcPanelStyle(charPosition, charSize);
 
@@ -988,13 +991,60 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
                 flexShrink: 0,
               }}
             >
-              <span style={{ fontSize: "var(--fs-13)", fontWeight: 700 }}>대화</span>
+              <span style={{ fontSize: "var(--fs-13)", fontWeight: 700 }}>새싹이</span>
               <button
                 onClick={() => setNavOpen(false)}
                 style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 2 }}
               >
                 <X size={14} />
               </button>
+            </div>
+
+            {/* 탭 메뉴 (상단 탭 바 → 드로어로 이동) */}
+            <div style={{ padding: "2px 6px 8px", flexShrink: 0 }}>
+              {TABS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  onClick={() => {
+                    setChatTab(id);
+                    setNavOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 9,
+                    padding: "8px 10px",
+                    marginBottom: 1,
+                    background: chatTab === id ? "rgba(100,140,220,0.12)" : "transparent",
+                    border: "none",
+                    borderRadius: 7,
+                    color: chatTab === id ? "var(--color-accent)" : "var(--color-text)",
+                    cursor: "pointer",
+                    fontSize: "var(--fs-13)",
+                    fontWeight: chatTab === id ? 600 : 400,
+                    textAlign: "left",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  <Icon size={14} style={{ flexShrink: 0 }} />
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div
+              style={{
+                fontSize: "var(--fs-11)",
+                fontWeight: 700,
+                color: "var(--color-text-muted)",
+                padding: "8px 14px 0",
+                borderTop: "1px solid var(--color-border)",
+                letterSpacing: "0.06em",
+                flexShrink: 0,
+              }}
+            >
+              대화
             </div>
             <HistoryList onSelect={() => setNavOpen(false)} />
           </div>
@@ -1014,7 +1064,7 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
       >
         <button
           onClick={() => setNavOpen(true)}
-          title="대화 목록"
+          title="메뉴·대화 목록"
           style={{
             display: "flex",
             alignItems: "center",
@@ -1028,32 +1078,33 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
         >
           <Menu size={15} />
         </button>
-        {TABS.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            onClick={() => setChatTab(id)}
+
+        {/* 현재 탭 이름 + LLM 표시 (탭 버튼들은 햄버거 드로어로 이동) */}
+        <span style={{ fontSize: "var(--fs-13)", fontWeight: 700, color: "var(--color-text)", flexShrink: 0 }}>
+          {TABS.find((t) => t.id === chatTab)?.label ?? "새싹이"}
+        </span>
+        {llmInfoTop && (
+          <span
+            title={`현재 LLM: ${llmInfoTop.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfoTop.model}`}
             style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              padding: "11px 14px",
-              border: "none",
-              borderBottom: chatTab === id
-                ? "2px solid var(--color-accent)"
-                : "2px solid transparent",
-              background: "transparent",
-              color: chatTab === id ? "var(--color-accent)" : "var(--color-text-muted)",
-              cursor: "pointer",
-              fontSize: "var(--fs-12)",
-              fontWeight: chatTab === id ? 600 : 400,
-              transition: "color 0.15s",
-              flexShrink: 0,
+              marginLeft: 8,
+              fontSize: "var(--fs-11)",
+              fontWeight: 600,
+              padding: "2px 7px",
+              borderRadius: 10,
+              background: llmInfoTop.provider === "openai" ? "rgba(16,163,127,0.18)" : "rgba(100,140,220,0.18)",
+              color: llmInfoTop.provider === "openai" ? "#10a37f" : "#7aa8ff",
+              border: `1px solid ${llmInfoTop.provider === "openai" ? "rgba(16,163,127,0.4)" : "rgba(100,140,220,0.4)"}`,
+              whiteSpace: "nowrap",
+              maxWidth: 180,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              flexShrink: 1,
             }}
           >
-            <Icon size={14} />
-            {label}
-          </button>
-        ))}
+            {llmInfoTop.provider === "openai" ? "GPT" : "Ollama"} · {llmInfoTop.model}
+          </span>
+        )}
 
         {/* 닫기 버튼 — 우측 */}
         <button
