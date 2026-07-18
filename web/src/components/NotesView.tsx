@@ -444,56 +444,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
           minHeight: 0,
         }}
       >
-        <div style={{ padding: "10px 10px 8px", display: "flex", gap: 6, position: "relative" }}>
-          <Search
-            size={11}
-            style={{
-              position: "absolute",
-              left: 18,
-              top: "50%",
-              transform: "translateY(-50%)",
-              color: "var(--color-text-muted)",
-              pointerEvents: "none",
-            }}
-          />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="검색"
-            onClick={() => window.electronAPI?.restoreFocus()}
-            style={{
-              flex: 1,
-              background: "var(--color-bg)",
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              color: "var(--color-text)",
-              padding: "5px 8px 5px 22px",
-              fontSize: "var(--fs-12)",
-              outline: "none",
-              minWidth: 0,
-            }}
-          />
-          <button
-            onClick={() => void createNew()}
-            title="빈 노트 직접 만들기 (보통은 채팅으로 자동 생성됨)"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "1px solid var(--color-border)",
-              borderRadius: 6,
-              color: "var(--color-text-muted)",
-              cursor: "pointer",
-              padding: "4px 6px",
-              flexShrink: 0,
-            }}
-          >
-            <Plus size={12} />
-          </button>
-        </div>
-        {/* 기존 검색 입력은 위쪽 row에 통합됐으므로 여기는 빈 자리 (호환 유지용 0px) */}
-        <div style={{ display: "none", padding: "0 10px 8px", position: "relative" }}>
+        <div style={{ padding: "10px 10px 6px", position: "relative" }}>
           <Search
             size={11}
             style={{
@@ -522,6 +473,30 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
               outline: "none",
             }}
           />
+        </div>
+        {/* 새 노트 작성 — 점선 박스 */}
+        <div style={{ padding: "0 10px 8px" }}>
+          <button
+            onClick={() => void createNew()}
+            title="빈 노트 직접 만들기 (보통은 채팅으로 자동 생성됨)"
+            style={{
+              width: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              background: "transparent",
+              border: "1.5px dashed var(--color-border)",
+              borderRadius: 8,
+              color: "var(--color-text-muted)",
+              cursor: "pointer",
+              padding: "8px 10px",
+              fontSize: "var(--fs-12)",
+              fontFamily: "inherit",
+            }}
+          >
+            <Plus size={13} />새 노트 작성
+          </button>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "0 6px 8px" }}>
           {loading && notes.length === 0 && (

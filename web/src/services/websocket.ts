@@ -513,6 +513,8 @@ export function connect(url: string): void {
       clearTimeout(reconnectTimer);
       reconnectTimer = null;
     }
+    // CR-23: 연결 직후 대화 목록 로드 — 마운트 시점엔 소켓이 안 열려 요청이 유실됨
+    send({ type: "fetch-history-list" });
   };
 
   ws.onmessage = (event: MessageEvent) => {
