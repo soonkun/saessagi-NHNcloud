@@ -13,7 +13,16 @@ from typing import Any
 
 from .errors import GraphStoreError
 from .store import GraphStore
-from .types import ChunkLink, Entity, GraphEdge, GraphNode, GraphSnapshot, Relation
+from .types import (
+    ChunkLink,
+    Entity,
+    GraphEdge,
+    GraphNode,
+    GraphSnapshot,
+    KeywordMention,
+    ProjectInfo,
+    Relation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +32,11 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE CONSTRAINT document_id IF NOT EXISTS FOR (d:Document) REQUIRE d.doc_id IS UNIQUE",
     "CREATE CONSTRAINT note_slug IF NOT EXISTS FOR (n:Note) REQUIRE n.slug IS UNIQUE",
     "CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.norm_name)",
+    # CR-30: Project(=Document 속성) + 문서 스코프 키워드
+    "CREATE CONSTRAINT keyword_id IF NOT EXISTS FOR (k:Keyword) REQUIRE k.id IS UNIQUE",
+    "CREATE INDEX keyword_raw IF NOT EXISTS FOR (k:Keyword) ON (k.raw_term)",
+    "CREATE INDEX keyword_norm IF NOT EXISTS FOR (k:Keyword) ON (k.normalized_term)",
+    "CREATE CONSTRAINT techcode_id IF NOT EXISTS FOR (t:TechnologyCode) REQUIRE t.code IS UNIQUE",
 )
 
 
@@ -269,6 +283,33 @@ class Neo4jGraphStore(GraphStore):
         nodes: dict[str, GraphNode] = {}
         edges: list[GraphEdge] = []
 
+        # ── CR-30: Project(문서) + 역할 키워드 (신규 스키마 — 우선 표시) ──────
+        role_filter = " WHERE k.role IN $types" if entity_types else ""
+        for row in self._run(
+            "MATCH (d:Document)-[:HAS_KEYWORD]->(k:Keyword)" + role_filter + " "
+            "RETURN d.doc_id AS did, coalesce(d.title, d.name) AS dlabel, "
+            "  d.rfp_no AS rfp_no, d.project_no AS project_no, "
+            "  k.id AS kid, k.raw_term AS kterm, k.role AS krole, "
+            "  coalesce(k.normalized_term, '') AS knorm "
+            "LIMIT $limit",
+            types=entity_types or [],
+            limit=limit * 4,
+        ):
+            did = str(row["did"])
+            if did not in nodes:
+                nodes[did] = GraphNode(
+                    id=did, label=str(row["dlabel"] or did), kind="document"
+                )
+            kid = str(row["kid"])
+            if kid not in nodes:
+                nodes[kid] = GraphNode(
+                    id=kid,
+                    label=str(row["knorm"] or row["kterm"]),
+                    kind="keyword",
+                    type=str(row["krole"]),
+                )
+            edges.append(GraphEdge(source=did, target=kid, kind="has_keyword"))
+
         type_filter = " AND e.type IN $types" if entity_types else ""
         for row in self._run(
             "MATCH (e:Entity) WHERE true" + type_filter + " "
@@ -381,11 +422,115 @@ class Neo4jGraphStore(GraphStore):
     def clear_all(self) -> dict[str, int]:
         """CR-26: 그래프 전체 초기화 — 우리 스키마의 노드 라벨만 삭제 (다른 DB 데이터 보호)."""
         before = self.stats()
-        for label in ("Chunk", "Entity", "Document", "Note"):
+        for label in ("Chunk", "Entity", "Keyword", "TechnologyCode", "Document", "Note"):
             self._run(f"MATCH (n:{label}) DETACH DELETE n")
         return before
 
+    # ── CR-30: Project + 역할 키워드 ─────────────────────────────────────────
+
+    def upsert_project_bundle(
+        self, project: ProjectInfo, keywords: list[KeywordMention]
+    ) -> None:
+        """문서 1건의 과제 정보·키워드를 단일 write 트랜잭션으로 저장 (재인덱싱 멱등)."""
+        rows = [
+            {
+                "id": k.id,
+                "doc_id": k.doc_id,
+                "raw_term": k.raw_term,
+                "normalized_term": k.normalized_term,
+                "role": k.role,
+                "confidence": k.confidence,
+                "normalization_status": k.normalization_status,
+            }
+            for k in keywords
+        ]
+
+        def _tx(tx: Any) -> None:
+            tx.run(
+                "MERGE (d:Document {doc_id: $doc_id}) "
+                "SET d.title = $title, d.rfp_no = $rfp_no, d.project_no = $project_no",
+                doc_id=project.doc_id,
+                title=project.title,
+                rfp_no=project.rfp_no,
+                project_no=project.project_no,
+            )
+            # 문서의 기존 키워드 교체 (전역 병합 금지 — 문서 스코프 노드)
+            tx.run(
+                "MATCH (d:Document {doc_id: $doc_id})-[:HAS_KEYWORD]->(k:Keyword) "
+                "DETACH DELETE k",
+                doc_id=project.doc_id,
+            )
+            if rows:
+                tx.run(
+                    "MATCH (d:Document {doc_id: $doc_id}) "
+                    "UNWIND $rows AS row "
+                    "CREATE (k:Keyword {id: row.id}) "
+                    "SET k.doc_id = row.doc_id, k.raw_term = row.raw_term, "
+                    "    k.normalized_term = row.normalized_term, k.role = row.role, "
+                    "    k.confidence = row.confidence, "
+                    "    k.normalization_status = row.normalization_status "
+                    "CREATE (d)-[:HAS_KEYWORD]->(k)",
+                    doc_id=project.doc_id,
+                    rows=rows,
+                )
+
+        driver = self._get_driver()
+        with driver.session(database=self._database) as session:
+            session.execute_write(_tx)
+
+    _KW_RETURN = (
+        "RETURN k.doc_id AS doc_id, k.raw_term AS raw_term, k.role AS role, "
+        "  coalesce(k.confidence, 0.0) AS confidence, "
+        "  coalesce(k.normalized_term, '') AS normalized_term, "
+        "  coalesce(k.normalization_status, 'raw') AS normalization_status"
+    )
+
+    def find_keywords(self, terms: list[str], limit: int = 30) -> list[KeywordMention]:
+        terms_norm = [t.casefold() for t in terms if t.strip()]
+        if not terms_norm:
+            return []
+        # E-60 교훈: 역포함은 용어 3자 이상만 (초단문 와일드카드 방지)
+        rows = self._run(
+            "UNWIND $terms AS term "
+            "MATCH (k:Keyword) "
+            "WHERE toLower(k.raw_term) CONTAINS term "
+            "   OR toLower(k.normalized_term) CONTAINS term "
+            "   OR (size(k.raw_term) >= 3 AND term CONTAINS toLower(k.raw_term)) "
+            f"{self._KW_RETURN} LIMIT $limit",
+            terms=terms_norm,
+            limit=limit,
+        )
+        return [KeywordMention(**row) for row in rows]
+
+    def keywords_for_doc(self, doc_id: str) -> list[KeywordMention]:
+        rows = self._run(
+            f"MATCH (:Document {{doc_id: $doc_id}})-[:HAS_KEYWORD]->(k:Keyword) {self._KW_RETURN}",
+            doc_id=doc_id,
+        )
+        return [KeywordMention(**row) for row in rows]
+
+    def all_keywords(self, limit: int = 5000) -> list[KeywordMention]:
+        rows = self._run(f"MATCH (k:Keyword) {self._KW_RETURN} LIMIT $limit", limit=limit)
+        return [KeywordMention(**row) for row in rows]
+
+    def update_keyword_normalization(self, keyword_ids: list[str], normalized_term: str) -> int:
+        if not keyword_ids:
+            return 0
+        rows = self._run(
+            "MATCH (k:Keyword) WHERE k.id IN $ids "
+            "SET k.normalized_term = $norm, k.normalization_status = 'normalized' "
+            "RETURN count(k) AS n",
+            ids=keyword_ids,
+            norm=normalized_term,
+        )
+        return int(rows[0]["n"]) if rows else 0
+
     def delete_by_doc_id(self, doc_id: str) -> None:
+        # CR-30: 문서 스코프 키워드 연쇄 삭제
+        self._run(
+            "MATCH (:Document {doc_id: $doc_id})-[:HAS_KEYWORD]->(k:Keyword) DETACH DELETE k",
+            doc_id=doc_id,
+        )
         # 문서/노트 + 소속 청크 삭제
         self._run(
             "OPTIONAL MATCH (d:Document {doc_id: $doc_id}) "
@@ -402,6 +547,7 @@ class Neo4jGraphStore(GraphStore):
         row = self._run(
             "RETURN count { MATCH (e:Entity) RETURN e } AS entities, "
             "count { MATCH (:Entity)-[r:REL]->(:Entity) RETURN r } AS relations, "
+            "count { MATCH (k:Keyword) RETURN k } AS keywords, "
             "count { MATCH (c:Chunk) RETURN c } AS chunks, "
             "count { MATCH (d:Document) RETURN d } AS documents, "
             "count { MATCH (n:Note) RETURN n } AS notes"

@@ -29,8 +29,9 @@ export type ChatTab =
 export interface GraphRagNode {
   id: string;
   label: string;
-  kind: "entity" | "document" | "note";
-  type: string; // 엔티티 타입 (인물|조직|사업|제도|기술|장소|기타), 비엔티티는 ""
+  kind: "entity" | "document" | "note" | "keyword";
+  // CR-30: keyword의 type = 역할 (research_target|technology|problem|outcome), 비키워드는 ""
+  type: string;
 }
 
 export interface GraphRagEdge {

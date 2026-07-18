@@ -111,7 +111,61 @@ class IndexStatus:
 
 @dataclass
 class ExtractionResult:
-    """추출기 출력 — 청크 하나에서 나온 엔티티·관계."""
+    """(구) 추출기 출력 — 청크 하나에서 나온 엔티티·관계. CR-30에서 폐기 경로."""
 
     entities: list[Entity] = field(default_factory=list)
     relations: list[Relation] = field(default_factory=list)
+
+
+# ── CR-30: Project + 역할 키워드 스키마 ──────────────────────────────────────
+
+# 키워드 역할 화이트리스트 — 이 외의 값은 폐기 (기타 강등 없음, 보수적)
+KEYWORD_ROLES: frozenset[str] = frozenset(
+    {"research_target", "technology", "problem", "outcome"}
+)
+
+KEYWORD_ROLE_LABELS: dict[str, str] = {
+    "research_target": "연구대상",
+    "technology": "기술",
+    "problem": "문제",
+    "outcome": "산출물",
+}
+
+
+def keyword_id(doc_id: str, raw_term: str, role: str) -> str:
+    """키워드 노드 id — 문서 스코프 (전역 병합 금지: 같은 단어도 문서·문맥별 보존)."""
+    return f"{doc_id}::{normalize_name(raw_term)}::{role}"
+
+
+@dataclass(frozen=True)
+class ProjectInfo:
+    """문서(=Project 노드)의 과제 식별 정보 — 별도 노드가 아닌 속성으로 저장."""
+
+    doc_id: str
+    title: str = ""  # 과제명 (추출 실패 시 빈값 — 저장 시 doc_name 폴백)
+    rfp_no: str = ""
+    project_no: str = ""
+
+
+@dataclass(frozen=True)
+class KeywordMention:
+    """문서별 키워드 언급 — raw 우선, 정규화는 후처리 단계에서 속성으로만 갱신."""
+
+    doc_id: str
+    raw_term: str
+    role: str  # KEYWORD_ROLES 중 하나
+    confidence: float = 0.0
+    normalized_term: str = ""  # 정규화 후처리에서 채움 (raw_term은 보존)
+    normalization_status: str = "raw"  # raw | normalized
+
+    @property
+    def id(self) -> str:
+        return keyword_id(self.doc_id, self.raw_term, self.role)
+
+
+@dataclass
+class ProjectExtraction:
+    """CR-30 추출기 출력 — 문서 1건에서 나온 과제 정보 + 키워드(최대 10)."""
+
+    project: ProjectInfo
+    keywords: list[KeywordMention] = field(default_factory=list)

@@ -19,7 +19,15 @@ from vector_search.types import RetrievalResult, SearchHit
 
 from .extractor import EntityExtractor
 from .store import GraphStore
-from .types import ChunkLink, EvidenceSubgraph, GraphSnapshot, IndexStatus
+from .types import (
+    EvidenceSubgraph,
+    GraphEdge,
+    GraphNode,
+    GraphSnapshot,
+    IndexStatus,
+    KeywordMention,
+    ProjectInfo,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +70,8 @@ class GraphRagService:
         self._evidence_buffer = evidence_buffer
         self._ping_cache: tuple[float, bool] = (0.0, False)
         self._fallback_warned_at = 0.0
+        # CR-30 graceful 중단 플래그 — 신규 투입만 멈추고 현재 문서는 완료
+        self._cancel_requested = False
 
     # ── 가용성 ────────────────────────────────────────────────────────────────
 
@@ -99,6 +109,7 @@ class GraphRagService:
         if status is not None and status.state in ("pending", "running"):
             logger.debug("GraphRAG 인덱싱 중복 스케줄 무시: %s", doc_id)
             return
+        self._cancel_requested = False  # 새 스케줄 = 중단 해제 (CR-30)
         self._statuses[doc_id] = IndexStatus(doc_id=doc_id, state="pending")
 
         def _enqueue() -> None:
@@ -127,6 +138,13 @@ class GraphRagService:
                 doc_id = await asyncio.wait_for(self._queue.get(), timeout=300.0)
             except asyncio.TimeoutError:
                 return  # 5분간 작업 없으면 워커 종료 (다음 스케줄에서 재생성)
+            # CR-30 graceful 중단: 신규 투입 중지 — 현재 문서는 끝까지, 다음부터 스킵
+            if self._cancel_requested:
+                st = self._statuses.get(doc_id)
+                if st is not None and st.state == "pending":
+                    st.state = "cancelled"
+                    st.error = "사용자 중단"
+                continue
             try:
                 await self.index_document(doc_id)
             except asyncio.CancelledError:
@@ -138,8 +156,16 @@ class GraphRagService:
                     st.state = "failed"
                     st.error = str(exc)[:200]
 
+    # 문서 단위 추출 입력 상한 — 과제 정보·키워드는 문서 앞부분에 밀집하므로
+    # 앞에서부터 자른다 (전체 임베딩과 무관, 추출 전용)
+    _DOC_EXTRACT_MAX_CHARS = 9_000
+
     async def index_document(self, doc_id: str) -> IndexStatus:
-        """문서(또는 노트 doc_id)의 청크를 순차 추출해 그래프에 축적."""
+        """CR-30: 문서 단위 추출 — 과제 정보(title/rfp_no/project_no) + 역할 키워드(≤10).
+
+        (구) 청크별 엔티티 추출은 폐기. 문서당 LLM 1회 호출.
+        노트는 문서와 동일하게 처리하되 Note 노드를 부모로 유지한다.
+        """
         status = self._statuses.setdefault(doc_id, IndexStatus(doc_id=doc_id))
         status.state = "running"
         status.error = ""
@@ -159,62 +185,57 @@ class GraphRagService:
             status.state = "done"
             return status
 
-        # 부모 노드 (노트 vs 문서)
         first = rows[0]
         is_note = first.get("category") == _KNOWLEDGE_CATEGORY
-        parent_kind = "note" if is_note else "document"
-        parent_id = doc_id
+        doc_name = str(first.get("doc_name") or doc_id)
+
+        # 문서 전문 조립 (추출 입력 상한까지)
+        parts: list[str] = []
+        total = 0
+        for row in rows:
+            t = str(row.get("text") or "")
+            if total + len(t) > self._DOC_EXTRACT_MAX_CHARS:
+                parts.append(t[: self._DOC_EXTRACT_MAX_CHARS - total])
+                break
+            parts.append(t)
+            total += len(t)
+        doc_text = "\n".join(parts)
+
         try:
             if is_note:
                 slug = doc_id.split(":", 1)[1] if ":" in doc_id else doc_id
-                parent_id = slug
                 await loop.run_in_executor(
-                    None, lambda: self._graph.upsert_note(slug, str(first.get("doc_name") or slug))
+                    None, lambda: self._graph.upsert_note(slug, doc_name)
                 )
-            else:
-                await loop.run_in_executor(
-                    None,
-                    lambda: self._graph.upsert_document(
-                        doc_id,
-                        str(first.get("doc_name") or doc_id),
-                        str(first.get("category") or ""),
-                    ),
+            extraction = await self._extractor.extract_project(doc_id, doc_text)
+            project = extraction.project
+            if not project.title:
+                project = ProjectInfo(
+                    doc_id=doc_id,
+                    title=doc_name,
+                    rfp_no=project.rfp_no,
+                    project_no=project.project_no,
                 )
+            # 문서 단위 단일 트랜잭션 저장
+            await loop.run_in_executor(
+                None, lambda: self._graph.upsert_project_bundle(project, extraction.keywords)
+            )
+        except asyncio.CancelledError:
+            status.state = "cancelled"
+            status.error = "사용자 중단"
+            raise
         except Exception as exc:
             status.state = "failed"
-            status.error = f"부모 노드 upsert 실패: {exc}"
+            status.error = str(exc)[:200]
             return status
 
-        for row in rows:
-            chunk_id = str(row.get("chunk_id") or "")
-            text = str(row.get("text") or "")
-            result = await self._extractor.extract(text)
-            if not result.entities:
-                status.skipped_chunks += 1
-                status.done_chunks += 1
-                continue
-            links = [ChunkLink(entity_id=e.id, chunk_id=chunk_id) for e in result.entities]
-            try:
-                await loop.run_in_executor(
-                    None, lambda: self._graph.upsert_entities(result.entities)
-                )
-                await loop.run_in_executor(
-                    None, lambda: self._graph.upsert_relations(result.relations)
-                )
-                await loop.run_in_executor(
-                    None, lambda: self._graph.link_chunks(links, parent_id, parent_kind)
-                )
-            except Exception as exc:
-                logger.warning("GraphRAG 청크 upsert 실패 (skip): %s", exc)
-                status.skipped_chunks += 1
-            status.done_chunks += 1
-
+        status.done_chunks = status.total_chunks
         status.state = "done"
         logger.info(
-            "GraphRAG 인덱싱 완료: doc_id=%s, chunks=%d (추출실패 스킵=%d)",
+            "GraphRAG 인덱싱 완료: doc_id=%s, 키워드=%d, 과제번호=%r",
             doc_id,
-            status.done_chunks,
-            status.skipped_chunks,
+            len(extraction.keywords),
+            extraction.project.project_no or extraction.project.rfp_no or "",
         )
         return status
 
@@ -248,22 +269,24 @@ class GraphRagService:
     # ── CR-26: 인덱싱 중단 · 그래프 초기화 ───────────────────────────────────
 
     def cancel_indexing(self) -> int:
-        """진행·대기 중인 그래프 인덱싱을 모두 중단한다. 반환: 중단된 문서 수."""
+        """CR-30 graceful 중단: 대기 큐를 비우고 신규 투입을 멈춘다.
+
+        진행 중인 문서 1건은 끝까지 완료된다 (요청 도중 하드 취소로 인한
+        반쪽 트랜잭션 방지). 반환: 중단(취소 표시)된 문서 수.
+        """
+        self._cancel_requested = True
         cancelled = 0
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-        if self._worker is not None and not self._worker.done():
-            self._worker.cancel()
-            self._worker = None
         for st in self._statuses.values():
-            if st.state in ("pending", "running"):
+            if st.state == "pending":
                 st.state = "cancelled"
                 st.error = "사용자 중단"
                 cancelled += 1
-        logger.info("GraphRAG 인덱싱 중단: %d건", cancelled)
+        logger.info("GraphRAG 인덱싱 중단 요청: 대기 %d건 취소 (진행 중 문서는 완료 후 정지)", cancelled)
         return cancelled
 
     async def clear_graph(self) -> dict[str, int]:
@@ -282,46 +305,95 @@ class GraphRagService:
     # ── CR-22 엔티티 정규화 ───────────────────────────────────────────────────
 
     async def normalize_entities(self) -> dict[str, Any]:
-        """같은 대상의 표기 변형 엔티티를 LLM 제안으로 병합 (타입별, 보수적).
+        """CR-30 키워드 정규화 후처리 — 노드 병합 없이 속성만 갱신.
 
-        Returns: {"groups": [[대표, 변형...], ...], "merged": 병합된 엔티티 수}
+        같은 개념의 표기 변형(raw_term)을 역할별로 LLM이 묶으면, 해당 키워드
+        노드들의 normalized_term/status를 갱신한다. raw_term과 문서별 언급
+        노드는 보존된다 (전역 병합 금지 — 문맥별 의미 차이 보호).
+
+        Returns: {"groups": [[대표, 변형...], ...], "merged": 갱신된 키워드 언급 수}
         """
         if not self.available:
             return {"groups": [], "merged": 0, "error": "그래프 저장소 연결 불가"}
 
         loop = asyncio.get_running_loop()
-        entities = await loop.run_in_executor(None, lambda: self._graph.all_entities(2000))
-        by_type: dict[str, list[Any]] = {}
-        for e in entities:
-            by_type.setdefault(e.type, []).append(e)
+        keywords: list[KeywordMention] = await loop.run_in_executor(
+            None, lambda: self._graph.all_keywords(5000)
+        )
+        by_role: dict[str, list[KeywordMention]] = {}
+        for k in keywords:
+            by_role.setdefault(k.role, []).append(k)
 
-        merged_groups: list[list[str]] = []
-        merged_count = 0
-        for type_, ents in by_type.items():
-            if len(ents) < 2:
+        norm_groups: list[list[str]] = []
+        updated_count = 0
+        for role, kws in by_role.items():
+            distinct_terms = sorted({k.raw_term for k in kws})
+            if len(distinct_terms) < 2:
                 continue
-            groups = await self._extractor.propose_merges([e.name for e in ents])
-            name_to_ent = {e.name: e for e in ents}
+            groups = await self._extractor.propose_merges(distinct_terms)
             for g in groups:
-                target = name_to_ent.get(g[0])
-                source_ids = [name_to_ent[n].id for n in g[1:] if n in name_to_ent]
-                if target is None or not source_ids:
+                canonical = g[0]
+                # 그룹에 속한 raw_term의 모든 문서별 언급 id 수집 (노드는 그대로)
+                ids = [k.id for k in kws if k.raw_term in set(g)]
+                if not ids:
                     continue
                 try:
                     n = await loop.run_in_executor(
-                        None, lambda t=target, s=source_ids: self._graph.merge_entities(t.id, s)
+                        None,
+                        lambda i=ids, c=canonical: self._graph.update_keyword_normalization(i, c),
                     )
                 except Exception as exc:
-                    logger.warning("정규화 병합 실패 (그룹 스킵, type=%s): %s", type_, exc)
+                    logger.warning("키워드 정규화 실패 (그룹 스킵, role=%s): %s", role, exc)
                     continue
                 if n > 0:
-                    merged_count += n
-                    merged_groups.append(g)
+                    updated_count += n
+                    norm_groups.append(g)
 
         logger.info(
-            "GraphRAG 정규화 완료: 그룹 %d개, 엔티티 %d개 병합", len(merged_groups), merged_count
+            "GraphRAG 키워드 정규화 완료: 그룹 %d개, 언급 %d건 갱신 (노드 병합 없음)",
+            len(norm_groups),
+            updated_count,
         )
-        return {"groups": merged_groups, "merged": merged_count}
+        return {"groups": norm_groups, "merged": updated_count}
+
+    # ── CR-30: 시험 인덱싱 모드 ──────────────────────────────────────────────
+
+    async def test_index(self, limit: int = 10) -> dict[str, Any]:
+        """문서 N건만 인덱싱해 추출 결과·노드 수를 즉시 반환 (지침 튜닝용)."""
+        if not self.available:
+            return {"error": "그래프 저장소 연결 불가", "results": [], "stats": {}}
+
+        loop = asyncio.get_running_loop()
+        doc_ids: list[str] = await loop.run_in_executor(None, self._all_doc_ids)
+        picked = [d for d in doc_ids if not d.startswith(_KNOWLEDGE_CATEGORY)][: max(1, limit)]
+
+        results: list[dict[str, Any]] = []
+        for doc_id in picked:
+            status = await self.index_document(doc_id)
+            kws: list[KeywordMention] = []
+            if status.state == "done":
+                kws = await loop.run_in_executor(
+                    None, lambda d=doc_id: self._graph.keywords_for_doc(d)
+                )
+            results.append(
+                {
+                    "doc_id": doc_id,
+                    "state": status.state,
+                    "error": status.error,
+                    "keywords": [
+                        {
+                            "raw_term": k.raw_term,
+                            "role": k.role,
+                            "confidence": k.confidence,
+                        }
+                        for k in kws
+                    ],
+                }
+            )
+
+        stats = await self.stats()
+        logger.info("GraphRAG 시험 인덱싱: %d건 완료", len(results))
+        return {"results": results, "stats": stats}
 
     def delete_document(self, doc_id: str) -> None:
         """문서 삭제 연쇄 (sync — 라우트에서 executor로 호출)."""
@@ -336,71 +408,82 @@ class GraphRagService:
     async def graph_retrieve(
         self, query: str, top_k: int = 5
     ) -> tuple[list[SearchHit], EvidenceSubgraph | None]:
-        """그래프 탐색 검색: 질의 용어 → 엔티티 매칭 → 이웃 확장 → 연결 청크."""
+        """CR-30 그래프 탐색: 질의 용어 → 키워드 매칭 → 소속 과제(문서) → 대표 청크.
+
+        문서는 매칭된 키워드 수·confidence로 랭킹한다.
+        """
         terms = _TERM_RE.findall(query or "")
         if not terms:
             return [], None
 
         loop = asyncio.get_running_loop()
         try:
-            matched = await loop.run_in_executor(
-                None, lambda: self._graph.find_entities(terms, limit=10)
-            )
-            if not matched:
-                return [], None
-            matched_ids = [e.id for e in matched]
-            neighbor_entities = await loop.run_in_executor(
-                None, lambda: self._graph.neighbors(matched_ids, hops=self._max_hops, limit=40)
-            )
-            all_ids = matched_ids + [e.id for e in neighbor_entities]
-            chunk_counts = await loop.run_in_executor(
-                None, lambda: self._graph.chunks_for_entities(all_ids, limit=top_k * 4)
+            matched: list[KeywordMention] = await loop.run_in_executor(
+                None, lambda: self._graph.find_keywords(terms, limit=40)
             )
         except Exception as exc:
             self._warn_fallback(f"그래프 질의 실패: {exc}")
             return [], None
 
-        if not chunk_counts:
+        if not matched:
             return [], None
 
-        chunk_ids = [cid for cid, _ in chunk_counts[: top_k * 2]]
-        rows = await loop.run_in_executor(
-            None, lambda: self._vstore.get_chunks_by_chunk_ids(chunk_ids)
-        )
-        by_id = {str(r.get("chunk_id")): r for r in rows}
-        max_n = max(n for _, n in chunk_counts) or 1
+        # 문서별 매칭 점수 (키워드 수 + confidence 합)
+        doc_scores: dict[str, float] = {}
+        doc_keywords: dict[str, list[KeywordMention]] = {}
+        for k in matched:
+            doc_scores[k.doc_id] = doc_scores.get(k.doc_id, 0.0) + 1.0 + k.confidence
+            doc_keywords.setdefault(k.doc_id, []).append(k)
+        ranked_docs = sorted(doc_scores.items(), key=lambda x: x[1], reverse=True)[: top_k * 2]
+        max_score = ranked_docs[0][1] if ranked_docs else 1.0
 
         hits: list[SearchHit] = []
-        for cid, n in chunk_counts:
-            row = by_id.get(cid)
-            if row is None:  # 고아 링크 (LanceDB에서 삭제된 청크) — 무시
-                continue
-            score = _GRAPH_SCORE_MIN + (_GRAPH_SCORE_MAX - _GRAPH_SCORE_MIN) * (n / max_n)
-            hits.append(_row_to_hit(row, score))
+        for doc_id, score in ranked_docs:
+            rows = await loop.run_in_executor(
+                None, lambda d=doc_id: self._vstore.get_chunks_by_doc_id(d, limit=2)
+            )
+            norm = _GRAPH_SCORE_MIN + (_GRAPH_SCORE_MAX - _GRAPH_SCORE_MIN) * (
+                score / max_score
+            )
+            for row in rows:
+                hits.append(_row_to_hit(row, norm))
+                if len(hits) >= top_k:
+                    break
             if len(hits) >= top_k:
                 break
 
+        # evidence: 매칭 키워드 + 소속 문서 노드
         evidence: EvidenceSubgraph | None = None
         try:
-            snap: GraphSnapshot = await loop.run_in_executor(
-                None,
-                lambda: self._graph.subgraph(all_ids, [h.chunk_id for h in hits]),
-            )
+            nodes: dict[str, GraphNode] = {}
+            edges: list[GraphEdge] = []
+            for doc_id, _s in ranked_docs:
+                if doc_id not in nodes:
+                    nodes[doc_id] = GraphNode(id=doc_id, label=doc_id, kind="document")
+                for k in doc_keywords.get(doc_id, []):
+                    if k.id not in nodes:
+                        nodes[k.id] = GraphNode(
+                            id=k.id,
+                            label=k.normalized_term or k.raw_term,
+                            kind="keyword",
+                            type=k.role,
+                        )
+                    edges.append(GraphEdge(source=doc_id, target=k.id, kind="has_keyword"))
             evidence = EvidenceSubgraph(
                 query=query,
                 created=datetime.now().isoformat(timespec="seconds"),
-                nodes=snap.nodes,
-                edges=snap.edges,
+                nodes=list(nodes.values()),
+                edges=edges,
                 chunk_ids=[h.chunk_id for h in hits],
             )
         except Exception as exc:
             logger.debug("evidence 서브그래프 조립 실패 (무시): %s", exc)
 
         logger.info(
-            "GraphRAG 검색: terms=%d, 매칭 엔티티=%d, 이웃=%d, 청크 hits=%d (query=%r)",
+            "GraphRAG 검색: terms=%d, 매칭 키워드=%d, 문서=%d, hits=%d (query=%r)",
             len(terms),
             len(matched),
-            len(neighbor_entities),
+            len(ranked_docs),
             len(hits),
             (query or "")[:50],
         )

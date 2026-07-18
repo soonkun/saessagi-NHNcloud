@@ -168,3 +168,75 @@ async def test_extract_empty_provider_falls_back_to_default() -> None:
     ext = EntityExtractor(complete_json=fake, prompt_provider=lambda: "")
     await ext.extract(_TEXT)
     assert fake.system_prompts == [EXTRACT_SYSTEM_PROMPT]
+
+
+# ── CR-30: 문서 단위 Project + 역할 키워드 추출 ──────────────────────────────
+
+
+class _ProjectLLM(FakeCompleteJson):
+    def __init__(self, resp: dict[str, Any]) -> None:
+        super().__init__({})
+        self.resp = resp
+
+    async def __call__(self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any) -> dict[str, Any]:
+        return self.resp
+
+
+@pytest.mark.asyncio
+async def test_extract_project_normal() -> None:
+    """정상: title/rfp_no/project_no + 역할 키워드 파싱."""
+    resp = {
+        "title": "가루쌀 미강유 기능성분 구명",
+        "rfp_no": "RFP-01",
+        "project_no": "PJ0123",
+        "keywords": [
+            {"term": "가루쌀 미강유", "role": "research_target", "confidence": 0.9},
+            {"term": "저장기간 품질변화", "role": "problem", "confidence": 0.8},
+        ],
+    }
+    ext = EntityExtractor(complete_json=_ProjectLLM(resp))  # type: ignore[arg-type]
+    r = await ext.extract_project("d1", "문서 본문 " * 20)
+    assert r.project.title == "가루쌀 미강유 기능성분 구명"
+    assert r.project.project_no == "PJ0123"
+    assert [k.role for k in r.keywords] == ["research_target", "problem"]
+
+
+@pytest.mark.asyncio
+async def test_extract_project_rejects_invalid_keywords() -> None:
+    """검증: 잘못된 role·숫자/날짜뿐·일반 단독어·문장급 길이·중복은 폐기, 최대 10개."""
+    resp = {
+        "keywords": [
+            {"term": "가루쌀 미강유", "role": "research_target"},
+            {"term": "가루쌀 미강유", "role": "research_target"},  # 중복
+            {"term": "이상한역할", "role": "organization"},  # role 화이트리스트 밖
+            {"term": "2023.05.01", "role": "problem"},  # 날짜
+            {"term": "연구", "role": "outcome"},  # 일반 단독어
+            {"term": "이 문장은 키워드가 아니라 아주 길게 늘어진 서술형 문장 전체라서 사십자를 넘어가므로 제외되어야 한다", "role": "technology"},  # 문장급
+        ]
+        + [{"term": f"유효 키워드 {i}", "role": "technology"} for i in range(12)],
+    }
+    ext = EntityExtractor(complete_json=_ProjectLLM(resp))  # type: ignore[arg-type]
+    r = await ext.extract_project("d1", "문서 본문 " * 20)
+    terms = [k.raw_term for k in r.keywords]
+    assert "가루쌀 미강유" in terms
+    assert "2023.05.01" not in terms and "연구" not in terms
+    assert len(r.keywords) <= 10  # 문서당 최대 10개
+
+
+@pytest.mark.asyncio
+async def test_extract_project_llm_failure_returns_empty() -> None:
+    """엣지: LLM 실패 → 빈 추출 (예외 전파 금지)."""
+    fake = FakeCompleteJson({})
+    fake.fail = True
+    ext = EntityExtractor(complete_json=fake)
+    r = await ext.extract_project("d1", "문서 본문 " * 20)
+    assert r.keywords == [] and r.project.doc_id == "d1"
+
+
+@pytest.mark.asyncio
+async def test_extract_project_short_text_skipped() -> None:
+    """엣지: 초단문 → LLM 호출 없이 빈 추출."""
+    fake = FakeCompleteJson({})
+    ext = EntityExtractor(complete_json=fake)
+    r = await ext.extract_project("d1", "짧음")
+    assert r.keywords == [] and fake.calls == []

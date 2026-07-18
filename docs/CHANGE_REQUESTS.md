@@ -1495,3 +1495,39 @@ selection(부분 존댓말 전환) 실측.
 **검증**: 주제 청킹 단위 4건(경계 분리·하위불릿 병합·제목연속 보호·상한 분할),
 실서버 E2E(1,343자 개조식 → 청크 1개, 업로드 시 그래프 스케줄 없음, 토글 왕복).
 기존 문서는 옛 청킹 유지 — 재업로드 또는 추후 재청킹 기능으로 갱신.
+
+---
+
+## CR-30: 그래프 엔티티 재설계 — 범용 엔티티 폐기 → Project + 역할 키워드
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-18, GPT 제안 반영)
+
+**배경**: 범용 엔티티 추출(인물/조직/장소/제도 등)이 무분별하게 노드를 뿌려
+그래프가 폭증(문서 126건 → 엔티티 2,212)하고 과제 탐색에 무의미. 연구과제
+탐색에 필요한 최소 구조로 재설계.
+
+**새 스키마**:
+- Project = Document 노드 확장 (title/rfp_no/project_no를 **속성**으로, 별도 노드 아님)
+- (Project)-[:HAS_KEYWORD]->(Keyword). Keyword 속성: raw_term, normalized_term,
+  role, normalization_status, confidence
+- Keyword id = 문서 스코프(doc_id::term::role) — **전역 MERGE 금지**: 같은 단어도
+  문서·문맥별로 별개 노드로 보존
+- 역할(role): research_target | technology | problem | outcome
+- 추출은 청크당이 아닌 **문서당 LLM 1회** (앞 9,000자) — 문서당 키워드 최대 10개
+
+**정규화(후처리)**: 노드 병합이 아니라 normalized_term/status 속성만 갱신
+(raw_term·문서별 언급 노드 보존). 역할별로 LLM이 표기 변형을 보수적으로 묶음.
+
+**중단(graceful)**: cancel 시 대기 큐만 비우고 신규 투입 중지 — 진행 중 문서 1건은
+완료 후 정지 (요청 도중 하드 취소로 인한 반쪽 트랜잭션 방지). 문서 단위 단일
+write 트랜잭션(execute_write).
+
+**시험 인덱싱**: POST /api/graphrag/test-index {limit} — N건만 인덱싱하고 문서별
+추출 결과·노드 수 즉시 반환 (지침 튜닝용).
+
+**폐기**: 청크별 엔티티 추출(extract/EXTRACT_SYSTEM_PROMPT), 그래프 탭 엔티티
+타입 필터(인물/조직/…)→역할 필터. 프론트 GraphRagNode.kind에 "keyword" 추가.
+
+**검증**: 단위 37건(추출 검증·문서단위 인덱싱·정규화 속성갱신·중단·시험모드) +
+실서버 test-index 10건 — 문서당 역할 키워드 5~9개 정확 추출 (총 66개), 잡음 엔티티 0.
+전체 회귀 예정.

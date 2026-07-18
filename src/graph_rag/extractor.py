@@ -10,9 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any, Protocol
 
-from .types import ENTITY_TYPES, Entity, ExtractionResult, Relation, entity_id
+from .types import (
+    ENTITY_TYPES,
+    KEYWORD_ROLES,
+    Entity,
+    ExtractionResult,
+    KeywordMention,
+    ProjectExtraction,
+    ProjectInfo,
+    Relation,
+    entity_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +81,61 @@ EXTRACT_JSON_SCHEMA: dict[str, Any] = {
     },
     "required": ["entities"],
 }
+
+
+# ── CR-30: Project + 역할 키워드 추출 (문서 단위 1회 호출) ────────────────────
+
+KEYWORD_EXTRACT_SYSTEM_PROMPT = """당신은 연구과제 문서(RFP·계획서·보고서)에서 과제 탐색에 필요한 최소 정보만
+추출하는 정보 추출기입니다. JSON으로만 답하세요.
+
+추출 대상 (이것만):
+1. title: 과제명 (연구개발과제명). 없으면 ""
+2. rfp_no: RFP 번호. 없으면 ""
+3. project_no: 과제번호 (예: RS-2024-00123456, 321012-05). 표기 원문 그대로. 없으면 ""
+4. keywords: 핵심 키워드 최대 10개. 각 키워드는 {"term", "role", "confidence"}
+
+keywords 규칙:
+- 연구대상(research_target), 적용기술(technology), 해결문제(problem),
+  연구목적·산출물(outcome)을 나타내는 핵심 명사구만 추출한다
+- role은 반드시 research_target | technology | problem | outcome 중 하나
+- term은 짧은 명사 또는 명사구 (2~30자). 문장 전체 금지
+- 목차, 파일명, 날짜, 번호, 금액, "연구", "개발", "기술" 같은 일반 단독어 금지
+- 인물, 조직, 장소, 제도명은 추출하지 않는다
+- 키워드를 기술유형코드 등으로 변환하지 말고 원문 표현 그대로 둔다
+- confidence: 0.0~1.0 (문서 핵심 주제에 가까울수록 높게)
+
+예시 출력:
+{"title":"가루쌀 미강유 기능성분 구명 및 저장기간에 따른 품질변화 구명","rfp_no":"","project_no":"PJ01234567","keywords":[{"term":"가루쌀 미강유","role":"research_target","confidence":0.95},{"term":"기능성분 구명","role":"outcome","confidence":0.85},{"term":"저장기간 품질변화","role":"problem","confidence":0.8}]}"""
+
+KEYWORD_EXTRACT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "rfp_no": {"type": "string"},
+        "project_no": {"type": "string"},
+        "keywords": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "term": {"type": "string"},
+                    "role": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["term", "role"],
+            },
+        },
+    },
+    "required": ["keywords"],
+}
+
+_MAX_KEYWORDS = 10
+# 숫자·날짜·번호만인 term 배제 (규칙 4)
+_NUMERIC_TERM_RE = re.compile(r"^[\d\s.\-_/년월일~()]+$")
+# 일반 단독어 금지 목록 (규칙 4)
+_GENERIC_TERMS = frozenset(
+    {"연구", "개발", "기술", "사업", "과제", "방법", "결과", "목표", "내용", "활용", "분석"}
+)
 
 
 NORMALIZE_SYSTEM_PROMPT = """당신은 지식그래프의 엔티티 목록에서 같은 대상의 표기 변형(정식명칭/약칭/영문 표기/오탈자)을
@@ -168,6 +234,85 @@ class EntityExtractor:
             return ExtractionResult()
 
         return self._parse(raw)
+
+    async def extract_project(self, doc_id: str, text: str) -> ProjectExtraction:
+        """CR-30: 문서 1건 → 과제 정보(title/rfp_no/project_no) + 역할 키워드(≤10).
+
+        실패 시 빈 키워드의 ProjectExtraction 반환 (예외 전파 금지).
+        커스텀 지침(prompt_provider)이 있으면 그것을 시스템 프롬프트로 사용.
+        """
+        clipped = (text or "")[:_MAX_INPUT_CHARS].strip()
+        if len(clipped) < 20:
+            return ProjectExtraction(project=ProjectInfo(doc_id=doc_id))
+
+        system = KEYWORD_EXTRACT_SYSTEM_PROMPT
+        if self._prompt_provider is not None:
+            try:
+                custom = (self._prompt_provider() or "").strip()
+                if custom:
+                    system = custom
+            except Exception as exc:
+                logger.warning("graph_extract 지침 조회 실패 (기본값 사용): %r", exc)
+
+        try:
+            async with asyncio.timeout(self._timeout_seconds + 2.0):
+                raw: dict[str, Any] = await self._complete_json(
+                    system,
+                    clipped,
+                    KEYWORD_EXTRACT_JSON_SCHEMA,
+                    max_tokens=1024,
+                    temperature=0.0,
+                    timeout_seconds=self._timeout_seconds,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("extract_project 실패 (문서 스킵): %s", type(exc).__name__)
+            return ProjectExtraction(project=ProjectInfo(doc_id=doc_id))
+
+        return self._parse_project(doc_id, raw)
+
+    def _parse_project(self, doc_id: str, raw: dict[str, Any]) -> ProjectExtraction:
+        """LLM 출력 → 검증된 ProjectExtraction (견고 파싱, 보수적)."""
+        if not isinstance(raw, dict):
+            return ProjectExtraction(project=ProjectInfo(doc_id=doc_id))
+
+        project = ProjectInfo(
+            doc_id=doc_id,
+            title=str(raw.get("title") or "").strip()[:200],
+            rfp_no=str(raw.get("rfp_no") or "").strip()[:60],
+            project_no=str(raw.get("project_no") or "").strip()[:60],
+        )
+
+        keywords: list[KeywordMention] = []
+        seen: set[str] = set()
+        for item in raw.get("keywords") or []:
+            if not isinstance(item, dict):
+                continue
+            term = " ".join(str(item.get("term") or "").split())
+            role = str(item.get("role") or "").strip()
+            # 검증: 역할 화이트리스트, 길이 2~40, 숫자·날짜뿐 금지, 일반 단독어 금지
+            if role not in KEYWORD_ROLES:
+                continue
+            if not (2 <= len(term) <= 40):
+                continue
+            if _NUMERIC_TERM_RE.match(term) or term in _GENERIC_TERMS:
+                continue
+            key = f"{term.casefold()}::{role}"
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                conf = max(0.0, min(1.0, float(item.get("confidence") or 0.0)))
+            except (TypeError, ValueError):
+                conf = 0.0
+            keywords.append(
+                KeywordMention(doc_id=doc_id, raw_term=term, role=role, confidence=conf)
+            )
+            if len(keywords) >= _MAX_KEYWORDS:
+                break
+
+        return ProjectExtraction(project=project, keywords=keywords)
 
     async def propose_merges(self, names: list[str]) -> list[list[str]]:
         """CR-22 정규화: 같은 타입 엔티티 이름 목록 → 병합 그룹 제안 (보수적 검증).

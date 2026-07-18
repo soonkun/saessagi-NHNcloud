@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from .types import ChunkLink, Entity, GraphSnapshot, Relation
+from .types import ChunkLink, Entity, GraphSnapshot, KeywordMention, ProjectInfo, Relation
 
 
 class GraphStore(ABC):
@@ -87,6 +87,36 @@ class GraphStore(ABC):
 
         Returns: 삭제 전 stats (기록용).
         """
+
+    # ── CR-30: Project + 역할 키워드 스키마 ──────────────────────────────────
+
+    @abstractmethod
+    def upsert_project_bundle(self, project: "ProjectInfo", keywords: list["KeywordMention"]) -> None:
+        """문서 1건의 과제 정보·키워드를 단일 트랜잭션으로 저장.
+
+        - Document 노드에 title/rfp_no/project_no를 속성으로 SET (별도 노드 아님)
+        - 문서의 기존 Keyword 노드를 지우고 새 키워드로 교체 (재인덱싱 멱등)
+        - Keyword id는 문서 스코프 — 전역 병합 금지
+        """
+
+    @abstractmethod
+    def find_keywords(self, terms: list[str], limit: int = 30) -> list["KeywordMention"]:
+        """질의 용어와 raw_term/normalized_term 부분 일치하는 키워드 언급 검색."""
+
+    @abstractmethod
+    def keywords_for_doc(self, doc_id: str) -> list["KeywordMention"]:
+        """문서의 키워드 언급 목록 (검증·정규화 후처리용)."""
+
+    @abstractmethod
+    def all_keywords(self, limit: int = 5000) -> list["KeywordMention"]:
+        """전체 키워드 언급 (정규화 후처리 대상 수집)."""
+
+    @abstractmethod
+    def update_keyword_normalization(
+        self, keyword_ids: list[str], normalized_term: str
+    ) -> int:
+        """정규화 후처리: 해당 키워드 노드들의 normalized_term/status만 갱신
+        (raw_term 보존, 노드 병합 없음). 반환: 갱신 수."""
 
     @abstractmethod
     def stats(self) -> dict[str, int]:

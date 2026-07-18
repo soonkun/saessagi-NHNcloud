@@ -200,3 +200,27 @@ async def latest_evidence(request: Request) -> EvidenceResp:
         ],
         chunk_ids=ev.chunk_ids,
     )
+
+
+# ── CR-30: 시험 인덱싱 모드 ──────────────────────────────────────────────────
+
+
+class TestIndexReq(BaseModel):
+    limit: int = 10
+
+
+class TestIndexResp(BaseModel):
+    results: list[dict[str, Any]]
+    stats: dict[str, int]
+
+
+@router.post("/test-index", response_model=TestIndexResp)
+async def test_index(request: Request, body: TestIndexReq) -> TestIndexResp:
+    """CR-30: 문서 N건(기본 10)만 인덱싱하고 추출 결과·노드 수를 즉시 반환 — 지침 튜닝용."""
+    svc = _get_service(request)
+    if not svc.available:
+        raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    result = await svc.test_index(limit=max(1, min(body.limit, 50)))
+    if result.get("error"):
+        raise HTTPException(status_code=503, detail=str(result["error"]))
+    return TestIndexResp(results=result["results"], stats=result["stats"])

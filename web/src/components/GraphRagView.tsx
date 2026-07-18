@@ -30,18 +30,23 @@ import {
 } from "../services/api";
 import { useStore } from "../store";
 
-// 엔티티 타입별 팔레트 (다크/라이트 공용 — 채도 낮춘 7색)
+// CR-30: 키워드 역할별 팔레트 (다크/라이트 공용)
 const TYPE_COLORS: Record<string, string> = {
-  인물: "#e07a5f",
-  조직: "#5f8fe0",
-  사업: "#56b380",
-  제도: "#b07fd8",
-  기술: "#d8a44f",
-  장소: "#4fb8c9",
-  기타: "#9aa0ab",
+  research_target: "#56b380", // 연구대상
+  technology: "#5f8fe0", // 기술
+  problem: "#e07a5f", // 문제
+  outcome: "#d8a44f", // 산출물
 };
 
-const ENTITY_TYPES = ["인물", "조직", "사업", "제도", "기술", "장소", "기타"];
+const ROLE_LABELS: Record<string, string> = {
+  research_target: "연구대상",
+  technology: "기술",
+  problem: "문제",
+  outcome: "산출물",
+};
+
+const ENTITY_TYPES = ["research_target", "technology", "problem", "outcome"];
+const FALLBACK_COLOR = "#9aa0ab";
 
 interface RFNode extends GraphRagNode {
   degree: number;
@@ -205,10 +210,10 @@ export default function GraphRagView(): React.ReactElement {
       for (const nb of neighbors.get(id) ?? []) {
         set.add(nb);
         const nbNode = byId.get(nb);
-        if (nbNode?.kind === "entity") {
+        if (nbNode?.kind === "entity" || nbNode?.kind === "keyword") {
           for (const nb2 of neighbors.get(nb) ?? []) {
             const n2 = byId.get(nb2);
-            if (n2 && n2.kind !== "entity") set.add(nb2); // 연계 문서·노트
+            if (n2 && n2.kind !== "entity" && n2.kind !== "keyword") set.add(nb2); // 연계 문서·노트
           }
         }
       }
@@ -244,7 +249,7 @@ export default function GraphRagView(): React.ReactElement {
       if (nbs.length === 0) return;
       nbs.sort(
         (a, b) =>
-          (a.kind === "entity" ? 1 : 0) - (b.kind === "entity" ? 1 : 0) ||
+          (a.kind === "entity" || a.kind === "keyword" ? 1 : 0) - (b.kind === "entity" || b.kind === "keyword" ? 1 : 0) ||
           b.degree - a.degree
       );
       const radius = 46 + Math.sqrt(nbs.length) * 14;
@@ -304,14 +309,14 @@ export default function GraphRagView(): React.ReactElement {
     (n: RFNode): string => {
       if (n.kind === "document") return isDark ? "#9fb3d1" : "#5b7396";
       if (n.kind === "note") return accent;
-      return TYPE_COLORS[n.type] ?? TYPE_COLORS["기타"];
+      return TYPE_COLORS[n.type] ?? FALLBACK_COLOR;
     },
     [accent, isDark]
   );
 
   // 문서·노트는 탐색의 주 대상 — 엔티티보다 크게
   const radiusFor = useCallback((n: RFNode): number => {
-    const base = n.kind === "entity" ? 4 : 6;
+    const base = n.kind === "entity" || n.kind === "keyword" ? 4 : 6;
     return base + Math.min(8, Math.sqrt(n.degree) * 1.7);
   }, []);
 
@@ -372,7 +377,7 @@ export default function GraphRagView(): React.ReactElement {
     void pinnedVersion;
     return [...pinnedRef.current.keys()]
       .map((id) => byId.get(id))
-      .filter((n): n is RFNode => n !== undefined && n.kind !== "entity");
+      .filter((n): n is RFNode => n !== undefined && n.kind !== "entity" && n.kind !== "keyword");
   }, [pinnedVersion, byId]);
 
   // 검색 매치 (라벨 부분 일치, 최대 8)
@@ -437,8 +442,8 @@ export default function GraphRagView(): React.ReactElement {
       .map((id) => byId.get(id))
       .filter((n): n is RFNode => n !== undefined);
     nodes.sort((a, b) => {
-      const ka = a.kind === "entity" ? 1 : 0;
-      const kb = b.kind === "entity" ? 1 : 0;
+      const ka = a.kind === "entity" || a.kind === "keyword" ? 1 : 0;
+      const kb = b.kind === "entity" || b.kind === "keyword" ? 1 : 0;
       if (ka !== kb) return ka - kb;
       return b.degree - a.degree;
     });
@@ -466,8 +471,7 @@ export default function GraphRagView(): React.ReactElement {
       >
         <Network size={14} style={{ color: "var(--color-accent)" }} />
         <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
-          엔티티 {stats.entities ?? 0} · 관계 {stats.relations ?? 0} · 문서 {stats.documents ?? 0} ·
-          노트 {stats.notes ?? 0}
+          과제 {stats.documents ?? 0} · 키워드 {stats.keywords ?? 0} · 노트 {stats.notes ?? 0}
         </span>
 
         {ENTITY_TYPES.map((t) => {
@@ -493,7 +497,7 @@ export default function GraphRagView(): React.ReactElement {
                 fontFamily: "inherit",
               }}
             >
-              {t}
+              {ROLE_LABELS[t] ?? t}
             </button>
           );
         })}
@@ -1209,9 +1213,9 @@ export default function GraphRagView(): React.ReactElement {
 
               // 라벨 — 문서·노트는 상시, 엔티티는 확대/활성 시. 딤 노드는 생략.
               if (!active) return;
-              if (n.kind === "entity" && scale < 0.9 && hoveredNodeId !== n.id && !pinned) return;
+              if ((n.kind === "entity" || n.kind === "keyword") && scale < 0.9 && hoveredNodeId !== n.id && !pinned) return;
 
-              const isDocLike = n.kind !== "entity";
+              const isDocLike = n.kind !== "entity" && n.kind !== "keyword";
               // 화면 픽셀 기준 고정 크기 — 줌 수준과 무관하게 항상 같은 크기로 보인다
               const screenPx = isDocLike ? 12.5 : 11;
               const fontSize = screenPx / scale;
@@ -1284,7 +1288,7 @@ export default function GraphRagView(): React.ReactElement {
                 ? "문서"
                 : selected.kind === "note"
                   ? "업무 노트"
-                  : `엔티티 · ${selected.type || "기타"}`}
+                  : `키워드 · ${ROLE_LABELS[selected.type] ?? selected.type ?? ""}`}
               {" · 연결 "}
               {selected.degree}건
               {isPinned(selected.id) && (
@@ -1406,8 +1410,8 @@ export default function GraphRagView(): React.ReactElement {
           }}
         >
           <div style={{ display: "flex", gap: 10 }}>
-            <span>● 엔티티</span>
-            <span>▤ 문서</span>
+            <span>● 키워드</span>
+            <span>▤ 과제(문서)</span>
             <span>◪ 노트</span>
             <span>— 관계</span>
             <span>┄ 언급</span>

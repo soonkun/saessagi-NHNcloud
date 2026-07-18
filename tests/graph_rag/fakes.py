@@ -6,7 +6,16 @@ from __future__ import annotations
 from typing import Any
 
 from graph_rag.store import GraphStore
-from graph_rag.types import ChunkLink, Entity, GraphEdge, GraphNode, GraphSnapshot, Relation
+from graph_rag.types import (
+    ChunkLink,
+    Entity,
+    GraphEdge,
+    GraphNode,
+    GraphSnapshot,
+    KeywordMention,
+    ProjectInfo,
+    Relation,
+)
 
 
 class FakeGraphStore(GraphStore):
@@ -20,6 +29,9 @@ class FakeGraphStore(GraphStore):
         self.chunk_parent: dict[str, tuple[str, str]] = {}  # chunk_id → (parent_id, kind)
         self.documents: dict[str, dict[str, str]] = {}
         self.notes: dict[str, str] = {}
+        # CR-30
+        self.projects: dict[str, ProjectInfo] = {}
+        self.keywords: dict[str, KeywordMention] = {}
         self.closed = False
 
     # ── 계약 구현 ─────────────────────────────────────────────────────────────
@@ -182,12 +194,62 @@ class FakeGraphStore(GraphStore):
         self.chunk_parent.clear()
         self.documents.clear()
         self.notes.clear()
+        self.projects.clear()
+        self.keywords.clear()
         return before
+
+    # ── CR-30: Project + 역할 키워드 ─────────────────────────────────────────
+
+    def upsert_project_bundle(self, project: ProjectInfo, keywords: list[KeywordMention]) -> None:
+        self.projects[project.doc_id] = project
+        # 문서의 기존 키워드 교체 (재인덱싱 멱등)
+        self.keywords = {kid: k for kid, k in self.keywords.items() if k.doc_id != project.doc_id}
+        for k in keywords:
+            self.keywords[k.id] = k
+
+    def find_keywords(self, terms: list[str], limit: int = 30) -> list[KeywordMention]:
+        terms_norm = [t.casefold() for t in terms if t.strip()]
+        out: list[KeywordMention] = []
+        for k in self.keywords.values():
+            raw = k.raw_term.casefold()
+            norm = k.normalized_term.casefold()
+            if any(
+                t in raw or (norm and t in norm) or (len(raw) >= 3 and raw in t)
+                for t in terms_norm
+            ):
+                out.append(k)
+            if len(out) >= limit:
+                break
+        return out
+
+    def keywords_for_doc(self, doc_id: str) -> list[KeywordMention]:
+        return [k for k in self.keywords.values() if k.doc_id == doc_id]
+
+    def all_keywords(self, limit: int = 5000) -> list[KeywordMention]:
+        return list(self.keywords.values())[:limit]
+
+    def update_keyword_normalization(self, keyword_ids: list[str], normalized_term: str) -> int:
+        n = 0
+        for kid in keyword_ids:
+            k = self.keywords.get(kid)
+            if k is None:
+                continue
+            self.keywords[kid] = KeywordMention(
+                doc_id=k.doc_id,
+                raw_term=k.raw_term,  # raw 보존
+                role=k.role,
+                confidence=k.confidence,
+                normalized_term=normalized_term,
+                normalization_status="normalized",
+            )
+            n += 1
+        return n
 
     def stats(self) -> dict[str, int]:
         return {
             "entities": len(self.entities),
             "relations": len(self.relations),
+            "keywords": len(self.keywords),
             "chunks": len(self.chunk_parent),
             "documents": len(self.documents),
             "notes": len(self.notes),

@@ -135,9 +135,10 @@ def get_default(key: PromptKey) -> str | None:
             return ""
     if key == "graph_extract":
         try:
-            from graph_rag.extractor import EXTRACT_SYSTEM_PROMPT
+            # CR-30: 기본 지침 = Project + 역할 키워드 추출 (구 범용 엔티티 추출 폐기)
+            from graph_rag.extractor import KEYWORD_EXTRACT_SYSTEM_PROMPT
 
-            return str(EXTRACT_SYSTEM_PROMPT)
+            return str(KEYWORD_EXTRACT_SYSTEM_PROMPT)
         except ImportError:
             logger.warning("graph_rag.extractor 임포트 실패")
             return ""
