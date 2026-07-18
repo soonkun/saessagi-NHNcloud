@@ -177,9 +177,12 @@ app:
       speed: 1.2
   # CR-28: 청킹 기준 — 업로드·재청킹(POST /api/rag/rechunk-stream)에 적용.
   # 조정 후 문서 탭 청크 보기로 결과 확인 가능.
-  rag_chunk_chars: 2000       # 청크 최대 크기(문자). 주제 경계 우선, 이 값은 상한
-  rag_chunk_overlap: 150      # 청크 간 오버랩(문자)
-  rag_topic_min_chars: 250    # 직전 주제 묶음이 이보다 작으면 다음 주제와 병합
+  # heading_or_paragraph_first (CR-29): 제목 경계 우선 → target 도달 시 단락 경계 →
+  # 경계 없으면 max. 토큰 환산 ≈1.7자/토큰 (target 1400자≈800tk, min 500자≈300tk).
+  rag_chunk_chars: 2000        # 최대(상한, ≈1200토큰)
+  rag_chunk_target_chars: 1400 # 목표 — 도달 시 다음 단락 경계에서 분할 (≈800토큰)
+  rag_chunk_overlap: 150       # 오버랩 (≈80토큰)
+  rag_topic_min_chars: 500     # 직전 주제가 이보다 작으면 다음 주제와 병합 (≈300토큰)
   rag_min_score: 0.35
   # M_19 GraphRAG (CR-18) — Neo4j 기반 그래프RAG 하이브리드. 기본 비활성.
   # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 참조)

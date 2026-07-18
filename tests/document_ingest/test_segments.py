@@ -11,7 +11,7 @@ class TestTopicChunking:
         topic1 = [("1. 연구개발 목표", None)] + [(f"- 목표 항목 {i} " + "내용 " * 30, None) for i in range(4)]
         topic2 = [("2. 연구개발 내용", None)] + [(f"- 내용 항목 {i} " + "본문 " * 30, None) for i in range(4)]
         topic3 = [("□ 기대 효과", None)] + [(f"- 효과 {i} " + "설명 " * 30, None) for i in range(4)]
-        chunks = chunk_meta_segments(topic1 + topic2 + topic3, chunk_chars=2000, overlap_chars=0)
+        chunks = chunk_meta_segments(topic1 + topic2 + topic3, chunk_chars=2000, overlap_chars=0, topic_min_chars=250, target_chars=0)
 
         assert len(chunks) == 3, f"주제 3개 → 청크 3개여야 함: {len(chunks)}"
         assert chunks[0][0].startswith("1. 연구개발 목표")
@@ -23,7 +23,7 @@ class TestTopicChunking:
         from document_ingest.segments import chunk_meta_segments
 
         segs = [("1. 주제", None)] + [(f"- 불릿 {i} " + "짧은 내용 " * 20, None) for i in range(5)]
-        chunks = chunk_meta_segments(segs, chunk_chars=3000, overlap_chars=0)
+        chunks = chunk_meta_segments(segs, chunk_chars=3000, overlap_chars=0, topic_min_chars=250, target_chars=0)
         assert len(chunks) == 1
 
     def test_tiny_buffer_ignores_topic_break(self) -> None:
@@ -31,7 +31,7 @@ class TestTopicChunking:
         from document_ingest.segments import chunk_meta_segments
 
         segs = [("1. 제목만", None), ("2. 바로 다음 제목", None), ("본문 " * 100, None)]
-        chunks = chunk_meta_segments(segs, chunk_chars=2000, overlap_chars=0)
+        chunks = chunk_meta_segments(segs, chunk_chars=2000, overlap_chars=0, topic_min_chars=250, target_chars=0)
         assert len(chunks) == 1
 
     def test_chunk_chars_still_caps(self) -> None:
@@ -39,6 +39,47 @@ class TestTopicChunking:
         from document_ingest.segments import chunk_meta_segments
 
         segs = [("1. 큰 주제", None)] + [(f"- 항목 {i} " + "내용 " * 80, None) for i in range(10)]
-        chunks = chunk_meta_segments(segs, chunk_chars=1000, overlap_chars=0)
+        chunks = chunk_meta_segments(segs, chunk_chars=1000, overlap_chars=0, topic_min_chars=250, target_chars=0)
         assert len(chunks) > 1
         assert all(len(c[0]) <= 1400 for c in chunks)  # 상한 + 여유
+
+
+# ── CR-29 target 기반 분할 (heading_or_paragraph_first) ──────────────────────
+
+
+class TestTargetChunking:
+    def test_target_splits_at_paragraph_boundary(self) -> None:
+        """제목 없는 긴 문서: target 도달 시 단락 경계에서 분할 — max로 쏠리지 않는다."""
+        from document_ingest.segments import chunk_meta_segments
+
+        segs = [(f"단락 {i}. " + "내용 " * 60, None) for i in range(10)]  # 단락당 ~190자
+        chunks = chunk_meta_segments(
+            segs, chunk_chars=2000, overlap_chars=0, topic_min_chars=500, target_chars=800
+        )
+        # 전체 ~1,870자 → target 800이면 2청크 (target 비활성이면 1청크가 됐을 것)
+        assert len(chunks) >= 2
+        # target(800) 근처에서 잘려야 함 — max(2000)까지 채우지 않음
+        assert all(len(c[0]) <= 1200 for c in chunks), [len(c[0]) for c in chunks]
+
+    def test_target_zero_disables(self) -> None:
+        """target=0이면 비활성 — 상한까지 채우는 기존 동작."""
+        from document_ingest.segments import chunk_meta_segments
+
+        segs = [(f"단락 {i}. " + "내용 " * 60, None) for i in range(10)]
+        chunks = chunk_meta_segments(
+            segs, chunk_chars=3000, overlap_chars=0, topic_min_chars=500, target_chars=0
+        )
+        assert len(chunks) == 1
+
+    def test_target_overlap_reseeded(self) -> None:
+        """target 경계 분할 시 오버랩이 다음 청크 앞에 재포함된다."""
+        from document_ingest.segments import chunk_meta_segments
+
+        segs = [(f"단락{i} " + "내용 " * 60, None) for i in range(6)]
+        chunks = chunk_meta_segments(
+            segs, chunk_chars=2000, overlap_chars=300, topic_min_chars=500, target_chars=700
+        )
+        assert len(chunks) >= 2
+        # 두 번째 청크가 첫 청크 마지막 단락으로 시작 (오버랩)
+        first_tail_marker = chunks[0][0].splitlines()[-1][:8]
+        assert chunks[1][0].startswith(first_tail_marker)

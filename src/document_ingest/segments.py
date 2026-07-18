@@ -223,8 +223,13 @@ _TOPIC_BREAK_RE = re.compile(
 
 # 주제 경계에서 분할하기 위한 최소 버퍼 크기 기본값 — 이보다 작으면 초소형 주제
 # (1페이지 보고서의 짧은 꼭지 등)이므로 경계를 무시하고 다음 주제까지 병합한다.
-# conf app.rag_topic_min_chars로 조정 가능 (CR-28).
-_TOPIC_MIN_CHARS = 250
+# 한국어 업무 문서 기준 ≈300토큰. conf app.rag_topic_min_chars로 조정 가능 (CR-28/29).
+_TOPIC_MIN_CHARS = 500
+
+# 목표 청크 크기 기본값 (CR-29: heading_or_paragraph_first) — 버퍼가 이 크기에
+# 도달하면 다음 세그먼트(단락) 경계에서 자른다. 제목 경계가 먼저 나오면 거기서 자르고,
+# 경계가 없으면 chunk_chars(상한)까지 허용. ≈800토큰.
+_TARGET_CHARS = 1400
 
 
 def chunk_meta_segments(
@@ -233,6 +238,7 @@ def chunk_meta_segments(
     overlap_chars: int = 150,
     min_chunk_chars: int = 10,
     topic_min_chars: int = _TOPIC_MIN_CHARS,
+    target_chars: int = _TARGET_CHARS,
 ) -> list[tuple[str, int | None]]:
     """(text, page) 메타 세그먼트들을 병합·청킹한다.
 
@@ -285,6 +291,23 @@ def chunk_meta_segments(
         # 경계를 무시하고 다음 주제까지 병합. 주제 경계에서는 오버랩을 넣지 않는다.
         if buf and _TOPIC_BREAK_RE.match(seg_text) and len(joined(buf)) >= topic_min_chars:
             flush()
+
+        # CR-29: 목표 크기 도달 → 단락(세그먼트) 경계에서 분할 (heading_or_paragraph_first).
+        # 제목 경계가 안 나와도 target을 넘기면 여기서 잘라 청크가 상한으로 쏠리지 않게 한다.
+        # 일반 경계이므로 오버랩 재시드는 유지한다.
+        if buf and 0 < target_chars <= len(joined(buf)):
+            prev_target = list(buf)
+            flush()
+            if overlap_chars > 0:
+                overlap_lines_t: list[str] = []
+                for line in reversed(prev_target):
+                    if len(joined([line, *overlap_lines_t])) <= overlap_chars:
+                        overlap_lines_t.insert(0, line)
+                    else:
+                        break
+                buf = overlap_lines_t
+                if buf:
+                    buf_page = seg_page
 
         # 단일 세그먼트가 너무 큼 → 독립 분할
         if len(seg_text) > chunk_chars:

@@ -333,13 +333,23 @@ class AppConfig(BaseModel):
         description="청크 간 오버랩 크기(문자). rag_chunk_chars보다 작아야 한다.",
     )
     rag_topic_min_chars: int = Field(
-        default=250,
+        default=500,
         ge=0,
         le=2000,
         description=(
-            "CR-28: 주제 경계 분할 최소치(문자). 직전 주제 묶음이 이보다 작으면 "
-            "경계를 무시하고 다음 주제까지 병합한다 (1페이지 보고서의 초소형 꼭지 보호). "
-            "0이면 항상 주제 경계에서 분할."
+            "CR-28/29: 주제 경계 분할 최소치(문자, ≈300토큰). 직전 주제 묶음이 이보다 "
+            "작으면 경계를 무시하고 다음 주제까지 병합한다 (1페이지 보고서의 초소형 꼭지 "
+            "보호). 0이면 항상 주제 경계에서 분할."
+        ),
+    )
+    rag_chunk_target_chars: int = Field(
+        default=1400,
+        ge=0,
+        le=6000,
+        description=(
+            "CR-29: 목표 청크 크기(문자, ≈800토큰) — heading_or_paragraph_first. "
+            "버퍼가 이 크기에 도달하면 다음 단락 경계에서 분할한다 (제목 경계가 먼저 "
+            "나오면 거기서). 0이면 비활성 (상한 rag_chunk_chars까지 채움)."
         ),
     )
     rag_rerank_enabled: bool = Field(

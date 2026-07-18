@@ -507,7 +507,8 @@ async def upload_document(request: Request) -> UploadResponse:
         meta_segments,
         chunk_chars=getattr(app_cfg, "rag_chunk_chars", _CHUNK_SIZE),
         overlap_chars=getattr(app_cfg, "rag_chunk_overlap", _CHUNK_OVERLAP),
-        topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 250),
+        topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 500),
+        target_chars=getattr(app_cfg, "rag_chunk_target_chars", 1400),
     )
 
     if not chunk_metas:
@@ -736,7 +737,8 @@ async def rechunk_all_stream(request: Request) -> StreamingResponse:
                     meta_segments,
                     chunk_chars=chunk_chars,
                     overlap_chars=overlap_chars,
-                    topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 250),
+                    topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 500),
+                    target_chars=getattr(app_cfg, "rag_chunk_target_chars", 1400),
                 )
                 if not chunk_metas:
                     raise ValueError("청킹 결과가 비어있음")
