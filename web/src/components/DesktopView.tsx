@@ -99,17 +99,42 @@ export function DesktopView(): React.ReactElement {
       >
         {/* 왼쪽: 빈 공간 (macOS native traffic light 영역 회피용 패딩) */}
         <div style={{ width: 70, flexShrink: 0 }} />
-        {/* 중앙: 타이틀 — 드래그 영역 안에 텍스트만 */}
+        {/* 중앙: 새싹이 + 사용 중인 LLM — 드래그 영역 안에 표시만 */}
         <div
           style={{
             flex: 1,
-            textAlign: "center",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 7,
             fontSize: "var(--fs-13)",
             color: "var(--color-text-muted)",
             userSelect: "none",
+            minWidth: 0,
           }}
         >
-          새싹이 · AI 비서
+          <img
+            src={avatarSrc}
+            alt=""
+            style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }}
+            onError={(e) => {
+              e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
+            }}
+          />
+          <span style={{ fontWeight: 700, color: "var(--color-text)" }}>새싹이</span>
+          {llmInfo && (
+            <span
+              title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
+              style={{
+                color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              · {llmInfo.provider === "openai" ? "GPT" : "Ollama"} · {llmInfo.model}
+            </span>
+          )}
         </div>
         {/* 오른쪽: 창 제어 버튼 */}
         <div
@@ -154,58 +179,6 @@ export function DesktopView(): React.ReactElement {
           minHeight: 0,
         }}
       >
-        {/* 새싹이 헤더 */}
-        <div
-          style={{
-            padding: "14px 14px 12px",
-            borderBottom: "1px solid var(--color-border)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <div
-            style={{
-              width: 36,
-              height: 36,
-              borderRadius: "50%",
-              background: "rgba(100,140,220,0.15)",
-              border: "1px solid rgba(100,140,220,0.35)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-              flexShrink: 0,
-            }}
-          >
-            <img
-              src={avatarSrc}
-              alt="새싹이"
-              style={{ width: "85%", height: "85%", objectFit: "contain" }}
-              onError={(e) => {
-                e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
-              }}
-            />
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: "var(--fs-15)", fontWeight: 700 }}>새싹이</div>
-            {llmInfo && (
-              <div
-                style={{
-                  fontSize: "var(--fs-12)",
-                  color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-                title={`${llmInfo.provider === "openai" ? "GPT" : "Ollama"} · ${llmInfo.model}`}
-              >
-                {llmInfo.provider === "openai" ? "GPT" : "Ollama"} · {llmInfo.model}
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* 탭 메뉴 */}
         <nav style={{ flexShrink: 0, padding: "10px 8px" }}>
           {SIDEBAR_TABS.map(({ id, label, Icon }) => (

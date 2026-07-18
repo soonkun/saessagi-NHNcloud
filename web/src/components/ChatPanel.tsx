@@ -100,9 +100,6 @@ export function ChatContent({
   const aiStatus = useStore((s) => s.aiStatus);
   const agentStatus = useStore((s) => s.agentStatus);
   const addMessage = useStore((s) => s.addMessage);
-  const llmInfo = useStore((s) => s.llmInfo);
-  // 펫 모드는 패널 상단 바에 LLM 배지가 있으므로 상태줄에선 숨김 (중복 방지)
-  const windowModeForBadge = useStore((s) => s.windowMode);
   const setChatTab = useStore((s) => s.setChatTab);
   const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
   const requestGraphEvidence = useStore((s) => s.requestGraphEvidence);
@@ -336,26 +333,7 @@ export function ChatContent({
         <span style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>
           {STATUS_LABEL[aiStatus] ?? ""}
         </span>
-        {llmInfo && windowModeForBadge === "window" && (
-          <span
-            title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
-            style={{
-              fontSize: "var(--fs-11)",
-              fontWeight: 600,
-              padding: "2px 7px",
-              borderRadius: 10,
-              background: llmInfo.provider === "openai" ? "rgba(16,163,127,0.18)" : "rgba(100,140,220,0.18)",
-              color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
-              border: `1px solid ${llmInfo.provider === "openai" ? "rgba(16,163,127,0.4)" : "rgba(100,140,220,0.4)"}`,
-              whiteSpace: "nowrap",
-              maxWidth: 160,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-            }}
-          >
-            {llmInfo.provider === "openai" ? "GPT" : "Ollama"} · {llmInfo.model}
-          </span>
-        )}
+        {/* LLM 표시는 상단 바(펫: 패널 헤더, 데스크톱: 타이틀 바)로 이동 — 상태줄에선 제거 */}
         {voiceActive && (
           <span
             className="status-blink"
