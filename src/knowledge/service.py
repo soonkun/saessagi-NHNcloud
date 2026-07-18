@@ -287,6 +287,9 @@ class KnowledgeService:
         svc = getattr(self, "graph_rag_service", None)
         if svc is None:
             return
+        # CR-25: 자동 인덱싱 스위치 (기본 False — 그래프 구축은 수동 재인덱싱으로)
+        if not getattr(self, "graph_auto_index", False):
+            return
         try:
             svc.schedule_index_document(f"{KNOWLEDGE_CATEGORY}:{slug}")
         except Exception as exc:

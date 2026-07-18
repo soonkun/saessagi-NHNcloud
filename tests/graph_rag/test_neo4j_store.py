@@ -90,5 +90,7 @@ def test_delete_cascades_and_orphan_cleanup(store: Neo4jGraphStore, doc_id: str)
     sfx = uuid.uuid4().hex[:6]
     e1, _ = _seed(store, doc_id, sfx)
     store.delete_by_doc_id(doc_id)
-    assert not store.find_entities([f"테스트기관{sfx}"])
+    # 공유 DB(실사용 그래프)와 함께 돌 수 있으므로 이 테스트가 심은 엔티티만 검사
+    remaining = [e for e in store.find_entities([f"테스트기관{sfx}"]) if sfx in e.name]
+    assert not remaining
     assert store.chunks_for_entities([e1]) == []

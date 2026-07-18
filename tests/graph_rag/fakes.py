@@ -71,8 +71,8 @@ class FakeGraphStore(GraphStore):
         terms_norm = [t.casefold() for t in terms if t.strip()]
         for e in self.entities.values():
             norm = e.id.rsplit(":", 1)[0]
-            # 양방향 포함 (Neo4jGraphStore.find_entities와 동일 계약)
-            if any(t in norm or norm in t for t in terms_norm):
+            # 양방향 포함 — 역포함은 이름 3자 이상만 (Neo4jGraphStore.find_entities와 동일 계약)
+            if any(t in norm or (len(norm) >= 3 and norm in t) for t in terms_norm):
                 out.append(e)
             if len(out) >= limit:
                 break

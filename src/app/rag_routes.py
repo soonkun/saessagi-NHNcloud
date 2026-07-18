@@ -27,8 +27,8 @@ router = APIRouter(prefix="/api/rag", tags=["rag"])
 
 _ALLOWED_SUFFIXES = {".txt", ".md", ".pdf", ".docx", ".pptx", ".hwpx", ".markdown"}
 # app_config 부재 시(테스트 등) fallback. 실제 값은 conf.yaml app.rag_chunk_chars/overlap.
-_CHUNK_SIZE = 800
-_CHUNK_OVERLAP = 100
+_CHUNK_SIZE = 2000
+_CHUNK_OVERLAP = 150
 
 _ROOT = Path(os.environ.get("SAESSAGI_ROOT", "."))
 _FOLDERS_FILE = _ROOT / "data" / "rag_folders.json"
@@ -565,9 +565,11 @@ async def upload_document(request: Request) -> UploadResponse:
         "upload_document: doc_id=%s, chunks=%d, folder_id=%s", doc_id, len(chunk_metas), folder_id
     )
 
-    # M_19: 그래프 인덱싱 백그라운드 스케줄 (활성 시)
+    # M_19: 그래프 인덱싱 백그라운드 스케줄 — CR-25: auto_index 켜져 있을 때만.
+    # 꺼져 있으면 임베딩만 하고, 그래프 구축은 그래프 탭 "재인덱싱"으로 수동 실행.
     graph_rag = getattr(ctx, "graph_rag_service", None)
-    if graph_rag is not None:
+    _gr_cfg = getattr(getattr(ctx, "app_config", None), "graphrag", None)
+    if graph_rag is not None and _gr_cfg is not None and _gr_cfg.auto_index:
         try:
             graph_rag.schedule_index_document(doc_id)
         except Exception as exc:

@@ -179,6 +179,8 @@ app:
   # M_19 GraphRAG (CR-18) — Neo4j 기반 그래프RAG 하이브리드. 기본 비활성.
   # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 참조)
   graphrag:
+    # CR-25: 업로드 시 그래프 자동 구축 여부 — false면 임베딩만, 그래프는 수동 재인덱싱
+    auto_index: false
     enabled: false
     neo4j_uri: bolt://127.0.0.1:7687
     neo4j_user: neo4j

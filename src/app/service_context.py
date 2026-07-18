@@ -551,6 +551,10 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # M_19: 노트 저장 시 그래프 인덱싱 훅 (늦은 attr 주입 — KnowledgeService가 참조)
         if self.knowledge_service is not None:
             self.knowledge_service.graph_rag_service = self.graph_rag_service
+            # CR-25: 자동 인덱싱 스위치 전파
+            self.knowledge_service.graph_auto_index = bool(
+                graphrag_cfg is not None and graphrag_cfg.auto_index
+            )
 
         # (7c) 어댑터 래핑
         self.agent_engine = BasicMemoryAgentAdapter(

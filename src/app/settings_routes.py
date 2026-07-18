@@ -543,12 +543,14 @@ async def get_graphrag_extraction(request: Request) -> dict[str, Any]:
     provider_str = getattr(provider, "value", str(provider))
     ollama_model = gr.extraction_ollama_model if gr else default.extraction_ollama_model
     openai_model = gr.extraction_openai_model if gr else default.extraction_openai_model
+    auto_index = gr.auto_index if gr else default.auto_index
 
     return {
         "enabled": enabled,
         "provider": provider_str,
         "ollama_model": ollama_model,
         "openai_model": openai_model,
+        "auto_index": auto_index,
     }
 
 
@@ -559,6 +561,7 @@ class SetGraphragExtractionRequest(BaseModel):
     provider: str | None = None  # "same_as_chat" | "ollama" | "openai"
     ollama_model: str | None = None
     openai_model: str | None = None
+    auto_index: bool | None = None  # CR-25: 업로드 시 그래프 자동 인덱싱 여부
 
 
 @router.post("/graphrag-extraction")
@@ -598,6 +601,8 @@ async def set_graphrag_extraction(
         gr_section["extraction_ollama_model"] = body.ollama_model
     if body.openai_model is not None:
         gr_section["extraction_openai_model"] = body.openai_model
+    if body.auto_index is not None:
+        gr_section["auto_index"] = body.auto_index
 
     try:
         conf.write_text(
@@ -617,7 +622,15 @@ async def set_graphrag_extraction(
             updates["extraction_ollama_model"] = body.ollama_model
         if body.openai_model is not None:
             updates["extraction_openai_model"] = body.openai_model
+        if body.auto_index is not None:
+            updates["auto_index"] = body.auto_index
         app_cfg.graphrag = app_cfg.graphrag.model_copy(update=updates)
+
+    # CR-25: KnowledgeService의 자동 인덱싱 플래그 즉시 반영
+    if body.auto_index is not None and ctx is not None:
+        ksvc = getattr(ctx, "knowledge_service", None)
+        if ksvc is not None:
+            ksvc.graph_auto_index = body.auto_index
 
     if ctx is None:
         return {"status": "conf_only"}

@@ -173,10 +173,13 @@ class Neo4jGraphStore(GraphStore):
         if not terms_norm:
             return []
         # 양방향 포함: 질의어에 조사가 붙어도("A기관과") 엔티티명("a기관")과 매칭되도록
+        # 역포함(term CONTAINS name)은 이름 3자 이상일 때만 — "C" 같은 초단문 엔티티가
+        # 아무 질의에나 매칭되는 오염 방지 (CR-25에서 실그래프로 발견)
         rows = self._run(
             "UNWIND $terms AS term "
             "MATCH (e:Entity) "
-            "WHERE e.norm_name CONTAINS term OR term CONTAINS e.norm_name "
+            "WHERE e.norm_name CONTAINS term "
+            "   OR (size(e.norm_name) >= 3 AND term CONTAINS e.norm_name) "
             "RETURN DISTINCT e.id AS id, e.name AS name, e.type AS type, "
             "  coalesce(e.description, '') AS description "
             "LIMIT $limit",

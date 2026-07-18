@@ -207,10 +207,29 @@ def _split_oversized(text: str, chunk_chars: int) -> list[str]:
     return [o for o in (s.strip() for s in out) if o]
 
 
+# CR-25: 개조식 문서의 "큰 주제" 시작 패턴 — 이 줄에서 새 청크를 시작한다.
+# 매칭: 마크다운 제목(#), "1. "/"1) " 번호 제목, 로마숫자, "제N장/절/조",
+#       개조식 최상위 기호(□ ■ ◇ ◆ ▶). 하위 불릿(- · ○ 등)은 매칭하지 않는다.
+_TOPIC_BREAK_RE = re.compile(
+    r"^\s*(?:"
+    r"#{1,3}\s"
+    r"|\d{1,2}\s*[.)]\s"
+    r"|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\s*[.)]?\s"
+    r"|[IVX]{1,4}\s*\.\s"
+    r"|제\s*\d+\s*[장절조항]"
+    r"|[□■◇◆▶]"
+    r")"
+)
+
+# 주제 경계에서 분할하기 위한 최소 버퍼 크기 — 이보다 작으면 제목만 있는
+# 초소형 청크가 생기므로 경계를 무시하고 계속 병합한다.
+_TOPIC_MIN_CHARS = 250
+
+
 def chunk_meta_segments(
     meta_segments: list[tuple[str, int | None]],
-    chunk_chars: int = 800,
-    overlap_chars: int = 100,
+    chunk_chars: int = 2000,
+    overlap_chars: int = 150,
     min_chunk_chars: int = 10,
 ) -> list[tuple[str, int | None]]:
     """(text, page) 메타 세그먼트들을 병합·청킹한다.
@@ -257,6 +276,12 @@ def chunk_meta_segments(
 
         # page 경계 → 병합 중단
         if buf and seg_page != buf_page:
+            flush()
+
+        # CR-25: 큰 주제 시작 → 청크 경계 (개조식 문서를 주제 단위로 묶는다).
+        # 버퍼가 너무 작으면(제목 연속 등) 경계를 무시하고 계속 병합.
+        # 주제 경계에서는 오버랩을 넣지 않는다 — 주제가 섞이지 않게.
+        if buf and _TOPIC_BREAK_RE.match(seg_text) and len(joined(buf)) >= _TOPIC_MIN_CHARS:
             flush()
 
         # 단일 세그먼트가 너무 큼 → 독립 분할

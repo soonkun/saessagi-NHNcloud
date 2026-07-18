@@ -90,6 +90,7 @@ interface GraphExtractionState {
   provider: "ollama" | "openai" | "same_as_chat";
   ollama_model: string;
   openai_model: string;
+  auto_index: boolean;
 }
 
 async function fetchGraphExtraction(): Promise<GraphExtractionState | null> {
@@ -106,6 +107,7 @@ async function apiSetGraphExtraction(body: {
   provider?: string;
   ollama_model?: string;
   openai_model?: string;
+  auto_index?: boolean;
 }): Promise<boolean> {
   try {
     const res = await fetch(API_BASE + "/api/settings/graphrag-extraction", {
@@ -395,6 +397,7 @@ export function SettingsView({
   >("same_as_chat");
   const [gxOllamaModel, setGxOllamaModel] = useState("");
   const [gxOpenaiModel, setGxOpenaiModel] = useState("gpt-4o-mini");
+  const [gxAutoIndex, setGxAutoIndex] = useState(false);
   const [gxSaving, setGxSaving] = useState(false);
   const [gxSaved, setGxSaved] = useState(false);
 
@@ -413,6 +416,7 @@ export function SettingsView({
       setGxProvider(s.provider);
       setGxOllamaModel(s.ollama_model);
       setGxOpenaiModel(s.openai_model || "gpt-4o-mini");
+      setGxAutoIndex(s.auto_index ?? false);
     });
   }, []);
 
@@ -434,7 +438,8 @@ export function SettingsView({
       provider: string;
       ollama_model?: string;
       openai_model?: string;
-    } = { provider: gxProvider };
+      auto_index?: boolean;
+    } = { provider: gxProvider, auto_index: gxAutoIndex };
     if (gxProvider === "ollama" && gxOllamaModel) {
       body.ollama_model = gxOllamaModel;
     }
@@ -920,6 +925,48 @@ export function SettingsView({
               사용되지 않습니다 (conf.yaml의 graphrag.enabled 참조).
             </>
           )}
+        </p>
+
+        <label style={labelStyle}>문서 등록 시 자동 그래프 구축</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          {(
+            [
+              { id: false, label: "수동 (임베딩만, 그래프는 재인덱싱으로)" },
+              { id: true, label: "자동 (업로드 즉시 그래프 구축)" },
+            ] as const
+          ).map(({ id, label }) => (
+            <button
+              key={String(id)}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                setGxAutoIndex(id);
+              }}
+              style={{
+                flex: 1,
+                padding: "7px 6px",
+                fontSize: "var(--fs-12)",
+                fontWeight: gxAutoIndex === id ? 700 : 400,
+                background: gxAutoIndex === id ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${gxAutoIndex === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: gxAutoIndex === id ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            marginBottom: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          그래프 추출은 청크당 LLM 호출 1회라 문서가 많으면 오래 걸립니다. 수동이면
+          업로드는 임베딩까지만 하고, 원하는 시점에 그래프 탭의 "재인덱싱"으로 구축합니다.
         </p>
 
         <label style={labelStyle}>추출 모델 공급자</label>

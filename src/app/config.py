@@ -192,6 +192,10 @@ class GraphRagConfig(BaseModel):
     """
 
     enabled: bool = Field(default=False)
+    # CR-25: 문서 업로드·노트 저장 시 그래프 인덱싱 자동 스케줄 여부.
+    # False면 임베딩만 수행하고, 그래프 구축은 그래프 탭 "재인덱싱"으로 수동 실행.
+    # (그래프 추출은 청크당 LLM 1회라 오래 걸리므로 분리 운용 가능하게)
+    auto_index: bool = Field(default=False)
     neo4j_uri: str = Field(
         default="bolt://127.0.0.1:7687",
         description="Neo4j bolt URI. 사설 대역만 허용 (url_guard 검증).",
@@ -314,16 +318,16 @@ class AppConfig(BaseModel):
         ),
     )
     rag_chunk_chars: int = Field(
-        default=800,
+        default=2000,
         ge=100,
-        le=4000,
+        le=6000,
         description=(
-            "문서 업로드 청크 크기(문자). 검색 품질 기준으로 정하는 값이며 하드웨어와 무관. "
-            "한국어 업무 문서 기준 500~1000 권장."
+            "문서 업로드 청크 최대 크기(문자). CR-25: 개조식 문서는 큰 주제(번호 제목·□·제N장 등) "
+            "경계에서 우선 분할되고, 이 값은 상한으로 동작한다. 한국어 업무 문서 기준 1500~2500 권장."
         ),
     )
     rag_chunk_overlap: int = Field(
-        default=100,
+        default=150,
         ge=0,
         le=1000,
         description="청크 간 오버랩 크기(문자). rag_chunk_chars보다 작아야 한다.",
