@@ -82,6 +82,13 @@ class GraphStore(ABC):
         """
 
     @abstractmethod
+    def clear_all(self) -> dict[str, int]:
+        """CR-26: 그래프 전체 초기화 — Entity/Chunk/Document/Note 전부 삭제.
+
+        Returns: 삭제 전 stats (기록용).
+        """
+
+    @abstractmethod
     def stats(self) -> dict[str, int]:
         """{entities, relations, chunks, documents, notes}."""
 

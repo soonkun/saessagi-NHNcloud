@@ -245,6 +245,40 @@ class GraphRagService:
     def index_statuses(self) -> list[dict[str, Any]]:
         return [st.as_dict() for st in self._statuses.values()]
 
+    # ── CR-26: 인덱싱 중단 · 그래프 초기화 ───────────────────────────────────
+
+    def cancel_indexing(self) -> int:
+        """진행·대기 중인 그래프 인덱싱을 모두 중단한다. 반환: 중단된 문서 수."""
+        cancelled = 0
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        if self._worker is not None and not self._worker.done():
+            self._worker.cancel()
+            self._worker = None
+        for st in self._statuses.values():
+            if st.state in ("pending", "running"):
+                st.state = "cancelled"
+                st.error = "사용자 중단"
+                cancelled += 1
+        logger.info("GraphRAG 인덱싱 중단: %d건", cancelled)
+        return cancelled
+
+    async def clear_graph(self) -> dict[str, int]:
+        """CR-26: 그래프 전체 초기화 — 인덱싱 중단 후 모든 노드 삭제.
+
+        Returns: 삭제 전 stats.
+        """
+        self.cancel_indexing()
+        loop = asyncio.get_running_loop()
+        before = await loop.run_in_executor(None, self._graph.clear_all)
+        self._statuses.clear()
+        self._evidence.clear()
+        logger.info("GraphRAG 초기화 완료 (삭제 전 stats: %s)", before)
+        return before
+
     # ── CR-22 엔티티 정규화 ───────────────────────────────────────────────────
 
     async def normalize_entities(self) -> dict[str, Any]:

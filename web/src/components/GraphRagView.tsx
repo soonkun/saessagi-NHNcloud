@@ -17,6 +17,8 @@ import {
 } from "lucide-react";
 import type { GraphRagData, GraphRagEvidence, GraphRagStatus, GraphRagNode } from "../types";
 import {
+  cancelGraphIndexing,
+  clearGraph,
   fetchGraphEvidence,
   fetchGraphRag,
   fetchGraphRagStatus,
@@ -107,6 +109,11 @@ export default function GraphRagView(): React.ReactElement {
   const [contentHits, setContentHits] = useState<ContentSearchHit[]>([]);
   const [normalizing, setNormalizing] = useState(false);
   const [normResult, setNormResult] = useState<string>("");
+  // CR-26: 초기화 확인 모달
+  const [clearModalOpen, setClearModalOpen] = useState(false);
+  const [clearConfirmText, setClearConfirmText] = useState("");
+  const [clearing, setClearing] = useState(false);
+  const CLEAR_PHRASE = "그래프를 초기화 합니다";
 
   // CR-21: 핀 고정 — id → 고정 좌표. 데이터 리로드 후에도 좌표 복원.
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
@@ -444,7 +451,7 @@ export default function GraphRagView(): React.ReactElement {
   const pinnedCount = pinnedRef.current.size;
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0 }}>
+    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0, minWidth: 0, position: "relative" }}>
       {/* 상단 컨트롤 바 */}
       <div
         style={{
@@ -682,13 +689,42 @@ export default function GraphRagView(): React.ReactElement {
             </button>
           )}
           {hasActiveIndexing && (
-            <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>
-              인덱싱 중…{" "}
-              {status?.indexing
-                .filter((i) => i.state === "running")
-                .map((i) => `${i.done_chunks}/${i.total_chunks}`)
-                .join(" ")}
-            </span>
+            <>
+              <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>
+                인덱싱 중…{" "}
+                {status?.indexing
+                  .filter((i) => i.state === "running")
+                  .map((i) => `${i.done_chunks}/${i.total_chunks}`)
+                  .join(" ")}
+              </span>
+              <button
+                onClick={() => {
+                  void cancelGraphIndexing()
+                    .then((r) => {
+                      setNormResult(`인덱싱 ${r.cancelled}건 중단됨`);
+                      return load();
+                    })
+                    .catch(() => undefined);
+                }}
+                title="진행·대기 중인 그래프 인덱싱 모두 중단"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: "var(--fs-11)",
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  border: "1px solid #c0392b",
+                  background: "rgba(192,57,43,0.1)",
+                  color: "#c0392b",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                <X size={11} />
+                중단
+              </button>
+            </>
           )}
           <button
             onClick={handleNormalize}
@@ -739,8 +775,142 @@ export default function GraphRagView(): React.ReactElement {
             <RefreshCw size={11} className={reindexing ? "spin" : undefined} />
             재인덱싱
           </button>
+          <button
+            onClick={() => {
+              setClearConfirmText("");
+              setClearModalOpen(true);
+            }}
+            disabled={notConnected || clearing}
+            title="그래프 전체 초기화 (확인 문구 입력 필요)"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: "var(--fs-11)",
+              padding: "3px 8px",
+              borderRadius: 6,
+              border: "1px solid #c0392b",
+              background: "transparent",
+              color: "#c0392b",
+              cursor: notConnected || clearing ? "not-allowed" : "pointer",
+              fontFamily: "inherit",
+              opacity: notConnected || clearing ? 0.5 : 1,
+            }}
+          >
+            초기화
+          </button>
         </div>
       </div>
+
+      {/* CR-26: 그래프 초기화 확인 모달 — 정확한 문구 입력 필요 (GitHub 저장소 삭제 방식) */}
+      {clearModalOpen && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            background: "rgba(0,0,0,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onMouseDown={() => setClearModalOpen(false)}
+        >
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              width: 380,
+              background: "var(--color-panel, var(--color-bg))",
+              border: "1px solid var(--color-border)",
+              borderRadius: 12,
+              padding: "18px 20px",
+              boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+            }}
+          >
+            <div style={{ fontWeight: 700, fontSize: "var(--fs-15)", color: "#c0392b", marginBottom: 8 }}>
+              그래프 전체 초기화
+            </div>
+            <p style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)", lineHeight: 1.6, marginBottom: 10 }}>
+              엔티티 {stats.entities ?? 0} · 관계 {stats.relations ?? 0} · 문서 {stats.documents ?? 0} ·
+              노트 {stats.notes ?? 0}개 노드가 <strong>모두 삭제</strong>됩니다. 되돌릴 수 없으며,
+              문서·노트 원본과 벡터 검색(임베딩)에는 영향이 없습니다. 재구축은 "재인덱싱"으로 가능합니다.
+            </p>
+            <p style={{ fontSize: "var(--fs-12)", marginBottom: 6 }}>
+              계속하려면 <strong style={{ color: "#c0392b" }}>{CLEAR_PHRASE}</strong> 를 정확히 입력하세요:
+            </p>
+            <input
+              value={clearConfirmText}
+              onChange={(e) => setClearConfirmText(e.target.value)}
+              onClick={() => window.electronAPI?.restoreFocus()}
+              placeholder={CLEAR_PHRASE}
+              autoFocus
+              spellCheck={false}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                background: "var(--color-bg)",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                color: "var(--color-text)",
+                padding: "8px 10px",
+                fontSize: "var(--fs-13)",
+                outline: "none",
+                marginBottom: 12,
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setClearModalOpen(false)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 8,
+                  color: "var(--color-text)",
+                  cursor: "pointer",
+                  padding: "7px 14px",
+                  fontSize: "var(--fs-12)",
+                  fontFamily: "inherit",
+                }}
+              >
+                취소
+              </button>
+              <button
+                disabled={clearConfirmText.trim() !== CLEAR_PHRASE || clearing}
+                onClick={() => {
+                  setClearing(true);
+                  void clearGraph(clearConfirmText.trim())
+                    .then((r) => {
+                      setClearModalOpen(false);
+                      setNormResult(
+                        `그래프 초기화 완료 — 엔티티 ${r.before.entities ?? 0} · 관계 ${r.before.relations ?? 0} 삭제됨`
+                      );
+                      pinnedRef.current.clear();
+                      setPinnedVersion((v) => v + 1);
+                      setSelected(null);
+                      return load();
+                    })
+                    .catch((e) => setNormResult(`초기화 실패: ${e instanceof Error ? e.message : String(e)}`))
+                    .finally(() => setClearing(false));
+                }}
+                style={{
+                  background: clearConfirmText.trim() === CLEAR_PHRASE ? "#c0392b" : "transparent",
+                  border: "1px solid #c0392b",
+                  borderRadius: 8,
+                  color: clearConfirmText.trim() === CLEAR_PHRASE ? "#fff" : "#c0392b",
+                  cursor: clearConfirmText.trim() === CLEAR_PHRASE && !clearing ? "pointer" : "not-allowed",
+                  padding: "7px 14px",
+                  fontSize: "var(--fs-12)",
+                  fontWeight: 700,
+                  fontFamily: "inherit",
+                  opacity: clearing ? 0.6 : 1,
+                }}
+              >
+                {clearing ? "초기화 중…" : "그래프 초기화"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 정규화 결과 배너 */}
       {normResult && (

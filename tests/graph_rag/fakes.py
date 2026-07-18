@@ -174,6 +174,16 @@ class FakeGraphStore(GraphStore):
             self.entities.pop(sid, None)
         return len(source_ids)
 
+    def clear_all(self) -> dict[str, int]:
+        before = self.stats()
+        self.entities.clear()
+        self.relations.clear()
+        self.chunk_links.clear()
+        self.chunk_parent.clear()
+        self.documents.clear()
+        self.notes.clear()
+        return before
+
     def stats(self) -> dict[str, int]:
         return {
             "entities": len(self.entities),

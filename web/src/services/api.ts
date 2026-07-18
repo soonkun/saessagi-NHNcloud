@@ -306,6 +306,20 @@ export async function requestGraphReindex(docId?: string): Promise<{ scheduled: 
   });
 }
 
+// CR-26: 진행·대기 중 그래프 인덱싱 중단
+export async function cancelGraphIndexing(): Promise<{ cancelled: number }> {
+  return apiFetch<{ cancelled: number }>("/api/graphrag/cancel", { method: "POST" });
+}
+
+// CR-26: 그래프 전체 초기화 — confirm 문구가 정확히 일치해야 실행됨
+export async function clearGraph(confirm: string): Promise<{ ok: boolean; before: Record<string, number> }> {
+  return apiFetch<{ ok: boolean; before: Record<string, number> }>("/api/graphrag/clear", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ confirm }),
+  });
+}
+
 export async function requestGraphNormalize(): Promise<{ groups: string[][]; merged: number }> {
   return apiFetch<{ groups: string[][]; merged: number }>("/api/graphrag/normalize", {
     method: "POST",

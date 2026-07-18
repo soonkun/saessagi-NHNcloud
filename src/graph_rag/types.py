@@ -92,7 +92,7 @@ class IndexStatus:
     """문서 단위 그래프 인덱싱 진행 상태."""
 
     doc_id: str
-    state: str = "pending"  # pending | running | done | failed
+    state: str = "pending"  # pending | running | done | failed | cancelled
     total_chunks: int = 0
     done_chunks: int = 0
     skipped_chunks: int = 0

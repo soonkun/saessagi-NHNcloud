@@ -378,6 +378,13 @@ class Neo4jGraphStore(GraphStore):
         )
         return count
 
+    def clear_all(self) -> dict[str, int]:
+        """CR-26: 그래프 전체 초기화 — 우리 스키마의 노드 라벨만 삭제 (다른 DB 데이터 보호)."""
+        before = self.stats()
+        for label in ("Chunk", "Entity", "Document", "Note"):
+            self._run(f"MATCH (n:{label}) DETACH DELETE n")
+        return before
+
     def delete_by_doc_id(self, doc_id: str) -> None:
         # 문서/노트 + 소속 청크 삭제
         self._run(

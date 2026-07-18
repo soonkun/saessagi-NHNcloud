@@ -128,6 +128,45 @@ async def reindex(request: Request, body: ReindexReq) -> ReindexResp:
     return ReindexResp(scheduled=True, count=count)
 
 
+# CR-26: 그래프 초기화 확인 문구 — GitHub 저장소 삭제처럼 정확히 입력해야 실행
+_CLEAR_CONFIRM_PHRASE = "그래프를 초기화 합니다"
+
+
+class CancelResp(BaseModel):
+    cancelled: int
+
+
+@router.post("/cancel", response_model=CancelResp)
+async def cancel_indexing(request: Request) -> CancelResp:
+    """CR-26: 진행·대기 중인 그래프 인덱싱 중단."""
+    svc = _get_service(request)
+    return CancelResp(cancelled=svc.cancel_indexing())
+
+
+class ClearReq(BaseModel):
+    confirm: str
+
+
+class ClearResp(BaseModel):
+    ok: bool
+    before: dict[str, int]
+
+
+@router.post("/clear", response_model=ClearResp)
+async def clear_graph(request: Request, body: ClearReq) -> ClearResp:
+    """CR-26: 그래프 전체 초기화 — confirm 문구가 정확히 일치해야 실행."""
+    if body.confirm.strip() != _CLEAR_CONFIRM_PHRASE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"확인 문구가 일치하지 않습니다. 정확히 '{_CLEAR_CONFIRM_PHRASE}'를 입력하세요.",
+        )
+    svc = _get_service(request)
+    if not svc.available:
+        raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    before = await svc.clear_graph()
+    return ClearResp(ok=True, before=before)
+
+
 class NormalizeResp(BaseModel):
     groups: list[list[str]]
     merged: int

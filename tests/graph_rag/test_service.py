@@ -354,3 +354,39 @@ async def test_propose_merges_conservative_parsing() -> None:
     ext = EntityExtractor(complete_json=llm)  # type: ignore[arg-type]
     groups = await ext.propose_merges(["농림축산식품부", "농식품부", "경상북도", "또다른것"])
     assert groups == [["농림축산식품부", "농식품부"]]
+
+
+# ── CR-26 인덱싱 중단 · 그래프 초기화 ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cancel_indexing_marks_pending_cancelled() -> None:
+    """중단: 대기 중 작업이 cancelled로 표시되고 큐가 비워진다."""
+    svc, graph, _ = _make_service()
+    svc.schedule_index_document("doc-a")
+    svc.schedule_index_document("doc-b")
+    # 워커가 집어가기 전에 즉시 중단
+    n = svc.cancel_indexing()
+    assert n >= 1
+    states = {s["doc_id"]: s["state"] for s in svc.index_statuses()}
+    assert all(st == "cancelled" for st in states.values())
+    # 중단 후 재스케줄 가능 (cancelled는 pending/running이 아님)
+    svc.schedule_index_document("doc-a")
+    states2 = {s["doc_id"]: s["state"] for s in svc.index_statuses()}
+    assert states2["doc-a"] == "pending"
+    svc.cancel_indexing()
+
+
+@pytest.mark.asyncio
+async def test_clear_graph_wipes_store_and_statuses() -> None:
+    """초기화: 저장소 전체 삭제 + 진행 상태·근거 버퍼 정리, 삭제 전 stats 반환."""
+    graph = FakeGraphStore()
+    graph.upsert_entities([Entity(id="가:조직", name="가", type="조직")])
+    graph.upsert_document("doc-1", "문서1")
+    svc, _, _ = _make_service(graph=graph)
+    svc.schedule_index_document("doc-1")
+
+    before = await svc.clear_graph()
+    assert before["entities"] == 1
+    assert graph.stats() == {"entities": 0, "relations": 0, "chunks": 0, "documents": 0, "notes": 0}
+    assert svc.index_statuses() == []
