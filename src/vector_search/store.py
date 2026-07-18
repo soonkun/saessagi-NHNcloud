@@ -431,6 +431,23 @@ class VectorStore:
             logger.warning("get_chunks_by_doc_id 실패 (doc_id=%s): %s", doc_id, exc)
             return []
 
+    def update_doc_category(self, doc_id: str, category: str | None) -> int:
+        """문서의 모든 청크 category(=폴더 소속)를 갱신한다 (CR-24 문서 이동).
+
+        Returns: 갱신된 청크 수 (사전 조회 기준). 문서가 없으면 0.
+        """
+        rows = self.get_chunks_by_doc_id(doc_id, limit=100_000)
+        if not rows:
+            return 0
+        escaped = doc_id.replace("'", "''")
+        where = f"doc_id = '{escaped}'"
+        if category is None:
+            self._tbl.update(where=where, values_sql={"category": "NULL"})
+        else:
+            self._tbl.update(where=where, values={"category": category})
+        logger.info("update_doc_category: doc_id=%s → %r (%d청크)", doc_id, category, len(rows))
+        return len(rows)
+
     def get_chunks_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
         """chunk_id 목록으로 청크 row를 가져온다 (M_19 GraphRAG — 그래프 검색 결과의 본문 조회).
 

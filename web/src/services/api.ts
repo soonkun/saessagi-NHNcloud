@@ -175,6 +175,15 @@ export async function deleteDocument(id: string): Promise<void> {
   });
 }
 
+// CR-24: 문서를 다른 폴더로 이동 (folderId null = 미분류)
+export async function moveDocument(id: string, folderId: string | null): Promise<void> {
+  await apiFetch<unknown>(`/api/rag/documents/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ folder_id: folderId }),
+  });
+}
+
 export function getDocumentDownloadUrl(docId: string): string {
   return `${API_BASE}/api/rag/documents/${encodeURIComponent(docId)}/download`;
 }

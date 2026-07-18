@@ -7,6 +7,7 @@ import {
   ExternalLink,
   FileText,
   Folder,
+  FolderInput,
   FolderOpen,
   FolderPlus,
   ChevronRight,
@@ -20,6 +21,7 @@ import {
   fetchFolders,
   uploadDocument,
   deleteDocument,
+  moveDocument,
   openDocument,
   createFolder,
   renameFolder,
@@ -225,6 +227,12 @@ export function DocumentsView(): React.ReactElement {
   const [folderDropOpen, setFolderDropOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
 
+  // CR-24: 문서 선택·이동
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [movePickerOpen, setMovePickerOpen] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const movePickerRef = useRef<HTMLDivElement | null>(null);
+
   // 새 폴더 추가
   const [addingFolder, setAddingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -247,6 +255,61 @@ export function DocumentsView(): React.ReactElement {
 
   // dragenter/leave 중첩 해결용 카운터
   const dragCounterRef = useRef(0);
+
+  // CR-24: 선택 토글·전체선택·이동
+  function toggleSelect(id: string): void {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAll(folderDocIds: string[]): void {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = folderDocIds.every((id) => next.has(id));
+      for (const id of folderDocIds) {
+        if (allSelected) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }
+
+  async function handleMoveSelected(folderId: string | null): Promise<void> {
+    if (moving || selectedIds.size === 0) return;
+    setMoving(true);
+    setMovePickerOpen(false);
+    try {
+      for (const id of selectedIds) {
+        await moveDocument(id, folderId);
+      }
+      invalidateDocsCache();
+      setSelectedIds(new Set());
+      // 이동한 폴더 펼쳐서 결과 보여주기
+      if (folderId) setExpanded((prev) => ({ ...prev, [folderId]: true }));
+      else setExpanded((prev) => ({ ...prev, __unclassified__: true }));
+      await load();
+    } catch (e) {
+      window.alert(`문서 이동 실패: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setMoving(false);
+    }
+  }
+
+  // 이동 폴더 선택 드롭다운 외부 클릭 닫기
+  useEffect(() => {
+    if (!movePickerOpen) return;
+    function onOutside(e: MouseEvent): void {
+      if (movePickerRef.current && !movePickerRef.current.contains(e.target as Node)) {
+        setMovePickerOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, [movePickerOpen]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -705,10 +768,120 @@ export function DocumentsView(): React.ReactElement {
           </div>
         )}
 
+        {/* CR-24: 선택 액션 바 */}
+        {selectedIds.size > 0 && (
+          <div
+            style={{
+              position: "sticky",
+              top: 0,
+              zIndex: 10,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "7px 10px",
+              marginBottom: 6,
+              background: "rgba(100,140,220,0.1)",
+              border: "1px solid rgba(100,140,220,0.35)",
+              borderRadius: 8,
+              fontSize: "var(--fs-12)",
+            }}
+          >
+            <span style={{ fontWeight: 600 }}>{selectedIds.size}개 선택</span>
+            <div ref={movePickerRef} style={{ position: "relative" }}>
+              <button
+                onClick={() => setMovePickerOpen((v) => !v)}
+                disabled={moving}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "var(--color-accent)",
+                  border: "none",
+                  borderRadius: 6,
+                  color: "#fff",
+                  cursor: moving ? "not-allowed" : "pointer",
+                  padding: "4px 10px",
+                  fontSize: "var(--fs-12)",
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  opacity: moving ? 0.6 : 1,
+                }}
+              >
+                <FolderInput size={12} />
+                {moving ? "이동 중…" : "폴더로 이동"}
+              </button>
+              {movePickerOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "calc(100% + 4px)",
+                    left: 0,
+                    minWidth: 160,
+                    zIndex: 20,
+                    background: "var(--color-panel, var(--color-bg))",
+                    border: "1px solid var(--color-border)",
+                    borderRadius: 8,
+                    padding: 4,
+                    boxShadow: "0 6px 20px rgba(0,0,0,0.25)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 1,
+                    maxHeight: 240,
+                    overflowY: "auto",
+                  }}
+                >
+                  {[{ folder_id: null as string | null, name: "미분류" }, ...folders.map((f) => ({ folder_id: f.folder_id as string | null, name: f.name }))].map((opt) => (
+                    <button
+                      key={opt.folder_id ?? "__none__"}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        void handleMoveSelected(opt.folder_id);
+                      }}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        background: "transparent",
+                        border: "none",
+                        borderRadius: 5,
+                        color: "var(--color-text)",
+                        cursor: "pointer",
+                        padding: "5px 8px",
+                        fontSize: "var(--fs-12)",
+                        textAlign: "left",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      <Folder size={12} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+                      {opt.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setSelectedIds(new Set())}
+              style={{
+                marginLeft: "auto",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                color: "var(--color-text-muted)",
+                fontSize: "var(--fs-12)",
+                fontFamily: "inherit",
+              }}
+            >
+              선택 해제
+            </button>
+          </div>
+        )}
+
         {/* 사용자 폴더 */}
         {folders.map((folder) => {
           const folderDocs = docs.filter((d) => d.folder_id === folder.folder_id);
           const isOpen = !!expanded[folder.folder_id];
+          const folderDocIds = folderDocs.map((d) => d.id);
+          const allSelected = folderDocs.length > 0 && folderDocIds.every((id) => selectedIds.has(id));
           return (
             <div key={folder.folder_id} style={{ marginBottom: 1 }}>
               <FolderRow
@@ -726,9 +899,37 @@ export function DocumentsView(): React.ReactElement {
                       문서 없음
                     </div>
                   ) : (
-                    folderDocs.map((doc) => (
-                      <DocRow key={doc.id} doc={doc} onDelete={handleDeleteDoc} />
-                    ))
+                    <>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 7,
+                          padding: "3px 6px",
+                          fontSize: "var(--fs-11)",
+                          color: "var(--color-text-muted)",
+                          cursor: "pointer",
+                          userSelect: "none",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={() => toggleSelectAll(folderDocIds)}
+                          style={{ accentColor: "var(--color-accent)", cursor: "pointer" }}
+                        />
+                        폴더 전체 선택
+                      </label>
+                      {folderDocs.map((doc) => (
+                        <DocRow
+                          key={doc.id}
+                          doc={doc}
+                          onDelete={handleDeleteDoc}
+                          selected={selectedIds.has(doc.id)}
+                          onToggleSelect={() => toggleSelect(doc.id)}
+                        />
+                      ))}
+                    </>
                   )}
                 </div>
               )}
@@ -758,8 +959,34 @@ export function DocumentsView(): React.ReactElement {
             </button>
             {expanded["__unclassified__"] && (
               <div style={{ paddingLeft: 24 }}>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 7,
+                    padding: "3px 6px",
+                    fontSize: "var(--fs-11)",
+                    color: "var(--color-text-muted)",
+                    cursor: "pointer",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={unclassifiedDocs.length > 0 && unclassifiedDocs.every((d) => selectedIds.has(d.id))}
+                    onChange={() => toggleSelectAll(unclassifiedDocs.map((d) => d.id))}
+                    style={{ accentColor: "var(--color-accent)", cursor: "pointer" }}
+                  />
+                  폴더 전체 선택
+                </label>
                 {unclassifiedDocs.map((doc) => (
-                  <DocRow key={doc.id} doc={doc} onDelete={handleDeleteDoc} />
+                  <DocRow
+                    key={doc.id}
+                    doc={doc}
+                    onDelete={handleDeleteDoc}
+                    selected={selectedIds.has(doc.id)}
+                    onToggleSelect={() => toggleSelect(doc.id)}
+                  />
                 ))}
               </div>
             )}
@@ -774,12 +1001,39 @@ export function DocumentsView(): React.ReactElement {
 // DocRow
 // ────────────────────────────────────────────────────────────
 
-function DocRow({ doc, onDelete }: { doc: RagDocument; onDelete: (id: string) => Promise<void> }) {
+function DocRow({
+  doc,
+  onDelete,
+  selected = false,
+  onToggleSelect,
+}: {
+  doc: RagDocument;
+  onDelete: (id: string) => Promise<void>;
+  selected?: boolean;
+  onToggleSelect?: () => void;
+}) {
   return (
     <div
-      style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 6px", borderRadius: 4, fontSize: "var(--fs-12)" }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "5px 6px",
+        borderRadius: 4,
+        fontSize: "var(--fs-12)",
+        background: selected ? "rgba(100,140,220,0.1)" : undefined,
+      }}
       className="doc-row"
     >
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          style={{ accentColor: "var(--color-accent)", cursor: "pointer", flexShrink: 0 }}
+        />
+      )}
       <FileText size={13} style={{ flexShrink: 0, color: "var(--color-text-muted)" }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

@@ -625,6 +625,63 @@ async def download_document(doc_id: str) -> FileResponse:
     )
 
 
+class MoveDocumentRequest(BaseModel):
+    folder_id: str | None = None  # None = 미분류로 이동
+
+
+@router.patch("/documents/{doc_id}")
+async def move_document(request: Request, doc_id: str, body: MoveDocumentRequest) -> dict[str, Any]:
+    """CR-24: 문서를 다른 폴더로 이동 — 청크 category 갱신 + 원본 디렉토리 이동."""
+    ctx = _get_context(request)
+    rag = _require_rag(ctx)
+    store = getattr(rag, "store", None) or getattr(rag, "_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="vector store unavailable")
+
+    new_folder = body.folder_id or None
+    if new_folder is not None:
+        _get_folder_or_404(new_folder)  # 존재하는 폴더인지 검증
+
+    rows = await asyncio.to_thread(store.get_chunks_by_doc_id, doc_id, 1)
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"doc_id '{doc_id}' not found")
+    old_folder = rows[0].get("category") or None
+    doc_name = str(rows[0].get("doc_name") or doc_id)
+
+    if old_folder == new_folder:
+        return {"ok": True, "doc_id": doc_id, "folder_id": new_folder, "moved_chunks": 0}
+
+    try:
+        moved = await asyncio.to_thread(store.update_doc_category, doc_id, new_folder)
+    except Exception as exc:
+        logger.error("move_document 청크 갱신 실패: %s", exc)
+        raise HTTPException(status_code=500, detail=f"문서 이동 실패: {exc}") from exc
+
+    # 원본 파일 디렉토리 이동 (부재 시 무시 — 청크가 정본)
+    old_dir = _folder_bucket(old_folder) / doc_id
+    if old_dir.is_dir():
+        try:
+            target_parent = _ensure_folder_dir(new_folder)
+            shutil.move(str(old_dir), str(target_parent / doc_id))
+        except Exception as exc:
+            logger.warning("move_document 원본 이동 실패 (청크는 이동됨): %s", exc)
+
+    # M_19: 그래프 Document 노드 category 동기화 (best-effort)
+    graph_rag = getattr(ctx, "graph_rag_service", None)
+    if graph_rag is not None:
+        try:
+            await asyncio.to_thread(
+                graph_rag._graph.upsert_document, doc_id, doc_name, new_folder or ""
+            )
+        except Exception as exc:
+            logger.debug("move_document 그래프 동기화 실패 (무시): %s", exc)
+
+    logger.info(
+        "move_document: doc_id=%s, %r → %r (%d청크)", doc_id, old_folder, new_folder, moved
+    )
+    return {"ok": True, "doc_id": doc_id, "folder_id": new_folder, "moved_chunks": moved}
+
+
 @router.delete("/documents/{doc_id}", response_model=DeleteResponse)
 async def delete_document(request: Request, doc_id: str) -> DeleteResponse:
     ctx = _get_context(request)
