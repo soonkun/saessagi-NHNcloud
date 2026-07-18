@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -627,6 +627,163 @@ async def download_document(doc_id: str) -> FileResponse:
     )
 
 
+_RECHUNK_SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
+def _sse_line(data: dict[str, Any]) -> str:
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/rechunk-stream")
+async def rechunk_all_stream(request: Request) -> StreamingResponse:
+    """CR-27: 모든 문서를 저장된 원본에서 현재 청킹 기준으로 재청크·재임베딩 (SSE).
+
+    - 노트(__knowledge__)는 제외 — 노트 저장 훅이 자체 재임베딩한다.
+    - 원본이 없는 문서는 스킵하고 보고한다 (기존 청크 유지).
+    - doc_id·폴더 소속은 유지되므로 다운로드·이동 이력이 보존된다.
+    """
+    ctx = _get_context(request)
+    rag = _require_rag(ctx)
+    store = getattr(rag, "store", None) or getattr(rag, "_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="vector store unavailable")
+
+    app_cfg = getattr(ctx, "app_config", None)
+    chunk_chars = getattr(app_cfg, "rag_chunk_chars", _CHUNK_SIZE)
+    overlap_chars = getattr(app_cfg, "rag_chunk_overlap", _CHUNK_OVERLAP)
+
+    async def event_stream() -> Any:
+        from document_ingest.segments import chunk_meta_segments
+        from vector_search.types import DocumentChunk
+
+        # 문서 인벤토리 수집 (doc_id → 이름·폴더·기존 청크 수)
+        def _inventory() -> dict[str, dict[str, Any]]:
+            tbl = getattr(store, "_tbl", None)
+            rows = (
+                tbl.search().select(["doc_id", "doc_name", "category"]).limit(200_000).to_list()
+                if tbl is not None
+                else []
+            )
+            docs: dict[str, dict[str, Any]] = {}
+            for r in rows:
+                did = str(r.get("doc_id") or "")
+                cat = r.get("category")
+                if not did or cat == "__knowledge__":
+                    continue
+                d = docs.setdefault(
+                    did, {"doc_name": str(r.get("doc_name") or did), "category": cat, "old": 0}
+                )
+                d["old"] += 1
+            return docs
+
+        docs = await asyncio.to_thread(_inventory)
+        total = len(docs)
+        yield _sse_line({"stage": "start", "total": total})
+
+        old_total = new_total = done = skipped = 0
+        for doc_id, info in docs.items():
+            done += 1
+            folder = info["category"] or None
+            original_dir = _folder_bucket(folder) / doc_id
+            files = sorted(original_dir.iterdir()) if original_dir.is_dir() else []
+            if not files:
+                skipped += 1
+                yield _sse_line(
+                    {
+                        "stage": "skip",
+                        "i": done,
+                        "total": total,
+                        "doc_name": info["doc_name"],
+                        "reason": "원본 없음 (기존 청크 유지)",
+                    }
+                )
+                continue
+            src = files[0]
+            try:
+                data = src.read_bytes()
+                meta_segments = await _parse_isolated(src.name, data)
+                chunk_metas = chunk_meta_segments(
+                    meta_segments, chunk_chars=chunk_chars, overlap_chars=overlap_chars
+                )
+                if not chunk_metas:
+                    raise ValueError("청킹 결과가 비어있음")
+
+                def _reembed(
+                    metas: list[tuple[str, int | None]] = chunk_metas,
+                    did: str = doc_id,
+                    name: str = info["doc_name"],
+                    cat: Any = folder,
+                ) -> None:
+                    embedder = rag._embedder
+                    texts = [c for c, _ in metas]
+                    with _EMBED_LOCK:
+                        vectors = embedder.embed_passages(texts)
+                    doc_chunks = [
+                        DocumentChunk(
+                            doc_id=did,
+                            doc_name=name,
+                            category=cat,
+                            page=seg_page,
+                            section=None,
+                            chunk_id=str(uuid.uuid4()),
+                            text=_chunk_with_meta(chunk_text, name, seg_page),
+                            bbox=None,
+                            source_path="",
+                        )
+                        for chunk_text, seg_page in metas
+                    ]
+                    store.delete_by_doc_id(did)
+                    store.upsert(doc_chunks, vectors)
+
+                await asyncio.to_thread(_reembed)
+                old_total += info["old"]
+                new_total += len(chunk_metas)
+                yield _sse_line(
+                    {
+                        "stage": "doc",
+                        "i": done,
+                        "total": total,
+                        "doc_name": info["doc_name"],
+                        "old": info["old"],
+                        "new": len(chunk_metas),
+                    }
+                )
+            except Exception as exc:
+                skipped += 1
+                logger.warning("재청킹 실패 (기존 청크 유지, doc_id=%s): %s", doc_id, exc)
+                yield _sse_line(
+                    {
+                        "stage": "skip",
+                        "i": done,
+                        "total": total,
+                        "doc_name": info["doc_name"],
+                        "reason": str(exc)[:80],
+                    }
+                )
+
+        _schedule_store_optimize(store)
+        logger.info(
+            "재청킹 완료: 문서 %d (스킵 %d), 청크 %d → %d",
+            total,
+            skipped,
+            old_total,
+            new_total,
+        )
+        yield _sse_line(
+            {
+                "stage": "done",
+                "docs": total,
+                "skipped": skipped,
+                "old_total": old_total,
+                "new_total": new_total,
+            }
+        )
+
+    return StreamingResponse(
+        event_stream(), media_type="text/event-stream", headers=_RECHUNK_SSE_HEADERS
+    )
+
+
 class MoveDocumentRequest(BaseModel):
     folder_id: str | None = None  # None = 미분류로 이동
 
@@ -678,9 +835,7 @@ async def move_document(request: Request, doc_id: str, body: MoveDocumentRequest
         except Exception as exc:
             logger.debug("move_document 그래프 동기화 실패 (무시): %s", exc)
 
-    logger.info(
-        "move_document: doc_id=%s, %r → %r (%d청크)", doc_id, old_folder, new_folder, moved
-    )
+    logger.info("move_document: doc_id=%s, %r → %r (%d청크)", doc_id, old_folder, new_folder, moved)
     return {"ok": True, "doc_id": doc_id, "folder_id": new_folder, "moved_chunks": moved}
 
 
