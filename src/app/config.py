@@ -332,6 +332,16 @@ class AppConfig(BaseModel):
         le=1000,
         description="청크 간 오버랩 크기(문자). rag_chunk_chars보다 작아야 한다.",
     )
+    rag_topic_min_chars: int = Field(
+        default=250,
+        ge=0,
+        le=2000,
+        description=(
+            "CR-28: 주제 경계 분할 최소치(문자). 직전 주제 묶음이 이보다 작으면 "
+            "경계를 무시하고 다음 주제까지 병합한다 (1페이지 보고서의 초소형 꼭지 보호). "
+            "0이면 항상 주제 경계에서 분할."
+        ),
+    )
     rag_rerank_enabled: bool = Field(
         default=True,
         description=(

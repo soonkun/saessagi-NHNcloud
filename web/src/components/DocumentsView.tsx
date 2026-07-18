@@ -12,12 +12,14 @@ import {
   FolderPlus,
   ChevronRight,
   ChevronDown,
+  List,
   Pencil,
   Check,
   X,
 } from "lucide-react";
 import {
   fetchDocuments,
+  fetchDocumentChunks,
   fetchFolders,
   uploadDocument,
   deleteDocument,
@@ -26,6 +28,7 @@ import {
   createFolder,
   renameFolder,
   deleteFolder,
+  type DocumentChunkInfo,
 } from "../services/api";
 import { invalidateDocsCache } from "../services/websocket";
 import type { RagDocument, RagFolder } from "../types";
@@ -227,6 +230,13 @@ export function DocumentsView(): React.ReactElement {
   const [folderDropOpen, setFolderDropOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
 
+  // CR-28: 청크 뷰어
+  const [chunkViewer, setChunkViewer] = useState<{
+    docId: string;
+    docName: string;
+    chunks: DocumentChunkInfo[] | null; // null = 로딩 중
+  } | null>(null);
+
   // CR-24: 문서 선택·이동
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [movePickerOpen, setMovePickerOpen] = useState(false);
@@ -255,6 +265,14 @@ export function DocumentsView(): React.ReactElement {
 
   // dragenter/leave 중첩 해결용 카운터
   const dragCounterRef = useRef(0);
+
+  // CR-28: 청크 뷰어 열기
+  function openChunkViewer(docId: string, docName: string): void {
+    setChunkViewer({ docId, docName, chunks: null });
+    void fetchDocumentChunks(docId)
+      .then((r) => setChunkViewer((prev) => (prev?.docId === docId ? { ...prev, chunks: r.chunks } : prev)))
+      .catch(() => setChunkViewer((prev) => (prev?.docId === docId ? { ...prev, chunks: [] } : prev)));
+  }
 
   // CR-24: 선택 토글·전체선택·이동
   function toggleSelect(id: string): void {
@@ -524,7 +542,99 @@ export function DocumentsView(): React.ReactElement {
   const targetFolderName = folders.find((f) => f.folder_id === targetFolderId)?.name ?? "미분류";
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
+
+      {/* CR-28: 청크 뷰어 오버레이 — 문서 뷰 영역 안에만 표시 (전체 화면 차단 금지, E-01/E-08) */}
+      {chunkViewer && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 60,
+            background: "var(--color-bg)",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "10px 14px",
+              borderBottom: "1px solid var(--color-border)",
+              flexShrink: 0,
+            }}
+          >
+            <FileText size={14} style={{ color: "var(--color-accent)", flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: "var(--fs-13)", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {chunkViewer.docName}
+              </div>
+              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+                {chunkViewer.chunks === null
+                  ? "청크 불러오는 중…"
+                  : `청크 ${chunkViewer.chunks.length}개 · 합계 ${chunkViewer.chunks.reduce((s, c) => s + c.chars, 0).toLocaleString()}자`}
+              </div>
+            </div>
+            <button
+              onClick={() => setChunkViewer(null)}
+              title="닫기"
+              style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", display: "flex", padding: 4 }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
+            {chunkViewer.chunks !== null && chunkViewer.chunks.length === 0 && (
+              <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>청크를 불러오지 못했습니다.</div>
+            )}
+            {(chunkViewer.chunks ?? []).map((c, i) => (
+              <div
+                key={i}
+                style={{
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 10,
+                  overflow: "hidden",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 10px",
+                    background: "var(--color-sidebar, var(--color-panel))",
+                    borderBottom: "1px solid var(--color-border)",
+                    fontSize: "var(--fs-11)",
+                    color: "var(--color-text-muted)",
+                  }}
+                >
+                  <span style={{ fontWeight: 700, color: "var(--color-accent)" }}>#{i + 1}</span>
+                  <span>{c.chars.toLocaleString()}자</span>
+                  {c.page != null && <span>p.{c.page}</span>}
+                </div>
+                <pre
+                  style={{
+                    margin: 0,
+                    padding: "10px 12px",
+                    fontSize: "var(--fs-12)",
+                    lineHeight: 1.6,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontFamily: "inherit",
+                    color: "var(--color-text)",
+                    maxHeight: 400,
+                    overflowY: "auto",
+                  }}
+                >
+                  {c.text}
+                </pre>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── 폴더 선택 드롭다운 + 업로드 ────────────────────── */}
       <div style={{ padding: "10px 12px 0", flexShrink: 0 }}>
@@ -927,6 +1037,7 @@ export function DocumentsView(): React.ReactElement {
                           onDelete={handleDeleteDoc}
                           selected={selectedIds.has(doc.id)}
                           onToggleSelect={() => toggleSelect(doc.id)}
+                          onViewChunks={() => openChunkViewer(doc.id, doc.filename)}
                         />
                       ))}
                     </>
@@ -986,6 +1097,7 @@ export function DocumentsView(): React.ReactElement {
                     onDelete={handleDeleteDoc}
                     selected={selectedIds.has(doc.id)}
                     onToggleSelect={() => toggleSelect(doc.id)}
+                          onViewChunks={() => openChunkViewer(doc.id, doc.filename)}
                   />
                 ))}
               </div>
@@ -1006,11 +1118,13 @@ function DocRow({
   onDelete,
   selected = false,
   onToggleSelect,
+  onViewChunks,
 }: {
   doc: RagDocument;
   onDelete: (id: string) => Promise<void>;
   selected?: boolean;
   onToggleSelect?: () => void;
+  onViewChunks?: () => void;
 }) {
   return (
     <div
@@ -1044,6 +1158,19 @@ function DocRow({
           {doc.uploaded_at ? ` · ${new Date(doc.uploaded_at).toLocaleDateString("ko-KR")}` : ""}
         </div>
       </div>
+      {onViewChunks && (
+        <button
+          className="btn-download"
+          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", flexShrink: 0, padding: 2, display: "flex", alignItems: "center", opacity: 0 }}
+          title="청크 보기 (청킹 결과 확인)"
+          onClick={(e) => {
+            e.stopPropagation();
+            onViewChunks();
+          }}
+        >
+          <List size={12} />
+        </button>
+      )}
       <button
         className="btn-download"
         style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", flexShrink: 0, padding: 2, display: "flex", alignItems: "center", opacity: 0 }}

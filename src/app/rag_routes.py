@@ -507,6 +507,7 @@ async def upload_document(request: Request) -> UploadResponse:
         meta_segments,
         chunk_chars=getattr(app_cfg, "rag_chunk_chars", _CHUNK_SIZE),
         overlap_chars=getattr(app_cfg, "rag_chunk_overlap", _CHUNK_OVERLAP),
+        topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 250),
     )
 
     if not chunk_metas:
@@ -607,6 +608,35 @@ async def list_documents(request: Request) -> list[DocumentInfo]:
     return await asyncio.to_thread(_list_documents_from_store, store)
 
 
+@router.get("/documents/{doc_id}/chunks")
+async def get_document_chunks(request: Request, doc_id: str) -> dict[str, Any]:
+    """CR-28: 문서의 청크 목록 조회 — 청킹 결과 검증·기준 튜닝용 뷰어."""
+    ctx = _get_context(request)
+    rag = _require_rag(ctx)
+    store = getattr(rag, "store", None) or getattr(rag, "_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="vector store unavailable")
+
+    rows = await asyncio.to_thread(store.get_chunks_by_doc_id, doc_id, 1000)
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"doc_id '{doc_id}' not found")
+
+    chunks = [
+        {
+            "page": r.get("page"),
+            "chars": len(str(r.get("text") or "")),
+            "text": str(r.get("text") or ""),
+        }
+        for r in rows
+    ]
+    return {
+        "doc_id": doc_id,
+        "doc_name": str(rows[0].get("doc_name") or doc_id),
+        "chunk_count": len(chunks),
+        "chunks": chunks,
+    }
+
+
 @router.get("/documents/{doc_id}/download")
 async def download_document(doc_id: str) -> FileResponse:
     """업로드 시 보관한 원본 파일을 그대로 반환.
@@ -703,7 +733,10 @@ async def rechunk_all_stream(request: Request) -> StreamingResponse:
                 data = src.read_bytes()
                 meta_segments = await _parse_isolated(src.name, data)
                 chunk_metas = chunk_meta_segments(
-                    meta_segments, chunk_chars=chunk_chars, overlap_chars=overlap_chars
+                    meta_segments,
+                    chunk_chars=chunk_chars,
+                    overlap_chars=overlap_chars,
+                    topic_min_chars=getattr(app_cfg, "rag_topic_min_chars", 250),
                 )
                 if not chunk_metas:
                     raise ValueError("청킹 결과가 비어있음")

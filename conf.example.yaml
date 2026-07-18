@@ -175,6 +175,11 @@ app:
   tts:
     melo:
       speed: 1.2
+  # CR-28: 청킹 기준 — 업로드·재청킹(POST /api/rag/rechunk-stream)에 적용.
+  # 조정 후 문서 탭 청크 보기로 결과 확인 가능.
+  rag_chunk_chars: 2000       # 청크 최대 크기(문자). 주제 경계 우선, 이 값은 상한
+  rag_chunk_overlap: 150      # 청크 간 오버랩(문자)
+  rag_topic_min_chars: 250    # 직전 주제 묶음이 이보다 작으면 다음 주제와 병합
   rag_min_score: 0.35
   # M_19 GraphRAG (CR-18) — Neo4j 기반 그래프RAG 하이브리드. 기본 비활성.
   # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 참조)

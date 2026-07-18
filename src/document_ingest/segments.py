@@ -221,8 +221,9 @@ _TOPIC_BREAK_RE = re.compile(
     r")"
 )
 
-# 주제 경계에서 분할하기 위한 최소 버퍼 크기 — 이보다 작으면 제목만 있는
-# 초소형 청크가 생기므로 경계를 무시하고 계속 병합한다.
+# 주제 경계에서 분할하기 위한 최소 버퍼 크기 기본값 — 이보다 작으면 초소형 주제
+# (1페이지 보고서의 짧은 꼭지 등)이므로 경계를 무시하고 다음 주제까지 병합한다.
+# conf app.rag_topic_min_chars로 조정 가능 (CR-28).
 _TOPIC_MIN_CHARS = 250
 
 
@@ -231,6 +232,7 @@ def chunk_meta_segments(
     chunk_chars: int = 2000,
     overlap_chars: int = 150,
     min_chunk_chars: int = 10,
+    topic_min_chars: int = _TOPIC_MIN_CHARS,
 ) -> list[tuple[str, int | None]]:
     """(text, page) 메타 세그먼트들을 병합·청킹한다.
 
@@ -279,9 +281,9 @@ def chunk_meta_segments(
             flush()
 
         # CR-25: 큰 주제 시작 → 청크 경계 (개조식 문서를 주제 단위로 묶는다).
-        # 버퍼가 너무 작으면(제목 연속 등) 경계를 무시하고 계속 병합.
-        # 주제 경계에서는 오버랩을 넣지 않는다 — 주제가 섞이지 않게.
-        if buf and _TOPIC_BREAK_RE.match(seg_text) and len(joined(buf)) >= _TOPIC_MIN_CHARS:
+        # 직전 주제 묶음이 topic_min_chars 미만이면(1페이지 보고서의 짧은 꼭지 등)
+        # 경계를 무시하고 다음 주제까지 병합. 주제 경계에서는 오버랩을 넣지 않는다.
+        if buf and _TOPIC_BREAK_RE.match(seg_text) and len(joined(buf)) >= topic_min_chars:
             flush()
 
         # 단일 세그먼트가 너무 큼 → 독립 분할

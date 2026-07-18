@@ -175,6 +175,19 @@ export async function deleteDocument(id: string): Promise<void> {
   });
 }
 
+// CR-28: 문서 청크 목록 (청킹 검증 뷰어)
+export interface DocumentChunkInfo {
+  page: number | null;
+  chars: number;
+  text: string;
+}
+
+export async function fetchDocumentChunks(
+  docId: string
+): Promise<{ doc_id: string; doc_name: string; chunk_count: number; chunks: DocumentChunkInfo[] }> {
+  return apiFetch(`/api/rag/documents/${encodeURIComponent(docId)}/chunks`);
+}
+
 // CR-24: 문서를 다른 폴더로 이동 (folderId null = 미분류)
 export async function moveDocument(id: string, folderId: string | null): Promise<void> {
   await apiFetch<unknown>(`/api/rag/documents/${encodeURIComponent(id)}`, {
