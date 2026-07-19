@@ -134,7 +134,7 @@ export default function GraphRagView(): React.ReactElement {
     try {
       setError("");
       const [g, s] = await Promise.all([
-        fetchGraphRag(500, typeFilter),
+        fetchGraphRag(2000, typeFilter), // CR-32: 전체 문서 로드 (검색·핀 대상이 항상 그래프에 존재)
         fetchGraphRagStatus(),
       ]);
       setData(g);
@@ -221,6 +221,24 @@ export default function GraphRagView(): React.ReactElement {
     return set;
   }, [pinnedVersion, neighbors, byId]);
 
+  // CR-32: 검색 중이면 매칭 문서 + 그 키워드만 표시 집합
+  const searchSet = useMemo(() => {
+    if (search.trim().length < 2 || docMatches.length === 0) return null;
+    const set = new Set<string>();
+    for (const d of docMatches) {
+      if (!byId.has(d.doc_id)) continue;
+      set.add(d.doc_id);
+      for (const nb of neighbors.get(d.doc_id) ?? []) set.add(nb); // 그 과제의 키워드
+    }
+    return set.size > 0 ? set : null;
+  }, [search, docMatches, byId, neighbors]);
+
+  // CR-32: 표시 대상 집합 — 우선순위 근거 > 핀 > 검색. 없으면 null(개요 모드).
+  const activeSet = useMemo(
+    () => evidenceIds ?? focusSet ?? searchSet,
+    [evidenceIds, focusSet, searchSet]
+  );
+
   // ── 크기 추적 ──────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!wrapRef.current) return;
@@ -293,17 +311,30 @@ export default function GraphRagView(): React.ReactElement {
     fgRef.current?.d3ReheatSimulation();
   }, [graphData.nodes]);
 
-  // ── 노드 활성 판정: evidence > 핀 포커스 > 호버 ───────────────────────────
+  // ── 노드 활성 판정: 표시 집합(근거·핀·검색) 있으면 그 집합, 없으면 호버 ─────
+  // CR-32: 개요 모드(집합 없음)에서는 호버한 노드+이웃만 활성 — 라벨 폭주 방지.
   const isActive = useCallback(
     (id: string): boolean => {
-      if (evidenceIds) return evidenceIds.has(id);
-      if (focusSet) return focusSet.has(id);
-      if (!hoveredNodeId) return true;
+      if (activeSet) return activeSet.has(id);
+      if (!hoveredNodeId) return false;
       if (id === hoveredNodeId) return true;
       return neighbors.get(hoveredNodeId)?.has(id) ?? false;
     },
-    [evidenceIds, focusSet, hoveredNodeId, neighbors]
+    [activeSet, hoveredNodeId, neighbors]
   );
+
+  // CR-32: 라벨을 그릴지 — 표시 집합 있거나 호버 중일 때만 (개요는 라벨 0).
+  const labelsOn = activeSet !== null || hoveredNodeId !== null;
+
+  // CR-32: 표시 집합(검색·핀)이 바뀌면 그 대상만 화면에 맞춘다.
+  useEffect(() => {
+    const set = searchSet ?? focusSet;
+    if (!set || set.size === 0) return;
+    const t = setTimeout(() => {
+      fgRef.current?.zoomToFit(500, 90, (n) => set.has((n as RFNode).id));
+    }, 260);
+    return () => clearTimeout(t);
+  }, [searchSet, focusSet]);
 
   const nodeColor = useCallback(
     (n: RFNode): string => {
@@ -342,7 +373,7 @@ export default function GraphRagView(): React.ReactElement {
       if (!n || n.x === undefined || n.y === undefined) return;
       pinNode(n);
       setSelected(n);
-      fgRef.current?.centerAt(n.x, n.y, 500);
+      // 카메라는 focusSet effect가 핀 대상에 맞춘다 (CR-32)
     },
     [byId, pinNode]
   );
@@ -1010,9 +1041,19 @@ export default function GraphRagView(): React.ReactElement {
               if (n.x === undefined || n.y === undefined) return;
               const active = isActive(n.id);
               const pinned = isPinned(n.id);
-              const r = radiusFor(n);
               const color = nodeColor(n);
               const dimColor = isDark ? "#2a2d33" : "#dde1e7";
+
+              // CR-32: 표시 집합이 있는데 비활성 노드 = 작은 점으로만 (배경화).
+              // 검색/핀 시 대상 외 495개가 형태·라벨로 어지럽히지 않게 한다.
+              if (activeSet && !active) {
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, 1.2, 0, Math.PI * 2);
+                ctx.fillStyle = isDark ? "rgba(120,125,140,0.25)" : "rgba(180,185,195,0.4)";
+                ctx.fill();
+                return;
+              }
+              const r = radiusFor(n);
 
               // evidence 모드에서 근거 노드는 발광
               if (active && evidenceIds) {
@@ -1157,9 +1198,18 @@ export default function GraphRagView(): React.ReactElement {
                 ctx.stroke();
               }
 
-              // 라벨 — 문서·노트는 상시, 엔티티는 확대/활성 시. 딤 노드는 생략.
-              if (!active) return;
-              if ((n.kind === "entity" || n.kind === "keyword") && scale < 0.9 && hoveredNodeId !== n.id && !pinned) return;
+              // CR-32: 라벨 — 표시 집합/호버로 활성인 노드만. 개요(집합 없음)에서
+              // 호버 안 하면 라벨을 아예 안 그린다 (495개 라벨 폭주 방지).
+              if (!active || !labelsOn) return;
+              // 집합 지정 상태에서는 키워드도 항상 라벨 (검색·핀 대상은 다 읽혀야 함).
+              // 개요 호버 상태에서만 축소 시 키워드 라벨 생략.
+              if (
+                !activeSet &&
+                (n.kind === "entity" || n.kind === "keyword") &&
+                scale < 0.9 &&
+                hoveredNodeId !== n.id
+              )
+                return;
 
               const isDocLike = n.kind !== "entity" && n.kind !== "keyword";
               // 화면 픽셀 기준 고정 크기 — 줌 수준과 무관하게 항상 같은 크기로 보인다
@@ -1363,7 +1413,7 @@ export default function GraphRagView(): React.ReactElement {
             <span>┄ 언급</span>
           </div>
           <div style={{ opacity: 0.8 }}>
-            클릭 = 핀 고정·해제 · 드래그 = 원하는 위치에 고정 · 핀 있으면 연계 항목만 강조
+            검색·핀 하면 그 과제와 키워드만 표시 · 클릭 = 핀 고정·해제 · 마우스 올리면 라벨
           </div>
         </div>
       </div>
