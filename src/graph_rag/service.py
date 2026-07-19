@@ -536,6 +536,19 @@ class GraphRagService:
     def latest_evidence(self) -> EvidenceSubgraph | None:
         return self._evidence[-1] if self._evidence else None
 
+    async def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """CR-31: 제목·키워드로 과제(문서) 검색 — 결과는 문서만. 미가용 시 빈 목록."""
+        if not self.available:
+            return []
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(
+                None, lambda: self._graph.search_documents(query, limit)
+            )
+        except Exception as exc:
+            logger.warning("search_documents 실패: %s", exc)
+            return []
+
     # ── 시각화/운영 ───────────────────────────────────────────────────────────
 
     async def snapshot(

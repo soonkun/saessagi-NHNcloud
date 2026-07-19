@@ -184,6 +184,20 @@ async def normalize(request: Request) -> NormalizeResp:
     return NormalizeResp(groups=result["groups"], merged=result["merged"])
 
 
+class DocSearchResp(BaseModel):
+    docs: list[dict[str, Any]]
+
+
+@router.get("/search-docs", response_model=DocSearchResp)
+async def search_docs(request: Request, q: str, limit: int = 20) -> DocSearchResp:
+    """CR-31: 제목·키워드로 과제(문서) 검색 — 키워드는 신호, 결과는 문서만."""
+    svc = _get_service(request)
+    if not svc.available:
+        raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    docs = await svc.search_documents(q, limit=max(1, min(limit, 50)))
+    return DocSearchResp(docs=docs)
+
+
 @router.get("/evidence/latest", response_model=EvidenceResp)
 async def latest_evidence(request: Request) -> EvidenceResp:
     svc = _get_service(request)

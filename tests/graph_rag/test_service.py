@@ -396,3 +396,42 @@ async def test_test_index_returns_extraction_results() -> None:
     assert r0["keywords"][0]["raw_term"] == "시험 키워드"
     assert result["stats"]["keywords"] == 1
 
+
+
+# ── CR-31: 문서(과제) 검색 — 키워드는 신호, 결과는 문서만 ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_search_documents_by_keyword_not_by_title() -> None:
+    """핵심: 제목에 없는 용어라도 문서 키워드에 있으면 그 문서가 검색된다."""
+    graph = FakeGraphStore()
+    graph.upsert_project_bundle(
+        ProjectInfo(doc_id="d1", title="주요 채소작물 안정생산 알고리즘 개발"),  # 제목에 '디지털트윈' 없음
+        [KeywordMention(doc_id="d1", raw_term="디지털트윈", role="technology")],
+    )
+    graph.upsert_project_bundle(
+        ProjectInfo(doc_id="d2", title="무관한 과제"),
+        [KeywordMention(doc_id="d2", raw_term="센서", role="technology")],
+    )
+    svc, _, _ = _make_service(graph=graph)
+    docs = await svc.search_documents("디지털트윈")
+    # 결과는 문서 하나 — 키워드 노드가 아니라 그 키워드를 가진 과제
+    assert [d["doc_id"] for d in docs] == ["d1"]
+    assert docs[0]["title_match"] is False
+    assert "디지털트윈" in docs[0]["matched_keywords"]
+
+
+@pytest.mark.asyncio
+async def test_search_documents_title_match() -> None:
+    """제목 일치도 잡힌다."""
+    graph = FakeGraphStore()
+    graph.upsert_project_bundle(ProjectInfo(doc_id="d1", title="디지털트윈 기반 농기계"), [])
+    svc, _, _ = _make_service(graph=graph)
+    docs = await svc.search_documents("디지털트윈")
+    assert docs[0]["doc_id"] == "d1" and docs[0]["title_match"] is True
+
+
+@pytest.mark.asyncio
+async def test_search_documents_store_down_empty() -> None:
+    svc, _, _ = _make_service(graph=FakeGraphStore(alive=False))
+    assert await svc.search_documents("디지털트윈") == []

@@ -10,6 +10,7 @@ run_in_executor로 감당한다.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from .types import ChunkLink, Entity, GraphSnapshot, KeywordMention, ProjectInfo, Relation
 
@@ -106,6 +107,15 @@ class GraphStore(ABC):
     @abstractmethod
     def keywords_for_doc(self, doc_id: str) -> list["KeywordMention"]:
         """문서의 키워드 언급 목록 (검증·정규화 후처리용)."""
+
+    @abstractmethod
+    def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """CR-31: 질의로 문서(과제)를 찾는다 — 제목 또는 소속 키워드 일치.
+
+        키워드는 문서를 찾는 신호이고 결과는 문서만 반환한다.
+        Returns: [{doc_id, title, title_match: bool, matched_keywords: [term...]}]
+        (매칭 키워드 많을수록 상위)
+        """
 
     @abstractmethod
     def all_keywords(self, limit: int = 5000) -> list["KeywordMention"]:

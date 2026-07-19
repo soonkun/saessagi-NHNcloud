@@ -509,6 +509,37 @@ class Neo4jGraphStore(GraphStore):
         )
         return [KeywordMention(**row) for row in rows]
 
+    def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        """CR-31: 제목 또는 소속 키워드로 문서 검색 — 결과는 문서만."""
+        q = " ".join((query or "").split()).casefold()
+        if len(q) < 2:
+            return []
+        rows = self._run(
+            "MATCH (d:Document) "
+            "OPTIONAL MATCH (d)-[:HAS_KEYWORD]->(k:Keyword) "
+            "  WHERE toLower(k.raw_term) CONTAINS $q OR toLower(k.normalized_term) CONTAINS $q "
+            "WITH d, "
+            "  toLower(coalesce(d.title, d.name, '')) CONTAINS $q AS title_match, "
+            "  collect(DISTINCT k.raw_term) AS kws "
+            "WHERE title_match OR size(kws) > 0 "
+            "RETURN d.doc_id AS doc_id, coalesce(d.title, d.name, d.doc_id) AS title, "
+            "  d.project_no AS project_no, title_match, kws AS matched_keywords "
+            "ORDER BY size(kws) DESC, title_match DESC "
+            "LIMIT $limit",
+            q=q,
+            limit=limit,
+        )
+        return [
+            {
+                "doc_id": str(r["doc_id"]),
+                "title": str(r["title"] or r["doc_id"]),
+                "project_no": str(r.get("project_no") or ""),
+                "title_match": bool(r["title_match"]),
+                "matched_keywords": [str(x) for x in (r.get("matched_keywords") or []) if x],
+            }
+            for r in rows
+        ]
+
     def all_keywords(self, limit: int = 5000) -> list[KeywordMention]:
         rows = self._run(f"MATCH (k:Keyword) {self._KW_RETURN} LIMIT $limit", limit=limit)
         return [KeywordMention(**row) for row in rows]

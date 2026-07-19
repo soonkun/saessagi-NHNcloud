@@ -225,6 +225,32 @@ class FakeGraphStore(GraphStore):
     def keywords_for_doc(self, doc_id: str) -> list[KeywordMention]:
         return [k for k in self.keywords.values() if k.doc_id == doc_id]
 
+    def search_documents(self, query: str, limit: int = 20) -> list[dict[str, Any]]:
+        q = " ".join((query or "").split()).casefold()
+        if len(q) < 2:
+            return []
+        out: list[dict[str, Any]] = []
+        for doc_id, proj in self.projects.items():
+            title = (proj.title or "").casefold()
+            title_match = q in title
+            matched = [
+                k.raw_term
+                for k in self.keywords.values()
+                if k.doc_id == doc_id and (q in k.raw_term.casefold() or (k.normalized_term and q in k.normalized_term.casefold()))
+            ]
+            if title_match or matched:
+                out.append(
+                    {
+                        "doc_id": doc_id,
+                        "title": proj.title or doc_id,
+                        "project_no": proj.project_no,
+                        "title_match": title_match,
+                        "matched_keywords": matched,
+                    }
+                )
+        out.sort(key=lambda d: (len(d["matched_keywords"]), d["title_match"]), reverse=True)
+        return out[:limit]
+
     def all_keywords(self, limit: int = 5000) -> list[KeywordMention]:
         return list(self.keywords.values())[:limit]
 

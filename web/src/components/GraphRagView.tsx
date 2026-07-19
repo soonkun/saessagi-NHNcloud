@@ -25,8 +25,8 @@ import {
   openDocument,
   requestGraphNormalize,
   requestGraphReindex,
-  searchRagContent,
-  type ContentSearchHit,
+  searchGraphDocs,
+  type GraphDocMatch,
 } from "../services/api";
 import { useStore } from "../store";
 
@@ -111,7 +111,7 @@ export default function GraphRagView(): React.ReactElement {
   const [selected, setSelected] = useState<RFNode | null>(null);
   const [reindexing, setReindexing] = useState(false);
   const [search, setSearch] = useState("");
-  const [contentHits, setContentHits] = useState<ContentSearchHit[]>([]);
+  const [docMatches, setDocMatches] = useState<GraphDocMatch[]>([]);
   const [normalizing, setNormalizing] = useState(false);
   const [normResult, setNormResult] = useState<string>("");
   // CR-26: 초기화 확인 모달
@@ -380,39 +380,22 @@ export default function GraphRagView(): React.ReactElement {
       .filter((n): n is RFNode => n !== undefined && n.kind !== "entity" && n.kind !== "keyword");
   }, [pinnedVersion, byId]);
 
-  // 검색 매치 (라벨 부분 일치, 최대 8)
-  const searchMatches = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-    return graphData.nodes.filter((n) => n.label.toLowerCase().includes(q)).slice(0, 8);
-  }, [search, graphData]);
-
-  // CR-22: 내용 기반 검색 (본문 임베딩+키워드) — 파일명이 엉망이어도 내용으로 찾는다
+  // CR-31: 과제(문서) 검색 — 제목·키워드 신호로 문서만 찾는다.
+  // 키워드 노드는 결과에 노출하지 않는다 ("디지털트윈"으로 검색하면 그 키워드를
+  // 가진 과제 문서가 나온다 — 제목에 그 용어가 없어도).
   useEffect(() => {
     const q = search.trim();
     if (q.length < 2) {
-      setContentHits([]);
+      setDocMatches([]);
       return;
     }
     const t = setTimeout(() => {
-      void searchRagContent(q, 5)
-        .then((hits) => {
-          // 그래프에 실제 존재하는 문서·노트 노드만 (doc_id → 노드 id 매핑)
-          const seen = new Set<string>();
-          const mapped = hits.filter((h) => {
-            const nodeId = h.doc_id.startsWith("__knowledge__:")
-              ? h.doc_id.slice("__knowledge__:".length)
-              : h.doc_id;
-            if (seen.has(nodeId) || !byId.has(nodeId)) return false;
-            seen.add(nodeId);
-            return true;
-          });
-          setContentHits(mapped);
-        })
-        .catch(() => setContentHits([]));
-    }, 350); // 디바운스
+      void searchGraphDocs(q, 12)
+        .then(setDocMatches)
+        .catch(() => setDocMatches([]));
+    }, 300); // 디바운스
     return () => clearTimeout(t);
-  }, [search, byId]);
+  }, [search]);
 
   // CR-22: 엔티티 정규화 실행
   const handleNormalize = useCallback(() => {
@@ -535,13 +518,13 @@ export default function GraphRagView(): React.ReactElement {
                 fontFamily: "inherit",
               }}
             />
-            {(searchMatches.length > 0 || contentHits.length > 0) && (
+            {search.trim().length >= 2 && (
               <div
                 style={{
                   position: "absolute",
                   top: "calc(100% + 4px)",
                   right: 0,
-                  width: 270,
+                  width: 300,
                   zIndex: 20,
                   background: isDark ? "rgba(22,24,28,0.97)" : "rgba(255,255,255,0.98)",
                   border: "1px solid var(--color-border)",
@@ -551,30 +534,35 @@ export default function GraphRagView(): React.ReactElement {
                   flexDirection: "column",
                   gap: 2,
                   boxShadow: "0 4px 16px rgba(0,0,0,0.25)",
-                  maxHeight: 340,
+                  maxHeight: 360,
                   overflowY: "auto",
                 }}
               >
-                {searchMatches.length > 0 && (
-                  <div style={{ fontSize: "var(--fs-10)", fontWeight: 700, color: "var(--color-text-muted)", padding: "3px 7px 1px" }}>
-                    이름 일치
+                <div style={{ fontSize: "var(--fs-10)", fontWeight: 700, color: "var(--color-text-muted)", padding: "3px 7px 2px" }}>
+                  과제 검색 (제목·키워드)
+                </div>
+                {docMatches.length === 0 && (
+                  <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", padding: "6px 7px" }}>
+                    일치하는 과제가 없습니다.
                   </div>
                 )}
-                {searchMatches.map((m) => (
+                {docMatches.map((d) => (
                   <button
-                    key={m.id}
+                    key={d.doc_id}
                     onClick={() => {
-                      focusNodeById(m.id);
+                      // 로드된 그래프에 있으면 이동+핀, 없으면(스냅샷 상한) 원본 열기
+                      if (byId.has(d.doc_id)) focusNodeById(d.doc_id);
+                      else openDocument(d.doc_id, d.title);
                       setSearch("");
                     }}
                     style={{
                       display: "flex",
-                      alignItems: "center",
-                      gap: 6,
+                      flexDirection: "column",
+                      gap: 2,
                       border: "none",
                       background: "transparent",
                       borderRadius: 5,
-                      padding: "4px 7px",
+                      padding: "5px 7px",
                       cursor: "pointer",
                       color: "var(--color-text)",
                       fontSize: "var(--fs-11)",
@@ -582,64 +570,22 @@ export default function GraphRagView(): React.ReactElement {
                       textAlign: "left",
                     }}
                   >
-                    <span
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: m.kind === "document" ? 2 : "50%",
-                        background: nodeColor(m),
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {m.label}
+                    <span style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: nodeColor({ kind: "document", type: "" } as RFNode), flexShrink: 0 }} />
+                      <span style={{ fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {d.title}
+                      </span>
+                      {d.title_match && (
+                        <span style={{ fontSize: "var(--fs-10)", color: "var(--color-accent)", flexShrink: 0 }}>제목</span>
+                      )}
                     </span>
-                    <span style={{ color: "var(--color-text-muted)", flexShrink: 0 }}>
-                      {m.kind === "document" ? "문서" : m.kind === "note" ? "노트" : m.type}
-                    </span>
+                    {d.matched_keywords.length > 0 && (
+                      <span style={{ color: "var(--color-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingLeft: 14 }}>
+                        키워드: {d.matched_keywords.join(", ")}
+                      </span>
+                    )}
                   </button>
                 ))}
-                {contentHits.length > 0 && (
-                  <div style={{ fontSize: "var(--fs-10)", fontWeight: 700, color: "var(--color-text-muted)", padding: "5px 7px 1px", borderTop: searchMatches.length > 0 ? "1px solid var(--color-border)" : "none" }}>
-                    내용 일치 (본문 검색)
-                  </div>
-                )}
-                {contentHits.map((h) => {
-                  const nodeId = h.doc_id.startsWith("__knowledge__:")
-                    ? h.doc_id.slice("__knowledge__:".length)
-                    : h.doc_id;
-                  return (
-                    <button
-                      key={h.doc_id}
-                      onClick={() => {
-                        focusNodeById(nodeId);
-                        setSearch("");
-                      }}
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 2,
-                        border: "none",
-                        background: "transparent",
-                        borderRadius: 5,
-                        padding: "4px 7px",
-                        cursor: "pointer",
-                        color: "var(--color-text)",
-                        fontSize: "var(--fs-11)",
-                        fontFamily: "inherit",
-                        textAlign: "left",
-                      }}
-                    >
-                      <span style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
-                        {h.doc_name}
-                        {h.page ? ` · p.${h.page}` : ""}
-                      </span>
-                      <span style={{ color: "var(--color-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%" }}>
-                        {h.snippet}
-                      </span>
-                    </button>
-                  );
-                })}
               </div>
             )}
           </div>

@@ -333,6 +333,22 @@ export async function clearGraph(confirm: string): Promise<{ ok: boolean; before
   });
 }
 
+// CR-31: 그래프 문서(과제) 검색 — 제목·키워드 신호로 문서만 찾는다
+export interface GraphDocMatch {
+  doc_id: string;
+  title: string;
+  project_no: string;
+  title_match: boolean;
+  matched_keywords: string[];
+}
+
+export async function searchGraphDocs(q: string, limit = 12): Promise<GraphDocMatch[]> {
+  const data = await apiFetch<{ docs: GraphDocMatch[] }>(
+    `/api/graphrag/search-docs?q=${encodeURIComponent(q)}&limit=${limit}`
+  );
+  return data.docs;
+}
+
 export async function requestGraphNormalize(): Promise<{ groups: string[][]; merged: number }> {
   return apiFetch<{ groups: string[][]; merged: number }>("/api/graphrag/normalize", {
     method: "POST",
