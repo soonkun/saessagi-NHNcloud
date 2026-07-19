@@ -221,17 +221,16 @@ export default function GraphRagView(): React.ReactElement {
     return set;
   }, [pinnedVersion, neighbors, byId]);
 
-  // CR-32: 검색 중이면 매칭 문서 + 그 키워드만 표시 집합
+  // CR-32/33: 검색 중이면 매칭 "문서만" 선명 (키워드는 배경 유지 —
+  // 연관 키워드·문서는 핀으로 고정했을 때만 드러난다).
   const searchSet = useMemo(() => {
     if (search.trim().length < 2 || docMatches.length === 0) return null;
     const set = new Set<string>();
     for (const d of docMatches) {
-      if (!byId.has(d.doc_id)) continue;
-      set.add(d.doc_id);
-      for (const nb of neighbors.get(d.doc_id) ?? []) set.add(nb); // 그 과제의 키워드
+      if (byId.has(d.doc_id)) set.add(d.doc_id);
     }
     return set.size > 0 ? set : null;
-  }, [search, docMatches, byId, neighbors]);
+  }, [search, docMatches, byId]);
 
   // CR-32: 표시 대상 집합 — 우선순위 근거 > 핀 > 검색. 없으면 null(개요 모드).
   const activeSet = useMemo(
@@ -996,10 +995,14 @@ export default function GraphRagView(): React.ReactElement {
               if (!didFitRef.current) {
                 didFitRef.current = true;
                 fgRef.current?.zoomToFit(400, 60);
-                // 노드가 적을 때 zoomToFit이 과도하게 확대하는 것 방지
+                // CR-33: 노드가 너무 많아 과축소되면 하한(0.9)으로 — 배경 노드가
+                // 보이는 크기 유지. 적을 때 과확대는 상한(2.2)으로.
                 setTimeout(() => {
                   const fg = fgRef.current;
-                  if (fg && fg.zoom() > 2.2) fg.zoom(2.2, 300);
+                  if (!fg) return;
+                  const z = fg.zoom();
+                  if (z > 2.2) fg.zoom(2.2, 300);
+                  else if (z < 0.9) fg.zoom(0.9, 300);
                 }, 500);
               }
             }}
@@ -1042,17 +1045,39 @@ export default function GraphRagView(): React.ReactElement {
               const active = isActive(n.id);
               const pinned = isPinned(n.id);
               const color = nodeColor(n);
-              const dimColor = isDark ? "#2a2d33" : "#dde1e7";
+              const isDocLikeKind = n.kind === "document" || n.kind === "note";
 
-              // CR-32: 표시 집합이 있는데 비활성 노드 = 작은 점으로만 (배경화).
-              // 검색/핀 시 대상 외 495개가 형태·라벨로 어지럽히지 않게 한다.
-              if (activeSet && !active) {
-                ctx.beginPath();
-                ctx.arc(n.x, n.y, 1.2, 0, Math.PI * 2);
-                ctx.fillStyle = isDark ? "rgba(120,125,140,0.25)" : "rgba(180,185,195,0.4)";
-                ctx.fill();
+              // CR-33: 배경 노드(비활성) = 원래 역할 색을 유지하되 반투명 + 축소.
+              // 라벨은 없고, 문서는 배경에서도 페이지 형태로 문서임이 드러난다.
+              if (!active) {
+                const br = radiusFor(n) * (isDocLikeKind ? 0.8 : 0.5);
+                const alpha = isDark ? "6e" : "8c"; // 톤업 (다크 0.43 / 라이트 0.55)
+                ctx.fillStyle = color + alpha;
+                if (n.kind === "document") {
+                  const w = br * 1.7;
+                  const h = br * 2.0;
+                  const x0 = n.x - w / 2;
+                  const y0 = n.y - h / 2;
+                  const fold = w * 0.34;
+                  ctx.beginPath();
+                  ctx.moveTo(x0, y0);
+                  ctx.lineTo(x0 + w - fold, y0);
+                  ctx.lineTo(x0 + w, y0 + fold);
+                  ctx.lineTo(x0 + w, y0 + h);
+                  ctx.lineTo(x0, y0 + h);
+                  ctx.closePath();
+                  ctx.fill();
+                } else if (n.kind === "note") {
+                  const s2 = br * 1.8;
+                  ctx.fillRect(n.x - s2 / 2, n.y - s2 / 2, s2, s2);
+                } else {
+                  ctx.beginPath();
+                  ctx.arc(n.x, n.y, br, 0, Math.PI * 2);
+                  ctx.fill();
+                }
                 return;
               }
+              const dimColor = isDark ? "#2a2d33" : "#dde1e7";
               const r = radiusFor(n);
 
               // evidence 모드에서 근거 노드는 발광
