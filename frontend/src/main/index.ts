@@ -263,6 +263,21 @@ function setupIPC(): void {
     return shell.openPath(absolutePath);
   });
 
+  // Content-Disposition에서 파일명 추출 — RFC 5987 filename*=utf-8''<pct> 우선, 그다음 filename="..".
+  const parseContentDispositionFilename = (cd: string | null): string => {
+    if (!cd) return '';
+    const star = /filename\*=\s*(?:utf-8|UTF-8)''([^;]+)/i.exec(cd);
+    if (star) {
+      try {
+        return decodeURIComponent(star[1].trim());
+      } catch {
+        /* fall through */
+      }
+    }
+    const plain = /filename=\s*"?([^";]+)"?/i.exec(cd);
+    return plain ? plain[1].trim() : '';
+  };
+
   // 원본 문서/첨부를 "다운로드 위치 묻기" 없이 기본 앱으로 바로 열기.
   // 백엔드(loopback) 다운로드 URL을 임시 폴더로 받아 shell.openPath로 연다.
   // 임시 사본을 여므로 사용자가 편집·저장해도 RAG 원본은 보존된다("다른 이름으로 저장"은 각 앱에서).
@@ -270,15 +285,19 @@ function setupIPC(): void {
     if (typeof url !== 'string' || !/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//i.test(url)) {
       throw new Error('shell:openDocument: loopback http url required');
     }
-    // 경로 조작 방지 — basename만 사용
-    const base = typeof filename === 'string' && filename.trim() ? path.basename(filename) : 'document';
-    const safeName = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'document';
-
     const res = await net.fetch(url);
     if (!res.ok) {
       throw new Error(`shell:openDocument: download failed (${res.status})`);
     }
     const buf = Buffer.from(await res.arrayBuffer());
+
+    // 파일명은 서버 Content-Disposition(정확한 확장자 포함) 우선, 없으면 호출자 힌트.
+    // 그래프 탭은 확장자 없는 과제 제목을 힌트로 넘기므로, 서버 파일명이 없으면
+    // shell.openPath가 열 앱을 못 찾아 실패한다 — 서버 이름을 반드시 우선한다.
+    const serverName = parseContentDispositionFilename(res.headers.get('content-disposition'));
+    const hint = typeof filename === 'string' && filename.trim() ? filename : '';
+    const base = path.basename(serverName || hint) || 'document';
+    const safeName = base.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'document';
 
     const dir = path.join(app.getPath('temp'), 'saessagi-docs');
     await fsp.mkdir(dir, { recursive: true });

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import {
-  Download,
+  FileText,
   ExternalLink,
   Network,
   Pin,
@@ -1368,7 +1368,7 @@ export default function GraphRagView(): React.ReactElement {
                     accent={accent}
                     primary
                   >
-                    <Download size={11} /> 다운로드
+                    <FileText size={11} /> 열어보기
                   </PanelBtn>
                   <PanelBtn onClick={() => setChatTab("documents")} accent={accent}>
                     <ExternalLink size={11} /> 문서 탭

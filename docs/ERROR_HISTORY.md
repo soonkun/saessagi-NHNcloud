@@ -871,3 +871,32 @@ CONTAINS e.norm_name`, FakeGraphStore 계약 동기화). 테스트는 자신이 
 **수정**: store에 `notesRevision` 카운터 추가 → NotesView가 구독해 `useEffect([refreshList, notesRevision])`로 자동 refetch. 노트 저장 신호에서 bump: 주력은 `tool_call_status`(타입을 실제값 언더스코어로 정정) + name==="save_knowledge_note"일 때 bump(항상 도달), 보조로 `attachNoteCitationsToMessage`(노트 마커 존재 시)에서도 bump.  
 **검증**: raw WS 캡처로 `tool_call_status`(name=save_knowledge_note, status=completed)가 실제로 클라이언트에 도달함을 확인(완료 메시지엔 [[note:]] 마커 없었음 → 마커 경로만으론 실패했을 것). 타입 정정 후 tsc 빌드 통과.  
 **교훈**: **WS 메시지 타입 문자열은 백엔드 실제 전송값과 1:1로 맞는지 raw 캡처로 확인할 것.** 하이픈/언더스코어 한 글자 차이로 case가 영영 dead code가 된다. 그리고 **목록형 뷰는 생성/변경 신호에 반응하는 갱신 트리거(store revision 등)를 둘 것** — 마운트 시 1회 fetch만으론 외부 생성(채팅 등)을 반영 못 한다.
+
+---
+
+## E-61: 그래프 검색→문서 "열어보기"가 동작 안 함 — 확장자 없는 제목을 임시파일명으로 사용
+
+**날짜**: 2026-07-21
+**증상**: 그래프 탭에서 검색 후 문서를 선택하면 나오는 버튼("다운로드")을 눌러도
+원본이 열리지 않음. 문서 탭(DocumentsView)의 동일 버튼은 정상.
+**원인**: 백엔드 다운로드는 정상(실 doc_id로 전부 200 확인). 프론트 문제였다.
+Electron `shell:openDocument` 핸들러(`frontend/src/main/index.ts`)가 임시 사본 파일명을
+**호출자가 넘긴 filename 힌트**로 정했는데, GraphRagView는 `openDocument(selected.id,
+selected.label)`로 **확장자 없는 과제 제목**(CR-30 추출 title)을 넘긴다(DocumentsView는
+실제 파일명 `doc.filename`을 넘겨 정상). 그 결과 임시파일이 확장자 없이 저장돼
+`shell.openPath`가 연결 앱을 못 찾아 조용히 실패. 백엔드는 정확한 파일명을
+`Content-Disposition: filename*=utf-8''...`(예: `….hwpx`)로 이미 보내고 있었으나
+핸들러가 이를 무시했다.
+**수정**: 핸들러가 **서버 Content-Disposition 파일명을 우선** 사용하도록 변경
+(RFC 5987 `filename*=utf-8''<pct>` 파싱 + `filename="…"` 폴백 + 호출자 힌트 폴백 +
+`'document'`). 이러면 호출자가 무엇을 넘기든 정확한 확장자가 붙어 어느 화면에서든
+열린다. 더불어 사용자 피드백대로 그래프 버튼 라벨을 "다운로드"→"열어보기"(FileText
+아이콘)로 변경 — 실제 동작이 임시 사본 열기이고, 저장은 각 앱의 "다른 이름으로 저장"에
+맡긴다.
+**검증**: 실 Neo4j 검색 결과 doc_id로 다운로드 엔드포인트 전부 200 + Content-Disposition
+헤더 확인(한글 filename* 인코딩). 파서가 실 헤더에서 `….hwpx` 확장자 정확 추출(node 재현).
+web/dist·frontend(electron-vite) 빌드 통과. 앱 재시작 후 실제 열기 동작은 사용자 확인 필요.
+**교훈**: (1) **다운로드/열기 임시파일명은 호출자 힌트가 아니라 서버가 준 파일명
+(Content-Disposition)을 신뢰**하라 — 화면마다 넘기는 값(파일명 vs 제목)이 달라 한쪽만
+깨진다. (2) 확장자 없는 임시파일은 `shell.openPath`가 조용히 실패한다(에러 안 띄움).
+(3) 버튼 라벨은 실제 동작과 일치시킬 것("다운로드"라 쓰고 "열기"를 하면 사용자 혼란).
