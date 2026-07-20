@@ -92,7 +92,9 @@ class GraphStore(ABC):
     # ── CR-30: Project + 역할 키워드 스키마 ──────────────────────────────────
 
     @abstractmethod
-    def upsert_project_bundle(self, project: "ProjectInfo", keywords: list["KeywordMention"]) -> None:
+    def upsert_project_bundle(
+        self, project: "ProjectInfo", keywords: list["KeywordMention"]
+    ) -> None:
         """문서 1건의 과제 정보·키워드를 단일 트랜잭션으로 저장.
 
         - Document 노드에 title/rfp_no/project_no를 속성으로 SET (별도 노드 아님)
@@ -122,11 +124,27 @@ class GraphStore(ABC):
         """전체 키워드 언급 (정규화 후처리 대상 수집)."""
 
     @abstractmethod
-    def update_keyword_normalization(
-        self, keyword_ids: list[str], normalized_term: str
-    ) -> int:
+    def update_keyword_normalization(self, keyword_ids: list[str], normalized_term: str) -> int:
         """정규화 후처리: 해당 키워드 노드들의 normalized_term/status만 갱신
         (raw_term 보존, 노드 병합 없음). 반환: 갱신 수."""
+
+    @abstractmethod
+    def existing_doc_ids(self) -> list[str]:
+        """CR-35: 그래프에 이미 인덱싱된 Document의 doc_id 목록 (증분 인덱싱 판별용)."""
+
+    @abstractmethod
+    def reset_keyword_normalization(self) -> int:
+        """CR-36: 전체 재정규화 전 초기화 — 모든 Keyword의 normalized_term을 비우고
+        status를 'raw'로 되돌린다(raw_term 보존). 반환: 초기화된 수."""
+
+    @abstractmethod
+    def mark_keywords_processed(self, keyword_ids: list[str]) -> int:
+        """CR-35: 증분 정규화 — 병합 안 됐어도 '처리 완료'로 표시.
+
+        normalization_status를 'normalized'로 올리고, normalized_term이 비어 있으면
+        raw_term으로 채운다(raw_term 자체는 보존). 다음 증분 정규화에서 재검토 대상
+        (status='raw')에서 빠지게 하기 위함. 반환: 갱신 수.
+        """
 
     @abstractmethod
     def stats(self) -> dict[str, int]:

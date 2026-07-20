@@ -39,6 +39,13 @@ _SCHEMA_STATEMENTS: tuple[str, ...] = (
     "CREATE CONSTRAINT techcode_id IF NOT EXISTS FOR (t:TechnologyCode) REQUIRE t.code IS UNIQUE",
 )
 
+# CR-34: 공유 키워드 기반 문서-문서 연관 엣지 파생 파라미터
+# - FANOUT: 같은 용어를 이보다 많은 문서가 공유하면 변별력 없는 "흔한 용어"로
+#   보고 링크 생성에서 제외 (허브 폭주·헤어볼 방지). IDF 필터 성격.
+# - MAX_EDGES: 파생 엣지 총량 상한 (weight 큰 순 유지) — 렌더 비용 방어.
+_RELATED_MAX_FANOUT = 15
+_RELATED_MAX_EDGES = 4000
+
 
 class Neo4jGraphStore(GraphStore):
     """Neo4j 5.x 기반 GraphStore."""
@@ -297,9 +304,7 @@ class Neo4jGraphStore(GraphStore):
         ):
             did = str(row["did"])
             if did not in nodes:
-                nodes[did] = GraphNode(
-                    id=did, label=str(row["dlabel"] or did), kind="document"
-                )
+                nodes[did] = GraphNode(id=did, label=str(row["dlabel"] or did), kind="document")
             kid = str(row["kid"])
             if kid not in nodes:
                 nodes[kid] = GraphNode(
@@ -355,6 +360,31 @@ class Neo4jGraphStore(GraphStore):
                         id=pid, label=str(row["plabel"] or pid), kind=str(row["pkind"])
                     )
                 edges.append(GraphEdge(source=str(row["eid"]), target=pid, kind="mentioned_in"))
+
+        # ── CR-34: 공유 키워드 기반 문서-문서 연관 엣지 (조회 시점 파생) ──────
+        # 저장 스키마는 문서 스코프 키워드 그대로 두고(문맥별 의미 보존), 같은 개념
+        # (정규화 용어, 없으면 raw_term)·같은 역할을 공유하는 문서 쌍을 잇는다.
+        # 정규화(normalize)를 먼저 돌리면 "AI"='인공지능'까지 하나로 묶여 촘촘해진다.
+        term_expr = (
+            "CASE WHEN k.normalized_term IS NULL OR k.normalized_term = '' "
+            "THEN toLower(k.raw_term) ELSE toLower(k.normalized_term) END"
+        )
+        for row in self._run(
+            "MATCH (d:Document)-[:HAS_KEYWORD]->(k:Keyword) "
+            f"WITH {term_expr} AS term, k.role AS role, collect(DISTINCT d.doc_id) AS docs "
+            "WHERE size(term) >= 2 AND size(docs) >= 2 AND size(docs) <= $fanout "
+            "UNWIND docs AS s UNWIND docs AS t "
+            "WITH s, t WHERE s < t "
+            "WITH s, t, count(*) AS shared "
+            "RETURN s, t, shared ORDER BY shared DESC LIMIT $emax",
+            fanout=_RELATED_MAX_FANOUT,
+            emax=_RELATED_MAX_EDGES,
+        ):
+            s, t = str(row["s"]), str(row["t"])
+            if s in nodes and t in nodes:
+                edges.append(
+                    GraphEdge(source=s, target=t, kind="related", weight=float(row["shared"]))
+                )
 
         return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
 
@@ -428,9 +458,7 @@ class Neo4jGraphStore(GraphStore):
 
     # ── CR-30: Project + 역할 키워드 ─────────────────────────────────────────
 
-    def upsert_project_bundle(
-        self, project: ProjectInfo, keywords: list[KeywordMention]
-    ) -> None:
+    def upsert_project_bundle(self, project: ProjectInfo, keywords: list[KeywordMention]) -> None:
         """문서 1건의 과제 정보·키워드를 단일 write 트랜잭션으로 저장 (재인덱싱 멱등)."""
         rows = [
             {
@@ -456,8 +484,7 @@ class Neo4jGraphStore(GraphStore):
             )
             # 문서의 기존 키워드 교체 (전역 병합 금지 — 문서 스코프 노드)
             tx.run(
-                "MATCH (d:Document {doc_id: $doc_id})-[:HAS_KEYWORD]->(k:Keyword) "
-                "DETACH DELETE k",
+                "MATCH (d:Document {doc_id: $doc_id})-[:HAS_KEYWORD]->(k:Keyword) DETACH DELETE k",
                 doc_id=project.doc_id,
             )
             if rows:
@@ -553,6 +580,30 @@ class Neo4jGraphStore(GraphStore):
             "RETURN count(k) AS n",
             ids=keyword_ids,
             norm=normalized_term,
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def existing_doc_ids(self) -> list[str]:
+        rows = self._run("MATCH (d:Document) RETURN d.doc_id AS doc_id")
+        return [str(r["doc_id"]) for r in rows if r.get("doc_id")]
+
+    def reset_keyword_normalization(self) -> int:
+        rows = self._run(
+            "MATCH (k:Keyword) SET k.normalized_term = '', k.normalization_status = 'raw' "
+            "RETURN count(k) AS n"
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def mark_keywords_processed(self, keyword_ids: list[str]) -> int:
+        if not keyword_ids:
+            return 0
+        rows = self._run(
+            "MATCH (k:Keyword) WHERE k.id IN $ids "
+            "SET k.normalization_status = 'normalized', "
+            "    k.normalized_term = CASE WHEN k.normalized_term IS NULL OR k.normalized_term = '' "
+            "                             THEN k.raw_term ELSE k.normalized_term END "
+            "RETURN count(k) AS n",
+            ids=keyword_ids,
         )
         return int(rows[0]["n"]) if rows else 0
 

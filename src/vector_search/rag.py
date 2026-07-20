@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .embedder import Embedder
 from .store import VectorStore
@@ -75,6 +75,11 @@ class RagService:
             "on" if reranker else "off",
             "on" if hybrid_enabled else "off",
         )
+
+    @property
+    def embedder(self) -> Any:
+        """CR-36: 임베더 노출 — GraphRAG 정규화가 용어 군집화에 재사용."""
+        return self._embedder
 
     def retrieve(
         self,

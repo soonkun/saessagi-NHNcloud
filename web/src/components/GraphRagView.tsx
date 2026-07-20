@@ -67,6 +67,24 @@ function readCssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
 
+// CR-35: 상단 컨트롤 바 버튼 스타일 — primary(증분)는 액센트 강조, 보조(전체)는 평범
+function barBtn(disabled: boolean, primary: boolean, accent: string, isDark: boolean): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    fontSize: "var(--fs-11)",
+    padding: "3px 8px",
+    borderRadius: 6,
+    border: `1px solid ${primary ? accent : "var(--color-border)"}`,
+    background: primary ? accent + (isDark ? "22" : "14") : "var(--color-bg)",
+    color: "var(--color-text)",
+    cursor: disabled ? "not-allowed" : "pointer",
+    fontFamily: "inherit",
+    opacity: disabled ? 0.5 : 1,
+  };
+}
+
 // hex(#rrggbb) 색을 흰색과 amt(0~1)만큼 혼합 — 노드 그라디언트용
 function lighten(hex: string, amt: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -427,25 +445,52 @@ export default function GraphRagView(): React.ReactElement {
     return () => clearTimeout(t);
   }, [search]);
 
-  // CR-22: 엔티티 정규화 실행
-  const handleNormalize = useCallback(() => {
-    if (!window.confirm("같은 대상의 표기 변형(정식명/약칭 등) 엔티티를 AI 판단으로 병합합니다.\n병합은 되돌릴 수 없습니다 (재인덱싱으로 재구축은 가능). 진행할까요?")) {
-      return;
-    }
-    setNormalizing(true);
-    setNormResult("");
-    void requestGraphNormalize()
-      .then((r) => {
-        setNormResult(
-          r.merged === 0
-            ? "병합할 표기 변형이 없습니다."
-            : `${r.groups.length}개 그룹, ${r.merged}개 병합: ${r.groups.map((g) => g.join("=")).join(", ")}`
-        );
-        return load();
-      })
-      .catch((e) => setNormResult(`정규화 실패: ${e instanceof Error ? e.message : String(e)}`))
-      .finally(() => setNormalizing(false));
-  }, [load]);
+  // CR-22/35: 키워드 정규화 — 기본은 증분(새 키워드만), onlyNew=false면 전체 재정규화
+  const handleNormalize = useCallback(
+    (onlyNew: boolean) => {
+      const msg = onlyNew
+        ? "새로 인덱싱된 키워드의 표기 변형만 기존 대표어에 맞춰 정규화합니다. 진행할까요?"
+        : "전체 키워드를 대상으로 표기 변형을 다시 묶습니다(비용 큼). 진행할까요?";
+      if (!window.confirm(msg)) return;
+      setNormalizing(true);
+      setNormResult("");
+      void requestGraphNormalize(onlyNew)
+        .then((r) => {
+          setNormResult(
+            r.merged === 0
+              ? onlyNew
+                ? "새로 정규화할 키워드가 없습니다."
+                : "병합할 표기 변형이 없습니다."
+              : `${r.groups.length}개 그룹, ${r.merged}개 갱신: ${r.groups.map((g) => g.join("=")).join(", ")}`
+          );
+          return load();
+        })
+        .catch((e) => setNormResult(`정규화 실패: ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => setNormalizing(false));
+    },
+    [load]
+  );
+
+  // CR-35: 그래프 인덱싱 — onlyMissing=true면 그래프에 없는 문서만(증분), false면 전체
+  const handleReindex = useCallback(
+    (onlyMissing: boolean) => {
+      setReindexing(true);
+      void requestGraphReindex(undefined, onlyMissing)
+        .then((r) => {
+          setNormResult(
+            onlyMissing
+              ? r.count === 0
+                ? "새로 인덱싱할 문서가 없습니다 (모두 인덱싱됨)."
+                : `새 문서 ${r.count}건 인덱싱 시작`
+              : `전체 ${r.count}건 재인덱싱 시작`
+          );
+          return load();
+        })
+        .catch((e) => setNormResult(`인덱싱 실패: ${e instanceof Error ? e.message : String(e)}`))
+        .finally(() => setReindexing(false));
+    },
+    [load]
+  );
 
   // 선택 노드의 연결 목록 (패널용) — degree 높은 순, 문서·노트 우선
   const selectedConnections = useMemo(() => {
@@ -706,54 +751,40 @@ export default function GraphRagView(): React.ReactElement {
               </button>
             </>
           )}
+          {/* CR-35: 증분(새 문서만·새 키워드만) 우선, 전체는 보조 버튼 */}
           <button
-            onClick={handleNormalize}
+            onClick={() => handleReindex(true)}
+            disabled={reindexing || notConnected}
+            title="그래프에 아직 없는 문서만 인덱싱 (증분 — 이미 인덱싱된 문서는 건너뜀)"
+            style={barBtn(notConnected || reindexing, true, accent, isDark)}
+          >
+            <RefreshCw size={11} className={reindexing ? "spin" : undefined} />
+            새 문서 인덱싱
+          </button>
+          <button
+            onClick={() => handleReindex(false)}
+            disabled={reindexing || notConnected}
+            title="벡터 스토어의 모든 문서를 다시 인덱싱 (전량 재추출 — 비용 큼)"
+            style={barBtn(notConnected || reindexing, false, accent, isDark)}
+          >
+            전체 재인덱싱
+          </button>
+          <button
+            onClick={() => handleNormalize(true)}
             disabled={normalizing || notConnected}
-            title="같은 대상의 표기 변형(정식명·약칭 등) 엔티티를 AI 판단으로 병합"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: "var(--fs-11)",
-              padding: "3px 8px",
-              borderRadius: 6,
-              border: "1px solid var(--color-border)",
-              background: "var(--color-bg)",
-              color: "var(--color-text)",
-              cursor: notConnected || normalizing ? "not-allowed" : "pointer",
-              fontFamily: "inherit",
-              opacity: notConnected || normalizing ? 0.5 : 1,
-            }}
+            title="새로 인덱싱된 키워드의 표기 변형만 기존 대표어에 맞춰 정규화 (증분)"
+            style={barBtn(notConnected || normalizing, true, accent, isDark)}
           >
             <Network size={11} />
             {normalizing ? "정규화 중…" : "정규화"}
           </button>
           <button
-            onClick={() => {
-              setReindexing(true);
-              void requestGraphReindex()
-                .then(() => load())
-                .finally(() => setReindexing(false));
-            }}
-            disabled={reindexing || notConnected}
-            title="모든 문서·노트를 그래프로 재인덱싱"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: "var(--fs-11)",
-              padding: "3px 8px",
-              borderRadius: 6,
-              border: "1px solid var(--color-border)",
-              background: "var(--color-bg)",
-              color: "var(--color-text)",
-              cursor: notConnected ? "not-allowed" : "pointer",
-              fontFamily: "inherit",
-              opacity: notConnected ? 0.5 : 1,
-            }}
+            onClick={() => handleNormalize(false)}
+            disabled={normalizing || notConnected}
+            title="전체 키워드 표기 변형을 다시 묶음 (전체 재정규화 — 비용 큼)"
+            style={barBtn(notConnected || normalizing, false, accent, isDark)}
           >
-            <RefreshCw size={11} className={reindexing ? "spin" : undefined} />
-            재인덱싱
+            전체 정규화
           </button>
           <button
             onClick={() => {
@@ -1024,18 +1055,29 @@ export default function GraphRagView(): React.ReactElement {
               const s = typeof link.source === "string" ? link.source : link.source.id;
               const t = typeof link.target === "string" ? link.target : link.target.id;
               const active = isActive(s) && isActive(t);
-              if (!active) return isDark ? "rgba(120,125,140,0.05)" : "rgba(180,185,195,0.10)";
-              return link.kind === "rel"
-                ? accent + (isDark ? "88" : "77")
-                : isDark
-                  ? "rgba(160,165,180,0.30)"
-                  : "rgba(120,130,145,0.40)";
+              if (!active) {
+                // CR-34: 개요에서도 문서-문서 연관선은 옅게 보여 군집 구조를 드러낸다.
+                if (link.kind === "related")
+                  return isDark ? "rgba(130,150,180,0.14)" : "rgba(110,130,160,0.16)";
+                return isDark ? "rgba(120,125,140,0.05)" : "rgba(180,185,195,0.10)";
+              }
+              if (link.kind === "rel") return accent + (isDark ? "88" : "77");
+              // CR-34: 공유 키워드 연관선 — 문서 톤(파랑)으로 관계선과 구분
+              if (link.kind === "related")
+                return isDark ? "rgba(159,179,209,0.6)" : "rgba(91,115,150,0.6)";
+              return isDark ? "rgba(160,165,180,0.30)" : "rgba(120,130,145,0.40)";
             }}
             linkWidth={(l) => {
               const link = l as RFLink;
               const s = typeof link.source === "string" ? link.source : link.source.id;
               const t = typeof link.target === "string" ? link.target : link.target.id;
-              if (!(isActive(s) && isActive(t))) return 0.5;
+              const activeEdge = isActive(s) && isActive(t);
+              // CR-34: 연관선은 공유 키워드 수(weight)에 비례해 굵게 — 강한 연관 강조
+              if (link.kind === "related") {
+                const w = Math.min(3.2, 1 + link.weight * 0.6);
+                return activeEdge ? w : Math.min(1.1, w * 0.45);
+              }
+              if (!activeEdge) return 0.5;
               return link.kind === "rel" ? Math.min(3, 0.8 + link.weight * 0.3) : 0.8;
             }}
             linkLineDash={(l) => ((l as RFLink).kind === "mentioned_in" ? [2, 3] : null)}
@@ -1434,11 +1476,10 @@ export default function GraphRagView(): React.ReactElement {
             <span>● 키워드</span>
             <span>▤ 과제(문서)</span>
             <span>◪ 노트</span>
-            <span>— 관계</span>
-            <span>┄ 언급</span>
+            <span style={{ color: isDark ? "#9fb3d1" : "#5b7396" }}>— 공유 키워드 연관</span>
           </div>
           <div style={{ opacity: 0.8 }}>
-            검색·핀 하면 그 과제와 키워드만 표시 · 클릭 = 핀 고정·해제 · 마우스 올리면 라벨
+            선 = 공유 키워드로 이어진 과제 · 핀·검색 하면 그 과제와 연관만 표시 · 클릭 = 핀 · 호버 = 라벨
           </div>
         </div>
       </div>

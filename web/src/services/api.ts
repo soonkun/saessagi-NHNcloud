@@ -311,11 +311,15 @@ export async function fetchGraphRagStatus(): Promise<GraphRagStatus> {
   return apiFetch<GraphRagStatus>("/api/graphrag/status");
 }
 
-export async function requestGraphReindex(docId?: string): Promise<{ scheduled: boolean; count: number }> {
+// CR-35: onlyMissing=true면 그래프에 없는 문서만 인덱싱 (증분)
+export async function requestGraphReindex(
+  docId?: string,
+  onlyMissing = false
+): Promise<{ scheduled: boolean; count: number }> {
   return apiFetch<{ scheduled: boolean; count: number }>("/api/graphrag/reindex", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ doc_id: docId ?? null }),
+    body: JSON.stringify({ doc_id: docId ?? null, only_missing: onlyMissing }),
   });
 }
 
@@ -349,9 +353,14 @@ export async function searchGraphDocs(q: string, limit = 12): Promise<GraphDocMa
   return data.docs;
 }
 
-export async function requestGraphNormalize(): Promise<{ groups: string[][]; merged: number }> {
+// CR-35: onlyNew=true(기본)면 아직 정규화 안 된 키워드만 (증분). false면 전체 재정규화
+export async function requestGraphNormalize(
+  onlyNew = true
+): Promise<{ groups: string[][]; merged: number }> {
   return apiFetch<{ groups: string[][]; merged: number }>("/api/graphrag/normalize", {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ only_new: onlyNew }),
   });
 }
 

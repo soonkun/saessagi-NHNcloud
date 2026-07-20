@@ -529,6 +529,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     ),
                     rag_service=self.rag_service,
                     max_hops=graphrag_cfg.max_hops,
+                    embedder=self.rag_service.embedder,  # CR-36: 대규모 정규화용
                 )
                 if _graph_store.ping():
                     _graph_store.ensure_schema()

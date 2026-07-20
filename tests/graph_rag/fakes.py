@@ -136,17 +136,60 @@ class FakeGraphStore(GraphStore):
         return GraphSnapshot(nodes=nodes, edges=edges)
 
     def snapshot(self, limit: int = 500, entity_types: list[str] | None = None) -> GraphSnapshot:
+        nodes: dict[str, GraphNode] = {}
+        edges: list[GraphEdge] = []
+
+        # CR-30: Project(문서) + 역할 키워드 (Neo4jGraphStore.snapshot와 동일 계약)
+        roles = set(entity_types) if entity_types else None
+        for k in self.keywords.values():
+            if roles is not None and k.role not in roles:
+                continue
+            did = k.doc_id
+            if did not in nodes:
+                proj = self.projects.get(did)
+                label = (
+                    (proj.title if proj else "") or self.documents.get(did, {}).get("name") or did
+                )
+                nodes[did] = GraphNode(id=did, label=label, kind="document")
+            if k.id not in nodes:
+                nodes[k.id] = GraphNode(
+                    id=k.id, label=k.normalized_term or k.raw_term, kind="keyword", type=k.role
+                )
+            edges.append(GraphEdge(source=did, target=k.id, kind="has_keyword"))
+
+        # (구) 엔티티 관계 (CR-30 이후 잔존 데이터 호환)
         ents = [
             e for e in self.entities.values() if entity_types is None or e.type in set(entity_types)
         ][:limit]
-        ids = {e.id for e in ents}
-        nodes = [GraphNode(id=e.id, label=e.name, kind="entity", type=e.type) for e in ents]
-        edges = [
-            GraphEdge(source=s, target=t, kind="rel", weight=r.weight)
-            for (s, t, _ty), r in self.relations.items()
-            if s in ids and t in ids
-        ]
-        return GraphSnapshot(nodes=nodes, edges=edges)
+        for e in ents:
+            nodes[e.id] = GraphNode(id=e.id, label=e.name, kind="entity", type=e.type)
+        eids = {e.id for e in ents}
+        for (s, t, _ty), r in self.relations.items():
+            if s in eids and t in eids:
+                edges.append(GraphEdge(source=s, target=t, kind="rel", weight=r.weight))
+
+        # CR-34: 공유 키워드(정규화 용어 우선)·동일 역할 기반 문서-문서 연관 엣지
+        term_docs: dict[tuple[str, str], set[str]] = {}
+        for k in self.keywords.values():
+            if roles is not None and k.role not in roles:
+                continue
+            term = (k.normalized_term or k.raw_term).casefold()
+            if len(term) < 2:
+                continue
+            term_docs.setdefault((term, k.role), set()).add(k.doc_id)
+        shared: dict[tuple[str, str], int] = {}
+        for docs in term_docs.values():
+            if not (2 <= len(docs) <= 15):  # _RELATED_MAX_FANOUT
+                continue
+            ordered = sorted(docs)
+            for i, a in enumerate(ordered):
+                for b in ordered[i + 1 :]:
+                    shared[(a, b)] = shared.get((a, b), 0) + 1
+        for (a, b), w in shared.items():
+            if a in nodes and b in nodes:
+                edges.append(GraphEdge(source=a, target=b, kind="related", weight=float(w)))
+
+        return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
 
     def delete_by_doc_id(self, doc_id: str) -> None:
         self.documents.pop(doc_id, None)
@@ -214,8 +257,7 @@ class FakeGraphStore(GraphStore):
             raw = k.raw_term.casefold()
             norm = k.normalized_term.casefold()
             if any(
-                t in raw or (norm and t in norm) or (len(raw) >= 3 and raw in t)
-                for t in terms_norm
+                t in raw or (norm and t in norm) or (len(raw) >= 3 and raw in t) for t in terms_norm
             ):
                 out.append(k)
             if len(out) >= limit:
@@ -236,7 +278,11 @@ class FakeGraphStore(GraphStore):
             matched = [
                 k.raw_term
                 for k in self.keywords.values()
-                if k.doc_id == doc_id and (q in k.raw_term.casefold() or (k.normalized_term and q in k.normalized_term.casefold()))
+                if k.doc_id == doc_id
+                and (
+                    q in k.raw_term.casefold()
+                    or (k.normalized_term and q in k.normalized_term.casefold())
+                )
             ]
             if title_match or matched:
                 out.append(
@@ -271,6 +317,41 @@ class FakeGraphStore(GraphStore):
             n += 1
         return n
 
+    def existing_doc_ids(self) -> list[str]:
+        # CR-30 그래프 문서 = upsert_project_bundle로 등록된 Project(=Document)
+        return list(self.projects)
+
+    def reset_keyword_normalization(self) -> int:
+        n = 0
+        for kid, k in list(self.keywords.items()):
+            self.keywords[kid] = KeywordMention(
+                doc_id=k.doc_id,
+                raw_term=k.raw_term,
+                role=k.role,
+                confidence=k.confidence,
+                normalized_term="",
+                normalization_status="raw",
+            )
+            n += 1
+        return n
+
+    def mark_keywords_processed(self, keyword_ids: list[str]) -> int:
+        n = 0
+        for kid in keyword_ids:
+            k = self.keywords.get(kid)
+            if k is None:
+                continue
+            self.keywords[kid] = KeywordMention(
+                doc_id=k.doc_id,
+                raw_term=k.raw_term,
+                role=k.role,
+                confidence=k.confidence,
+                normalized_term=k.normalized_term or k.raw_term,
+                normalization_status="normalized",
+            )
+            n += 1
+        return n
+
     def stats(self) -> dict[str, int]:
         return {
             "entities": len(self.entities),
@@ -297,6 +378,39 @@ class FakeVectorStore:
     def get_chunks_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
         wanted = set(chunk_ids)
         return [r for r in self.rows if r.get("chunk_id") in wanted]
+
+
+class FakeEmbedder:
+    """CR-36 테스트 대역: 용어를 '개념'별 직교 단위벡터로 임베딩.
+
+    같은 개념끼리는 코사인 1.0(임계값 초과 → 병합), 다른 개념은 0.0(비병합).
+    concept_of 미지정 용어는 자기 자신이 개념(= 단독 군집).
+    """
+
+    def __init__(
+        self,
+        concept_of: dict[str, str] | None = None,
+        dim: int = 32,
+        vectors: dict[str, list[float]] | None = None,
+    ) -> None:
+        self.concept_of = concept_of or {}
+        self.dim = dim
+        self.vectors = vectors or {}  # 명시적 벡터(chaining 등 세밀한 유사도 구성용)
+        self._concepts: dict[str, int] = {}
+
+    def embed_passages(self, texts: list[str]) -> Any:
+        import numpy as np
+
+        vlen = len(next(iter(self.vectors.values()))) if self.vectors else self.dim
+        out = np.zeros((len(texts), vlen), dtype=np.float32)
+        for i, t in enumerate(texts):
+            if t in self.vectors:
+                out[i, : len(self.vectors[t])] = self.vectors[t]
+                continue
+            concept = self.concept_of.get(t, t)
+            idx = self._concepts.setdefault(concept, len(self._concepts) % vlen)
+            out[i, idx] = 1.0
+        return out
 
 
 def make_row(

@@ -11,6 +11,7 @@ import asyncio
 import logging
 import re
 import time
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +40,17 @@ _GRAPH_SCORE_MAX = 0.90
 _PING_CACHE_SECONDS = 60.0
 _KNOWLEDGE_CATEGORY = "__knowledge__"
 
+# CR-36: 대규모 정규화 파라미터
+# - 전체 키워드 로드 상한 (구 5,000 캡 제거 — 수만 건 그래프 대응)
+# - 임베딩 코사인 유사도 임계값: 이 이상이면 같은 개념의 표기 변형으로 보고 묶는다.
+#   보수적으로 높게(근사 중복만 병합, 별개 개념 오병합 방지). 실데이터로 튜닝.
+_ALL_KEYWORDS_LIMIT = 200_000
+# bge-m3 실측 스윕(2026-07-21, 전체 코퍼스 technology 7,508용어): 0.65~0.70은 공유 접미사
+# ("X기술"/"Y분석")로 다른 개념이 섞이는 과병합 발생. 0.78에서 최대 군집이 전부 진짜 표기
+# 변형(예: "수확후 관리기술"↔"수확 후 관리 기술"↔"수확후관리")으로 깔끔해지면서도 역할당
+# 수천 용어를 병합(충분한 재현율). leader 군집화(비전이)와 fanout 필터와 함께 사용.
+_NORMALIZE_SIM_THRESHOLD = 0.78
+
 
 class GraphRagService:
     """그래프 인덱싱·검색 오케스트레이터."""
@@ -51,11 +63,13 @@ class GraphRagService:
         rag_service: Any,  # vector_search.RagService
         max_hops: int = 2,
         evidence_buffer: int = 5,
+        embedder: Any = None,  # CR-36: 대규모 정규화용 임베더 (없으면 LLM 경로 폴백)
     ) -> None:
         self._graph = graph_store
         self._vstore = vector_store
         self._extractor = extractor
         self._rag = rag_service
+        self._embedder = embedder
         self._max_hops = max_hops
 
         self._statuses: dict[str, IndexStatus] = {}
@@ -204,9 +218,7 @@ class GraphRagService:
         try:
             if is_note:
                 slug = doc_id.split(":", 1)[1] if ":" in doc_id else doc_id
-                await loop.run_in_executor(
-                    None, lambda: self._graph.upsert_note(slug, doc_name)
-                )
+                await loop.run_in_executor(None, lambda: self._graph.upsert_note(slug, doc_name))
             extraction = await self._extractor.extract_project(doc_id, doc_text)
             project = extraction.project
             if not project.title:
@@ -247,6 +259,28 @@ class GraphRagService:
             self.schedule_index_document(doc_id)
         return len(doc_ids)
 
+    async def reindex_missing(self) -> int:
+        """CR-35: 그래프에 아직 없는 문서만 인덱싱 스케줄 (증분 — 전량 재추출 방지).
+
+        LanceDB doc_id 집합에서 그래프에 이미 있는 Document doc_id를 뺀 차집합만
+        큐에 넣는다. 반환: 스케줄된(미인덱싱) 문서 수.
+        """
+        if not self.available:
+            return 0
+        loop = asyncio.get_running_loop()
+        vs_ids = set(await loop.run_in_executor(None, self._all_doc_ids))
+        graph_ids = set(await loop.run_in_executor(None, self._graph.existing_doc_ids))
+        missing = sorted(vs_ids - graph_ids)
+        for doc_id in missing:
+            self.schedule_index_document(doc_id)
+        logger.info(
+            "GraphRAG 증분 인덱싱: 벡터 %d / 그래프 %d / 미인덱싱 %d 스케줄",
+            len(vs_ids),
+            len(graph_ids),
+            len(missing),
+        )
+        return len(missing)
+
     def _all_doc_ids(self) -> list[str]:
         try:
             tbl = getattr(self._vstore, "_tbl", None)
@@ -286,7 +320,9 @@ class GraphRagService:
                 st.state = "cancelled"
                 st.error = "사용자 중단"
                 cancelled += 1
-        logger.info("GraphRAG 인덱싱 중단 요청: 대기 %d건 취소 (진행 중 문서는 완료 후 정지)", cancelled)
+        logger.info(
+            "GraphRAG 인덱싱 중단 요청: 대기 %d건 취소 (진행 중 문서는 완료 후 정지)", cancelled
+        )
         return cancelled
 
     async def clear_graph(self) -> dict[str, int]:
@@ -304,12 +340,21 @@ class GraphRagService:
 
     # ── CR-22 엔티티 정규화 ───────────────────────────────────────────────────
 
-    async def normalize_entities(self) -> dict[str, Any]:
-        """CR-30 키워드 정규화 후처리 — 노드 병합 없이 속성만 갱신.
+    async def normalize_entities(self, only_new: bool = True) -> dict[str, Any]:
+        """CR-30/36 키워드 정규화 후처리 — 노드 병합 없이 속성만 갱신.
 
-        같은 개념의 표기 변형(raw_term)을 역할별로 LLM이 묶으면, 해당 키워드
-        노드들의 normalized_term/status를 갱신한다. raw_term과 문서별 언급
-        노드는 보존된다 (전역 병합 금지 — 문맥별 의미 차이 보호).
+        같은 개념의 표기 변형(raw_term)을 역할별로 묶어 해당 키워드 노드들의
+        normalized_term/status를 갱신한다. raw_term과 문서별 언급 노드는 보존된다
+        (전역 병합 금지 — 문맥별 의미 차이 보호).
+
+        CR-36: 군집화 엔진 이원화. 임베더가 있으면 **임베딩 코사인 군집화**(수만 건
+        확장 — 구 LLM 300개 캡 제거), 없으면 LLM propose_merges 폴백(소규모·테스트).
+        전체 키워드를 로드한다(구 5,000 캡 제거).
+
+        CR-35 증분(only_new=True, 기본): 아직 정규화 안 된(status='raw') 키워드만
+        새 후보로 삼고, 기존 정규화 대표어(normalized_term)를 앵커로 함께 투입해 새
+        표기를 기존 군집에 붙인다. 갱신은 새 키워드에만 하고, 병합 안 된 새 키워드도
+        처리 완료로 표시해 다음 증분에서 제외한다. 전체 재정규화는 only_new=False.
 
         Returns: {"groups": [[대표, 변형...], ...], "merged": 갱신된 키워드 언급 수}
         """
@@ -317,8 +362,12 @@ class GraphRagService:
             return {"groups": [], "merged": 0, "error": "그래프 저장소 연결 불가"}
 
         loop = asyncio.get_running_loop()
+        # 전체 재정규화: 기존 normalized_term을 먼저 비워 재군집 결과만 남게 한다
+        # (병합 안 된 용어에 낡은 값이 남는 것 방지). 증분은 유지.
+        if not only_new:
+            await loop.run_in_executor(None, self._graph.reset_keyword_normalization)
         keywords: list[KeywordMention] = await loop.run_in_executor(
-            None, lambda: self._graph.all_keywords(5000)
+            None, lambda: self._graph.all_keywords(_ALL_KEYWORDS_LIMIT)
         )
         by_role: dict[str, list[KeywordMention]] = {}
         for k in keywords:
@@ -327,16 +376,51 @@ class GraphRagService:
         norm_groups: list[list[str]] = []
         updated_count = 0
         for role, kws in by_role.items():
-            distinct_terms = sorted({k.raw_term for k in kws})
-            if len(distinct_terms) < 2:
+            fresh = [k for k in kws if k.normalization_status != "normalized"]
+            pool = fresh if only_new else kws
+            term_freq = Counter(k.raw_term for k in pool)
+            new_terms = sorted(term_freq)
+
+            if only_new and not new_terms:
+                continue  # 새 키워드 없음 — 군집화 자체를 건너뜀
+            anchors = (
+                sorted(
+                    {
+                        k.normalized_term
+                        for k in kws
+                        if k.normalization_status == "normalized" and k.normalized_term
+                    }
+                )
+                if only_new
+                else []
+            )
+            anchor_set = set(anchors)
+
+            if len(new_terms) + len(anchors) < 2:
+                await self._mark_processed(loop, [k.id for k in pool], role)
                 continue
-            groups = await self._extractor.propose_merges(distinct_terms)
+
+            if self._embedder is not None:
+                groups = await self._cluster_terms(loop, new_terms, anchors, term_freq)
+            else:
+                cand = new_terms + [a for a in anchors if a not in set(new_terms)]
+                groups = await self._extractor.propose_merges(cand)
+
+            merged_terms: set[str] = set()
             for g in groups:
-                canonical = g[0]
-                # 그룹에 속한 raw_term의 모든 문서별 언급 id 수집 (노드는 그대로)
-                ids = [k.id for k in kws if k.raw_term in set(g)]
+                g_set = set(g)
+                # 대표어: 앵커가 있으면 그것(기존 군집 흡수), 없으면 최빈 용어.
+                # 빈도 동률은 그룹 순서 우선(LLM 그룹은 첫 원소가 대표 — 계약 유지).
+                canonical = next((m for m in g if m in anchor_set), None)
+                if canonical is None:
+                    best = -1
+                    for m in g:
+                        f = term_freq.get(m, 0)
+                        if f > best:
+                            best, canonical = f, m
+                ids = [k.id for k in pool if k.raw_term in g_set]
                 if not ids:
-                    continue
+                    continue  # 앵커만으로 이뤄진 군집 등 — 갱신 대상 없음
                 try:
                     n = await loop.run_in_executor(
                         None,
@@ -348,13 +432,95 @@ class GraphRagService:
                 if n > 0:
                     updated_count += n
                     norm_groups.append(g)
+                    merged_terms |= g_set
+
+            # 병합 안 된 용어도 처리 완료로 표시 (normalized_term←raw_term). 증분은
+            # 다음 회차에서 제외되고, 전체는 낡은 값 없이 raw로 채워진다.
+            leftover = [k.id for k in pool if k.raw_term not in merged_terms]
+            await self._mark_processed(loop, leftover, role)
 
         logger.info(
-            "GraphRAG 키워드 정규화 완료: 그룹 %d개, 언급 %d건 갱신 (노드 병합 없음)",
+            "GraphRAG 키워드 정규화 완료(only_new=%s, engine=%s): 그룹 %d개, 언급 %d건 갱신",
+            only_new,
+            "embed" if self._embedder is not None else "llm",
             len(norm_groups),
             updated_count,
         )
         return {"groups": norm_groups, "merged": updated_count}
+
+    async def _cluster_terms(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        new_terms: list[str],
+        anchors: list[str],
+        term_freq: "Counter[str]",
+    ) -> list[list[str]]:
+        """CR-36: 임베딩 코사인 leader 군집화 — 신규 용어 + 앵커를 함께 묶는다.
+
+        앵커(기존 대표어) → 최빈 신규 용어 순으로 정렬해 대표가 될 확률이 높은 것을
+        먼저 leader로 세운다. 반환: 크기 2 이상 군집(각 리스트 첫 원소=leader).
+        실패 시 빈 목록(예외 전파 금지).
+        """
+        ordered = list(anchors) + sorted(new_terms, key=lambda t: -term_freq.get(t, 0))
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for t in ordered:
+            if t not in seen:
+                seen.add(t)
+                uniq.append(t)
+        if len(uniq) < 2:
+            return []
+        try:
+            return await loop.run_in_executor(
+                None, lambda: self._embed_and_cluster(uniq, _NORMALIZE_SIM_THRESHOLD)
+            )
+        except Exception as exc:
+            logger.warning("임베딩 군집화 실패 (정규화 스킵): %s", exc)
+            return []
+
+    def _embed_and_cluster(self, terms: list[str], threshold: float) -> list[list[str]]:
+        """임베딩 후 **leader(대표) 군집화** — 각 용어를 클러스터 leader에만 직접 비교.
+
+        single-linkage(union-find)의 chaining(A~B~C 연쇄로 무관 용어까지 전이 병합)을
+        피하기 위해, 용어를 순서대로 훑으며 기존 leader 중 최대 유사도가 threshold 이상
+        이면 그 클러스터에 붙이고 아니면 새 leader로 삼는다. leader는 고정(드리프트로
+        인한 연쇄 방지). 입력 순서가 leader 우선순위이므로 호출자가 대표 후보를 앞에 둔다.
+
+        임베더는 정규화 벡터를 반환하지만 방어적으로 재정규화한다. 반환: 크기 2 이상 군집
+        (각 첫 원소=leader).
+        """
+        import numpy as np
+
+        vecs = np.asarray(self._embedder.embed_passages(terms), dtype=np.float32)
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        vecs = vecs / np.clip(norms, 1e-9, None)
+
+        n, d = vecs.shape
+        leader_mat = np.empty((n, d), dtype=np.float32)  # 채워진 leader 벡터
+        k = 0
+        clusters: list[list[str]] = []
+        for i in range(n):
+            v = vecs[i]
+            if k:
+                sims = leader_mat[:k] @ v
+                j = int(np.argmax(sims))
+                if sims[j] >= threshold:
+                    clusters[j].append(terms[i])
+                    continue
+            leader_mat[k] = v
+            k += 1
+            clusters.append([terms[i]])
+        return [c for c in clusters if len(c) >= 2]
+
+    async def _mark_processed(
+        self, loop: asyncio.AbstractEventLoop, ids: list[str], role: str
+    ) -> None:
+        if not ids:
+            return
+        try:
+            await loop.run_in_executor(None, lambda: self._graph.mark_keywords_processed(ids))
+        except Exception as exc:
+            logger.warning("정규화 처리표시 실패 (role=%s): %s", role, exc)
 
     # ── CR-30: 시험 인덱싱 모드 ──────────────────────────────────────────────
 
@@ -442,9 +608,7 @@ class GraphRagService:
             rows = await loop.run_in_executor(
                 None, lambda d=doc_id: self._vstore.get_chunks_by_doc_id(d, limit=2)
             )
-            norm = _GRAPH_SCORE_MIN + (_GRAPH_SCORE_MAX - _GRAPH_SCORE_MIN) * (
-                score / max_score
-            )
+            norm = _GRAPH_SCORE_MIN + (_GRAPH_SCORE_MAX - _GRAPH_SCORE_MIN) * (score / max_score)
             for row in rows:
                 hits.append(_row_to_hit(row, norm))
                 if len(hits) >= top_k:

@@ -1554,3 +1554,107 @@ write 트랜잭션(execute_write).
 **검증**: 단위 3건(키워드 신호로 제목에 없는 문서 검색·제목 일치·저장소 다운) +
 실서버 E2E — "유전체"로 검색 시 제목에 없는 "축산원 제3차 예비시험과제 PIS"가
 키워드 신호로 검색됨. 전체 495문서 그래프에서 확인.
+
+---
+
+## CR-34: 공유 키워드 기반 문서-문서 연관 엣지 — 방사형만 남은 그래프에 연결 복원
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-20)
+
+**배경**: CR-30에서 범용 엔티티(전역 MERGE로 여러 문서를 잇던 공유 노드)를 폐기하고
+Keyword를 문서 스코프 노드(doc_id::term::role)로 바꾸면서, 문서 간을 잇는 다리가
+구조적으로 사라졌다. 결과적으로 그래프 탭이 "문서 1개 + 그 키워드들"로 이루어진
+서로 분리된 별(star)들의 숲 — 방사형만 남고 과제 간 연계가 전혀 안 보임. RFP 문서들이
+실제로 독립적인 게 아니라, 스키마가 공유 관계를 **표현하지 않게 된** 트레이드오프였다.
+(정규화 기능은 normalized_term 속성만 갱신할 뿐 엣지를 만들지 않아, 정규화만으로는
+화면이 그대로였다.)
+
+**설계 원칙 유지**: 저장 스키마(문서 스코프 키워드, "문맥별 의미 보존")는 건드리지
+않는다. 노드 병합·전역 Term 허브 도입 없이 **조회(snapshot) 시점에만 파생 엣지**를
+계산한다.
+
+**구현**:
+- `Neo4jGraphStore.snapshot()` / `FakeGraphStore.snapshot()`: 같은 개념(정규화 용어
+  `normalized_term`, 없으면 `raw_term`)·같은 역할(role)을 공유하는 문서 쌍에
+  `kind="related"` 엣지 추가. weight = 공유한 (용어·역할) 수.
+- **IDF 성격 필터**: 한 용어를 `_RELATED_MAX_FANOUT`(=15)개 초과 문서가 공유하면
+  변별력 없는 흔한 용어로 보고 링크 제외 (허브 폭주·헤어볼 방지). 파생 엣지 총량은
+  `_RELATED_MAX_EDGES`(=4000) 상한(weight 큰 순).
+- **정규화 시너지**: normalize를 먼저 돌려 normalized_term이 채워지면 "AI"='인공지능'
+  변형까지 하나로 묶여 연결이 촘촘해진다. 정규화는 이 기능의 재료를 만드는 전제.
+- 프론트(GraphRagView): `related` 엣지 렌더 — 문서 톤(파랑) 실선, weight에 비례한
+  굵기. 개요에서도 옅게 보여 군집 구조를 드러내고, 핀·검색 시 선명. 범례에
+  "— 공유 키워드 연관" 추가. (핀 포커스는 기존 로직으로 연관 문서를 직접 이웃으로
+  이미 포함.)
+
+**검증**: 단위 7건(공유 시 연결·미공유 시 독립·weight 누적·정규화 브릿지·고팬아웃
+제외·역할 스코프) 전부 통과. 실 Neo4j 시드 E2E — d0-d1 weight2(디지털트윈+온실),
+d1-d2 정규화 브릿지(AI=인공지능) 연결, 공유 없는 d3는 고립 유지 확인 후 시드 삭제로
+DB 원상복구. 프론트 tsc 통과.
+
+---
+
+## CR-35: 증분 인덱싱 · 증분 정규화 — 전량 재처리 낭비 제거
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-20)
+
+**배경**: 임베딩(벡터)과 그래프 인덱싱은 이미 분리돼 있으나(`graphrag.auto_index`
+스위치), 수동 "재인덱싱" 버튼은 `reindex_all()`로 **벡터 스토어 전 문서를 다시** 돌리고
+`index_document()`는 이미 그래프에 있는 문서도 무조건 LLM 재추출한다(스킵 없음).
+정규화도 매번 `all_keywords(5000)` 전량을 역할별로 LLM에 다시 물린다. 새 문서 몇 건
+추가한 뒤에도 전체를 다시 처리하는 낭비 — 증분 경로가 없었다.
+
+**구현**:
+- **증분 인덱싱**: `GraphStore.existing_doc_ids()`(그래프의 Document doc_id) 추가 →
+  `GraphRagService.reindex_missing()` = 벡터 doc − 그래프 doc 차집합만 큐에 스케줄.
+  라우트 `POST /reindex {only_missing: true}`. 전체 재인덱싱(`only_missing:false`)은 유지.
+- **증분 정규화**: `normalize_entities(only_new=True, 기본)` — 아직 정규화 안 된
+  (status='raw') 키워드만 새 후보로, 기존 대표어(normalized_term)를 앵커로 함께 LLM에
+  투입해 신규 표기를 기존 군집에 흡수. 갱신은 새 키워드에만. 병합 안 된 새 키워드도
+  `mark_keywords_processed()`로 처리표시(normalized_term←raw_term, status='normalized')해
+  다음 증분에서 제외 → 재실행이 사실상 공짜. 라우트 `POST /normalize {only_new}`.
+- **auto_index**: 수동 유지(false). 프론트 그래프 탭에 증분 버튼 신설 —
+  "새 문서 인덱싱"(only_missing) / "정규화"(only_new) 를 액센트 강조(primary),
+  "전체 재인덱싱" / "전체 정규화" 는 보조 버튼. `barBtn()` 스타일 헬퍼 추가.
+
+**검증**: 단위 4건(existing_doc_ids·mark_processed / reindex_missing 차집합만 스케줄 /
+증분 정규화 앵커 흡수 / 새 키워드 없으면 LLM 스킵) + graph_rag 50건 전량 통과.
+실 Neo4j E2E(300문서 그래프) — existing_doc_ids=300, 증분 대상=벡터6464−300=6164로
+이미 인덱싱 문서 정확 제외, mark_keywords_processed 무손상. 증분 정규화 2회 연속:
+1차 23그룹·46건 갱신, 2차 0건·0.34초(새 키워드 없어 LLM 미호출) — 증분 스킵 실증.
+프론트 tsc·빌드 통과.
+
+---
+
+## CR-36: 정규화 대규모화 — 임베딩 leader 군집화 (LLM 300캡·5,000캡 제거)
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-21)
+
+**배경**: 전체 6,464문서(키워드 39,906)로 인덱싱한 뒤 CR-35 정규화가 48건만 갱신 —
+사실상 무력. 원인은 소규모용 하드캡 두 개: `all_keywords(5000)`(전체의 12%만 로드) +
+`propose_merges` LLM 입력 `[:300]`(역할당 수천 용어 중 300개만 비교). 연결의 거의 전부가
+raw_term 정확일치에서 나오고 표기 변형("AI"↔"인공지능")은 안 묶였다.
+
+**구현**:
+- **엔진 이원화**(`GraphRagService.normalize_entities`): 임베더가 있으면 임베딩 코사인
+  군집화, 없으면 기존 LLM `propose_merges` 폴백(소규모·테스트 무영향). 전체 키워드 로드
+  (`_ALL_KEYWORDS_LIMIT=200,000`).
+- **로컬 임베더 재사용**: `RagService.embedder` 프로퍼티 노출 → service_context에서
+  GraphRagService에 주입. bge-m3(로컬, 오프라인)로 용어 임베딩(`embed_passages`).
+- **leader(대표) 군집화**(`_embed_and_cluster`): 용어를 순서대로 훑으며 기존 leader 중
+  최대 코사인 유사도 ≥ 임계값이면 그 군집에, 아니면 새 leader. leader 고정. **single-
+  linkage union-find의 chaining(A~B~C 전이 병합) 회피가 핵심** — 초기 union-find 구현은
+  3만 용어에서 무관 용어("AI"·"3D프린팅"·"CRISPR")를 208개 blob으로 붕괴시켰다.
+- **임계값 0.78**(`_NORMALIZE_SIM_THRESHOLD`): 실측 스윕으로 결정. 0.65~0.70은 공유 접미사
+  ("X기술"/"Y분석")로 다른 개념 과병합, 0.78에서 최대 군집이 전부 진짜 표기 변형이 되며
+  역할당 수천 용어 병합. leader 군집화·fanout 필터와 함께.
+- **전체 재정규화 리셋**(`GraphStore.reset_keyword_normalization`): only_new=False면 기존
+  normalized_term을 먼저 비워 재군집 결과만 남긴다(낡은 값 잔존 방지). 병합 안 된 용어도
+  처리표시(normalized_term←raw_term). 증분(only_new)은 CR-35 그대로 유지.
+
+**검증**: 단위 8건 추가(임베딩 병합·별개 분리·300캡 초과 스케일 400용어·증분 앵커 흡수·
+**chaining 비전이 회귀**), graph_rag 54건 전량 통과. 실 Neo4j E2E(6,464문서 39,906키워드):
+전체 임베딩 정규화 5,383그룹·20,871건 갱신(94s), 그룹 전부 응집("유전자교정 기술"·"재배
+기술"·"친환경 방제기술"·"GWAS" 등 진짜 변형만). 문서-문서 연결 **raw만 9,281엣지·3,648
+문서(56%) → 정규화 29,754엣지·6,024문서(93%)** — 3배 개선, 과병합 없음. bge-m3 임계값
+스윕·pairwise 보정 기록. 전체 회귀 1,022 passed(무관한 test_config 2건 기존 실패).

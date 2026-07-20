@@ -41,6 +41,7 @@ class StatusResp(BaseModel):
 
 class ReindexReq(BaseModel):
     doc_id: str | None = None
+    only_missing: bool = False  # CR-35: 그래프에 없는 문서만 (증분)
 
 
 class ReindexResp(BaseModel):
@@ -124,7 +125,7 @@ async def reindex(request: Request, body: ReindexReq) -> ReindexResp:
     if body.doc_id:
         svc.schedule_index_document(body.doc_id)
         return ReindexResp(scheduled=True, count=1)
-    count = await svc.reindex_all()
+    count = await (svc.reindex_missing() if body.only_missing else svc.reindex_all())
     return ReindexResp(scheduled=True, count=count)
 
 
@@ -172,13 +173,21 @@ class NormalizeResp(BaseModel):
     merged: int
 
 
+class NormalizeReq(BaseModel):
+    only_new: bool = True  # CR-35: 아직 정규화 안 된 키워드만 (증분). False면 전체 재정규화
+
+
 @router.post("/normalize", response_model=NormalizeResp)
-async def normalize(request: Request) -> NormalizeResp:
-    """CR-22: 엔티티 정규화 — 표기 변형(정식명/약칭 등)을 LLM 제안으로 병합."""
+async def normalize(request: Request, body: NormalizeReq | None = None) -> NormalizeResp:
+    """CR-22/35: 키워드 정규화 — 표기 변형을 LLM 제안으로 묶어 normalized_term 갱신.
+
+    기본은 증분(only_new=True) — 새로 인덱싱된 키워드만 기존 대표어에 붙인다.
+    """
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
-    result = await svc.normalize_entities()
+    only_new = body.only_new if body is not None else True
+    result = await svc.normalize_entities(only_new=only_new)
     if result.get("error"):
         raise HTTPException(status_code=503, detail=str(result["error"]))
     return NormalizeResp(groups=result["groups"], merged=result["merged"])
