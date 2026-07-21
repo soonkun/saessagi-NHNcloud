@@ -900,3 +900,73 @@ web/dist·frontend(electron-vite) 빌드 통과. 앱 재시작 후 실제 열기
 (Content-Disposition)을 신뢰**하라 — 화면마다 넘기는 값(파일명 vs 제목)이 달라 한쪽만
 깨진다. (2) 확장자 없는 임시파일은 `shell.openPath`가 조용히 실패한다(에러 안 띄움).
 (3) 버튼 라벨은 실제 동작과 일치시킬 것("다운로드"라 쓰고 "열기"를 하면 사용자 혼란).
+
+---
+
+## E-62: 앱이 매 실행 pet 모드로 떠서 창 모드 사용자가 매번 토글 + 그래프 검색 드롭다운이 그래프 가림
+
+**날짜**: 2026-07-21
+**증상**: (1) 그래프 탭 검색 시 결과 드롭다운이 그래프 중앙을 가림. (2) 앱 재시작
+때마다 pet 모드(투명 전체화면)로 떴다가 창 모드로 전환됨 — 터미널에 `[PetMode]
+enable → state file not found → [PetMode] disable`. 창 모드로 쓰는 사용자는 매 실행
+수동 토글 필요. (터미널 "renderer config is missing"은 렌더러가 별도 web/dist라
+electron-vite에 renderer 설정이 없어서 나는 설계상 무해한 경고 — 오류 아님.)
+**원인**: (1) 검색 드롭다운(`position:absolute; right:0`)이 컨트롤 바 중앙-우측의
+검색 입력 기준으로 열려 그래프를 덮음. (2) `App.tsx`가 시작 시 `window.petMode.enable()`을
+**무조건** 호출(제품 기본 = 데스크톱 펫), 그런데 windowMode를 **영속화하지 않아** 창
+모드 선택이 기억되지 않음. disable을 자동 호출하는 코드는 없고(유일 호출=CharacterWidget
+토글), 터미널의 disable은 사용자가 매번 창 모드로 토글한 흔적.
+**수정**: (1) GraphRagView 검색 래퍼에 flex `order:99` — 컨트롤 바 최우측으로 보내
+드롭다운이 우측 끝에서 열리게(DOM 이동 없이 안전). (2) windowMode를 localStorage
+(`saessagi_window_mode`)에 영속화(store `setWindowMode`), 시작 시 `loadWindowMode()`로
+복원 — 저장이 "window"면 `disable()`(=창 모드 설정, **이미 검증된 토글 경로 재사용**),
+없거나 pet이면 `enable()`(제품 기본 유지). 위험한 window-manager.ts는 미변경.
+**검증**: web tsc·빌드 통과. 실제 동작(펫 플래시 제거·모드 기억)은 앱 재시작 후 확인
+필요 — 최초 1회 창 모드 토글이 저장된 다음 실행부터 창 모드로 바로 뜬다.
+**교훈**: (1) **모드/뷰 상태는 영속화해 마지막 선택을 기억**하라 — 매 실행 기본값
+강제는 반대 모드 사용자를 괴롭힌다. (2) pet 모드 startup은 window-manager.ts 대신
+**렌더러의 enable/disable(검증된 경로) 선택**으로 안전하게 제어 가능(E-21 위험 회피).
+(3) electron-vite "renderer config is missing"은 web/dist 분리 구조의 정상 경고.
+
+---
+
+## E-63: WSLg에서 문서 "열어보기"가 안 됨 — xdg-open/.hwpx 핸들러 부재
+
+**날짜**: 2026-07-21
+**증상**: 그래프/문서 탭에서 원본 "열어보기"를 눌러도 아무 일도 안 일어남. 다운로드
+엔드포인트는 200 정상(원본 존재).
+**원인**: E-61에서 파일명(확장자) 문제로 봤으나 그건 부차적이었다. **진짜 원인은
+실행 환경(WSLg)에 `xdg-open`도 `wslview`도 없고 `.hwpx` MIME 연결도 없다는 것** —
+`shell.openPath(dest)`가 열 수단이 없어 실패한다(한글은 Windows 앱). `command -v`로
+확인 시 `/mnt/c/WINDOWS/explorer.exe`만 존재.
+**수정**: main 프로세스에서 WSL 감지(`WSL_DISTRO_NAME` 또는 `/proc/version`의
+'microsoft') 후, 임시 사본 경로를 `wslpath -w`로 Windows 경로 변환해 `explorer.exe`로
+기본 앱(한글 등)에서 연다. 비-WSL은 기존 `shell.openPath` 유지. (E-61의 서버
+Content-Disposition 파일명 우선도 유지 — 확장자 정확성 보장.)
+**검증**: 다운로드 200 + Content-Disposition 확인, WSL 감지·explorer.exe 폴백 빌드 확인.
+실제 한글 실행은 사용자 GUI 확인 필요.
+**교훈**: **`shell.openPath` 실패는 조용하다(에러 안 띄움).** 실행 환경의 파일 연결
+가능 여부(xdg-open/mime/interop)를 먼저 확인할 것 — WSLg는 리눅스 앱이 아니라 Windows
+interop(explorer.exe)로 열어야 한다.
+
+---
+
+## E-64: 딥 리서치 — 레퍼런스 문서 중복 + 좁은 폭 + 표/마크다운 스타일 부재
+
+**날짜**: 2026-07-21
+**증상**: (1) 참고 자료가 같은 문서인데 [1]/[21]/[23]처럼 2~3번 중복 표시. (2) 결과
+패널이 오른쪽 끝까지 안 늘어나고(좁음) 우측 여백 큼. (3) 표가 테두리 없이 깨져 보이고
+전반적 가독성 저하.
+**원인**: (1) `DeepResearchService._merge_hits`가 chunk_id 기준으로 모아, 같은 문서의
+여러 청크가 각각 참고자료 번호를 차지. (2) `DeepResearchView`의 컨테이너 `maxWidth:920`
+(desktop)이 폭을 과하게 제한. (3) 마크다운 본문 클래스 `.md-body`에 **CSS 규칙이 전혀
+없어** 표·제목·목록이 브라우저 기본값으로 렌더(표 테두리 없음).
+**수정**: (1) `_rank_sources`를 doc_id별 최고 score 청크 1개로 중복 제거 → 참고자료·인용
+번호가 문서 단위. (2) `maxWidth` 920→1400. (3) `index.css`에 `.md-body` 규칙 추가
+(제목·문단·목록·코드·인용·표 테두리/헤더/줄무늬), 넓은 표는 `.md-table-wrap`(overflow-x)
+컨테이너로 감싸 본문 레이아웃 보호(ReactMarkdown `components.table`).
+**검증**: deep_research 단위 13건 통과(중복 제거 신규 테스트 포함 — 같은 문서 2청크→1건,
+최고 score 대표). web tsc·빌드 통과. 실제 표 렌더는 사용자 GUI 확인 필요.
+**교훈**: **참고자료/인용은 청크가 아니라 문서 단위로 집계**할 것(RAG는 한 문서를 여러
+청크로 쪼갬). 마크다운 렌더 컨테이너에는 표·목록 CSS를 반드시 갖출 것(GFM 파싱만으론
+테두리가 안 생긴다).

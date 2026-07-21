@@ -2,6 +2,8 @@
 import { app, ipcMain, globalShortcut, desktopCapturer, screen, shell, dialog, net } from "electron";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
 import { promises as fsp } from "fs";
+import { readFileSync } from "fs";
+import { execFile } from "child_process";
 import * as path from "path";
 import { WindowManager } from "./window-manager";
 import { MenuManager } from "./menu-manager";
@@ -17,6 +19,28 @@ const logger = {
   info: (...args: unknown[]): void => { console.info('[M_12]', ...args); },
   warn: (...args: unknown[]): void => { console.warn('[M_12]', ...args); },
 };
+
+// WSL(WSLg) 감지 — 이 환경엔 xdg-open/.hwpx 연결이 없어 shell.openPath로 문서를 못 연다.
+const isWSL = process.platform === 'linux' && (
+  !!process.env.WSL_DISTRO_NAME ||
+  (() => {
+    try { return readFileSync('/proc/version', 'utf8').toLowerCase().includes('microsoft'); }
+    catch { return false; }
+  })()
+);
+
+// WSL: 리눅스 임시 파일을 Windows 경로로 변환해 explorer.exe로 기본 앱(한글 등)에서 연다.
+// explorer.exe는 성공해도 exit 1을 반환하므로 예외만 없으면 성공으로 간주.
+function openViaWindows(linuxPath: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile('wslpath', ['-w', linuxPath], (err, stdout) => {
+      const winPath = (stdout || '').trim();
+      if (err || !winPath) { resolve(false); return; }
+      execFile('explorer.exe', [winPath], () => undefined);
+      resolve(true);
+    });
+  });
+}
 
 // WSLg 등 리눅스 환경에서 GPU 프로세스 초기화가 실패하면(viz_main_impl "Exiting GPU
 // process") 투명 프레임리스 창이 화면에 그려지지 않는다. 소프트웨어 렌더링으로 전환.
@@ -305,6 +329,11 @@ function setupIPC(): void {
     await fsp.writeFile(dest, buf);
 
     logger.info(`[Shell] openDocument -> ${dest}`);
+    // WSLg에는 .hwpx를 열 리눅스 앱/xdg-open이 없어 shell.openPath가 실패한다.
+    // Windows explorer.exe로 기본 앱(한글 등)에서 연다.
+    if (isWSL && await openViaWindows(dest)) {
+      return '';
+    }
     return shell.openPath(dest);
   });
 

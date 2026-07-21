@@ -696,3 +696,37 @@ async def test_normalize_embedding_no_chaining() -> None:
     kws = {k.raw_term: k for k in graph.all_keywords()}
     assert kws["termA"].normalized_term == kws["termB"].normalized_term  # 직접 유사 → 병합
     assert kws["termC"].normalized_term != kws["termA"].normalized_term  # 연쇄 병합 안 됨
+
+
+# ── CR-37: 문서 중심 포커스 서브그래프 ────────────────────────────────────────
+
+
+def test_doc_focus_snapshot_center_keywords_and_connections() -> None:
+    """중심 문서 + 그 키워드 + 공유 키워드로 이어진 문서만 포함(무관 문서 제외)."""
+    g = FakeGraphStore()
+    g.upsert_project_bundle(
+        ProjectInfo(doc_id="d1", title="센터"),
+        [_kw("d1", "디지털트윈"), _kw("d1", "센서", role="problem")],
+    )
+    g.upsert_project_bundle(ProjectInfo(doc_id="d2", title="연결"), [_kw("d2", "디지털트윈")])
+    g.upsert_project_bundle(ProjectInfo(doc_id="d3", title="무관"), [_kw("d3", "스마트팜")])
+    snap = g.doc_focus_snapshot("d1")
+    node_ids = {n.id for n in snap.nodes}
+    assert "d1" in node_ids and "d2" in node_ids and "d3" not in node_ids
+    assert any(n.kind == "keyword" for n in snap.nodes)  # 중심 문서 키워드 포함
+    related = [e for e in snap.edges if e.kind == "related"]
+    assert any({e.source, e.target} == {"d1", "d2"} for e in related)
+    assert any(e.kind == "has_keyword" and e.source == "d1" for e in snap.edges)
+
+
+def test_doc_focus_snapshot_missing_doc_empty() -> None:
+    """존재하지 않는 문서 → 빈 스냅샷."""
+    assert FakeGraphStore().doc_focus_snapshot("nope").nodes == []
+
+
+@pytest.mark.asyncio
+async def test_doc_focus_service_store_down_empty() -> None:
+    """저장소 다운 → 빈 스냅샷(예외 없음)."""
+    svc, _, _ = _make_service(graph=FakeGraphStore(alive=False))
+    snap = await svc.doc_focus("d1")
+    assert snap.nodes == [] and snap.edges == []

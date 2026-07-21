@@ -71,6 +71,12 @@ function loadTheme(): ThemeMode {
   return localStorage.getItem("saessagi_theme") === "dark" ? "dark" : "light";
 }
 
+// 마지막 사용 창 모드 — 저장이 "window"면 창 모드, 없거나 그 외면 pet(제품 기본).
+// 창 모드 사용자가 매 실행마다 pet으로 떴다 토글하지 않도록 기억한다.
+function loadWindowMode(): "pet" | "window" {
+  return localStorage.getItem("saessagi_window_mode") === "window" ? "window" : "pet";
+}
+
 // UI 글씨 크기 배율 (CSS zoom). 캐릭터(Live2D)에는 적용하지 않음.
 export const UI_SCALE_OPTIONS = [
   { label: "작게", value: 0.9 },
@@ -324,7 +330,7 @@ export const useStore = create<AppStore>((set, get) => ({
   ttsRate: loadTtsRate(),
   ttsVoiceName: loadTtsVoiceName(),
   ttsEngine: loadTtsEngine(),
-  windowMode: "pet" as "pet" | "window",
+  windowMode: loadWindowMode(),
   llmInfo: loadLlmInfo(),
   selectedNoteSlug: null as string | null,
   notesRevision: 0,
@@ -339,7 +345,14 @@ export const useStore = create<AppStore>((set, get) => ({
   toggleChat: () => set((state) => ({ chatOpen: !state.chatOpen })),
   setChatOpen: (open) => set({ chatOpen: open }),
   setChatTab: (tab) => set({ chatTab: tab }),
-  setWindowMode: (mode) => set({ windowMode: mode }),
+  setWindowMode: (mode) => {
+    try {
+      localStorage.setItem("saessagi_window_mode", mode);
+    } catch {
+      /* localStorage 불가 환경 무시 */
+    }
+    set({ windowMode: mode });
+  },
   setLlmInfo: (info) => {
     try {
       if (info) localStorage.setItem("saessagi_llm_info", JSON.stringify(info));

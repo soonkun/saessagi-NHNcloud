@@ -99,6 +99,21 @@ async def get_graph(request: Request, limit: int = 500, types: str = "") -> Grap
     return _snapshot_to_resp(snap, stats)
 
 
+@router.get("/doc-focus", response_model=GraphResp)
+async def get_doc_focus(request: Request, doc_id: str, limit: int = 40) -> GraphResp:
+    """CR-37: 한 문서 중심 포커스 서브그래프 — 검색→선택 시 그 과제와 연결만 로드."""
+    svc = _get_service(request)
+    if not svc.available:
+        raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    try:
+        snap = await svc.doc_focus(doc_id, limit=limit)
+        stats = await svc.stats()
+    except Exception as exc:
+        logger.error(f"graphrag /doc-focus 실패: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    return _snapshot_to_resp(snap, stats)
+
+
 @router.get("/status", response_model=StatusResp)
 async def get_status(request: Request) -> StatusResp:
     ctx = _get_context(request)

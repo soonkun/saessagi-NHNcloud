@@ -191,6 +191,42 @@ class FakeGraphStore(GraphStore):
 
         return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
 
+    def doc_focus_snapshot(self, doc_id: str, limit: int = 40) -> GraphSnapshot:
+        # CR-37: 중심 문서 + 키워드 + 공유 키워드로 이어진 문서 (Neo4j와 동일 계약)
+        proj = self.projects.get(doc_id)
+        if proj is None:
+            return GraphSnapshot(nodes=[], edges=[])
+        nodes: dict[str, GraphNode] = {}
+        edges: list[GraphEdge] = []
+        label = proj.title or self.documents.get(doc_id, {}).get("name") or doc_id
+        nodes[doc_id] = GraphNode(id=doc_id, label=label, kind="document")
+        my_terms: set[tuple[str, str]] = set()
+        for k in self.keywords.values():
+            if k.doc_id != doc_id:
+                continue
+            nodes[k.id] = GraphNode(
+                id=k.id, label=k.normalized_term or k.raw_term, kind="keyword", type=k.role
+            )
+            edges.append(GraphEdge(source=doc_id, target=k.id, kind="has_keyword"))
+            term = (k.normalized_term or k.raw_term).casefold()
+            if len(term) >= 2:
+                my_terms.add((term, k.role))
+        shared: dict[str, int] = {}
+        for k in self.keywords.values():
+            if k.doc_id == doc_id:
+                continue
+            term = (k.normalized_term or k.raw_term).casefold()
+            if (term, k.role) in my_terms:
+                shared[k.doc_id] = shared.get(k.doc_id, 0) + 1
+        for did, w in sorted(shared.items(), key=lambda kv: -kv[1])[:limit]:
+            p2 = self.projects.get(did)
+            if did not in nodes:
+                nodes[did] = GraphNode(
+                    id=did, label=(p2.title if p2 else did) or did, kind="document"
+                )
+            edges.append(GraphEdge(source=doc_id, target=did, kind="related", weight=float(w)))
+        return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
+
     def delete_by_doc_id(self, doc_id: str) -> None:
         self.documents.pop(doc_id, None)
         self.notes.pop(doc_id, None)

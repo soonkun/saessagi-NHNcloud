@@ -224,7 +224,7 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
         display: "flex",
         flexDirection: "column",
         gap: 14,
-        maxWidth: desktop ? 920 : undefined,
+        maxWidth: desktop ? 1400 : undefined,
       }}
     >
       <div>
@@ -494,7 +494,20 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
             </ResultBtn>
           </div>
           <div className="md-body" style={{ fontSize: "var(--fs-13)", lineHeight: 1.7 }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{report}</ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                // 넓은 표는 가로 스크롤 컨테이너로 감싸 레이아웃을 깨지 않게 한다
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                table: ({ node, ...props }) => (
+                  <div className="md-table-wrap">
+                    <table {...props} />
+                  </div>
+                ),
+              }}
+            >
+              {report}
+            </ReactMarkdown>
           </div>
 
           {sources.length > 0 && (

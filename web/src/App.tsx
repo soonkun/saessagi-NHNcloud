@@ -54,19 +54,26 @@ export function App(): React.ReactElement {
     connect(wsUrl);
   }, [wsUrl]);
 
-  // Electron pet 모드 초기화 — 앱 시작 시 즉시 투명 전체화면으로 전환
+  // Electron 창 모드 초기화 — 마지막 사용 모드를 복원.
+  // 창(window) 모드 사용자는 창 모드로 바로 뜬다(매 실행 pet→토글 반복 제거).
+  // 저장이 없거나 pet이면 pet 모드(제품 기본: 투명 전체화면 데스크톱 펫).
   useEffect(() => {
     if (!window.petMode) return;
 
     // pre-mode-changed 수신 → renderer-ready-for-mode-change 즉시 응답
-    // (continueSetWindowModePet을 트리거하기 위해 필요)
+    // (continueSetWindowMode{Pet,Window}를 트리거하기 위해 필요)
     const ipc = (window as any).electron?.ipcRenderer;
     const ack = (_e: unknown, mode: string): void => {
       ipc?.send("renderer-ready-for-mode-change", mode);
     };
     ipc?.on("pre-mode-changed", ack);
 
-    void window.petMode.enable();
+    // useStore.getState()로 초기 저장값 조회 (effect는 1회만 실행)
+    if (useStore.getState().windowMode === "window") {
+      void window.petMode.disable();
+    } else {
+      void window.petMode.enable();
+    }
 
     return () => {
       ipc?.removeListener("pre-mode-changed", ack);

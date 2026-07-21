@@ -388,6 +388,66 @@ class Neo4jGraphStore(GraphStore):
 
         return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
 
+    def doc_focus_snapshot(self, doc_id: str, limit: int = 40) -> GraphSnapshot:
+        """CR-37: 한 문서 중심의 포커스 서브그래프 — 전체 스냅샷 상한과 무관하게
+        그 과제와 연결을 항상 로드한다(대규모 그래프에서 검색 대상이 항상 표시되게).
+
+        구성: 중심 문서 + 그 키워드(has_keyword) + 공유 키워드로 이어진 문서(related,
+        상위 limit개). 검색→선택 시 이 뷰로 교체해 '그 과제와 연관만 표시'를 보장.
+        """
+        nodes: dict[str, GraphNode] = {}
+        edges: list[GraphEdge] = []
+        term_expr = (
+            "CASE WHEN k.normalized_term IS NULL OR k.normalized_term = '' "
+            "THEN toLower(k.raw_term) ELSE toLower(k.normalized_term) END"
+        )
+        # 중심 문서 + 키워드
+        for row in self._run(
+            "MATCH (d:Document {doc_id: $doc_id}) "
+            "OPTIONAL MATCH (d)-[:HAS_KEYWORD]->(k:Keyword) "
+            "RETURN coalesce(d.title, d.name, d.doc_id) AS dlabel, "
+            "  k.id AS kid, k.raw_term AS kterm, k.role AS krole, "
+            "  coalesce(k.normalized_term, '') AS knorm",
+            doc_id=doc_id,
+        ):
+            if doc_id not in nodes:
+                nodes[doc_id] = GraphNode(
+                    id=doc_id, label=str(row["dlabel"] or doc_id), kind="document"
+                )
+            if row["kid"]:
+                kid = str(row["kid"])
+                if kid not in nodes:
+                    nodes[kid] = GraphNode(
+                        id=kid,
+                        label=str(row["knorm"] or row["kterm"]),
+                        kind="keyword",
+                        type=str(row["krole"]),
+                    )
+                edges.append(GraphEdge(source=doc_id, target=kid, kind="has_keyword"))
+        if doc_id not in nodes:
+            return GraphSnapshot(nodes=[], edges=[])  # 문서 없음
+        # 공유 키워드(정규화 용어·동일 역할)로 이어진 문서 — 상위 limit개
+        for row in self._run(
+            "MATCH (d:Document {doc_id: $doc_id})-[:HAS_KEYWORD]->(k:Keyword) "
+            f"WITH {term_expr} AS term, k.role AS role WHERE size(term) >= 2 "
+            "MATCH (d2:Document)-[:HAS_KEYWORD]->(k2:Keyword) "
+            "  WHERE d2.doc_id <> $doc_id AND k2.role = role "
+            "  AND (CASE WHEN k2.normalized_term IS NULL OR k2.normalized_term = '' "
+            "       THEN toLower(k2.raw_term) ELSE toLower(k2.normalized_term) END) = term "
+            "WITH d2, count(DISTINCT term) AS shared "
+            "RETURN d2.doc_id AS did, coalesce(d2.title, d2.name, d2.doc_id) AS dlabel, shared "
+            "ORDER BY shared DESC LIMIT $limit",
+            doc_id=doc_id,
+            limit=limit,
+        ):
+            did = str(row["did"])
+            if did not in nodes:
+                nodes[did] = GraphNode(id=did, label=str(row["dlabel"] or did), kind="document")
+            edges.append(
+                GraphEdge(source=doc_id, target=did, kind="related", weight=float(row["shared"]))
+            )
+        return GraphSnapshot(nodes=list(nodes.values()), edges=edges)
+
     def all_entities(self, limit: int = 2000) -> list[Entity]:
         rows = self._run(
             "MATCH (e:Entity) "

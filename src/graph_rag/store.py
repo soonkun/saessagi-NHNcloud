@@ -68,6 +68,14 @@ class GraphStore(ABC):
         """그래프 탭용 전체 스냅샷 (노드 수 상한)."""
 
     @abstractmethod
+    def doc_focus_snapshot(self, doc_id: str, limit: int = 40) -> GraphSnapshot:
+        """CR-37: 한 문서 중심 포커스 서브그래프 (전체 스냅샷 상한과 무관).
+
+        중심 문서 + 그 키워드 + 공유 키워드로 이어진 문서(상위 limit개)를 반환.
+        대규모 그래프에서 검색 대상이 스냅샷에 없어도 항상 표시되게 한다.
+        """
+
+    @abstractmethod
     def delete_by_doc_id(self, doc_id: str) -> None:
         """문서/노트와 소속 청크 삭제 + 고아 엔티티 정리."""
 

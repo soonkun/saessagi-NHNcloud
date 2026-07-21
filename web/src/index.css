@@ -189,3 +189,53 @@ body {
 .spin {
   animation: spin 0.8s linear infinite;
 }
+
+/* ── 딥 리서치 마크다운 본문 (.md-body) — 표·제목·목록 가독성 ── */
+.md-body > :first-child { margin-top: 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  margin: 16px 0 8px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+.md-body h1 { font-size: var(--fs-18); }
+.md-body h2 { font-size: var(--fs-16); border-bottom: 1px solid var(--color-border); padding-bottom: 4px; }
+.md-body h3 { font-size: var(--fs-15); }
+.md-body h4 { font-size: var(--fs-14); }
+.md-body p { margin: 8px 0; }
+.md-body ul, .md-body ol { margin: 8px 0; padding-left: 22px; }
+.md-body li { margin: 3px 0; }
+.md-body li > p { margin: 2px 0; }
+.md-body strong { font-weight: 700; }
+.md-body code {
+  background: var(--color-msg-human);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.92em;
+}
+.md-body pre {
+  background: var(--color-msg-human);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.md-body pre code { background: none; padding: 0; }
+.md-body blockquote {
+  margin: 8px 0;
+  padding: 2px 12px;
+  border-left: 3px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+.md-body hr { border: none; border-top: 1px solid var(--color-border); margin: 16px 0; }
+/* 넓은 표는 가로 스크롤 컨테이너 안에서만 넘치게 (본문 레이아웃 보호) */
+.md-body .md-table-wrap { overflow-x: auto; margin: 10px 0; }
+.md-body table { border-collapse: collapse; width: 100%; font-size: var(--fs-12); }
+.md-body th, .md-body td {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.md-body th { background: var(--color-panel); font-weight: 700; }
+.md-body tr:nth-child(even) td { background: rgba(128, 128, 128, 0.05); }

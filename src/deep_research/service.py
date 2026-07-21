@@ -297,8 +297,16 @@ class DeepResearchService:
 
     @staticmethod
     def _rank_sources(pool: dict[str, SearchHit]) -> list[SearchHit]:
-        """score 내림차순 + 청크 수 상한."""
-        ranked = sorted(pool.values(), key=lambda h: h.score, reverse=True)
+        """문서(doc_id)별 최고 score 청크 1개로 중복 제거 → score 내림차순 + 상한.
+
+        같은 문서의 여러 청크가 각각 참고자료 번호를 차지해 중복 표시되던 문제 방지
+        (레퍼런스·인용 번호를 문서 단위로 정렬)."""
+        best: dict[str, SearchHit] = {}
+        for h in pool.values():
+            cur = best.get(h.doc_id)
+            if cur is None or h.score > cur.score:
+                best[h.doc_id] = h
+        ranked = sorted(best.values(), key=lambda h: h.score, reverse=True)
         return ranked[:_MAX_EVIDENCE_CHUNKS]
 
     @staticmethod

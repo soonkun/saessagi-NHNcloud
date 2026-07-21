@@ -723,6 +723,15 @@ class GraphRagService:
             None, lambda: self._graph.snapshot(limit=limit, entity_types=entity_types)
         )
 
+    async def doc_focus(self, doc_id: str, limit: int = 40) -> GraphSnapshot:
+        """CR-37: 한 문서 중심 포커스 서브그래프 (검색→선택 시 그 과제와 연결만 표시)."""
+        if not self.available:
+            return GraphSnapshot(nodes=[], edges=[])
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: self._graph.doc_focus_snapshot(doc_id, limit=limit)
+        )
+
     async def stats(self) -> dict[str, int]:
         loop = asyncio.get_running_loop()
         try:

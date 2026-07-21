@@ -20,6 +20,7 @@ import {
   cancelGraphIndexing,
   clearGraph,
   fetchGraphEvidence,
+  fetchGraphDocFocus,
   fetchGraphRag,
   fetchGraphRagStatus,
   openDocument,
@@ -130,6 +131,9 @@ export default function GraphRagView(): React.ReactElement {
   const [reindexing, setReindexing] = useState(false);
   const [search, setSearch] = useState("");
   const [docMatches, setDocMatches] = useState<GraphDocMatch[]>([]);
+  // CR-37: 검색→선택 시 그 문서 중심 포커스 서브그래프로 교체 (전체 스냅샷 상한 우회)
+  const [focusDocId, setFocusDocId] = useState<string | null>(null);
+  const pendingFocusRef = useRef<string | null>(null);
   const [normalizing, setNormalizing] = useState(false);
   const [normResult, setNormResult] = useState<string>("");
   // CR-26: 초기화 확인 모달
@@ -349,6 +353,11 @@ export default function GraphRagView(): React.ReactElement {
     if (!set || set.size === 0) return;
     const t = setTimeout(() => {
       fgRef.current?.zoomToFit(500, 90, (n) => set.has((n as RFNode).id));
+      // 단일 노드 등 소수 집합에서 zoomToFit이 과도하게 확대되는 것 방지 — 상한 적용
+      setTimeout(() => {
+        const fg = fgRef.current;
+        if (fg && fg.zoom() > 2.0) fg.zoom(2.0, 300);
+      }, 560);
     }, 260);
     return () => clearTimeout(t);
   }, [searchSet, focusSet]);
@@ -419,6 +428,51 @@ export default function GraphRagView(): React.ReactElement {
     }, 250);
     return () => clearInterval(t);
   }, [graphPinDocs, byId, chatTab, pinNode, clearGraphPinDocs]);
+
+  // CR-37: 검색→선택 시 그 문서 중심 포커스 서브그래프를 불러와 교체 (스냅샷 상한 우회)
+  const focusOnDoc = useCallback((docId: string) => {
+    void fetchGraphDocFocus(docId)
+      .then((sub) => {
+        pendingFocusRef.current = docId;
+        didFitRef.current = false; // 새 데이터에 다시 zoomToFit
+        pinnedRef.current.clear();
+        setFocusDocId(docId);
+        setData(sub);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  // 포커스 데이터 로드 후 중심 문서에 좌표가 잡히면 핀+선택+카메라 이동
+  useEffect(() => {
+    if (!pendingFocusRef.current) return;
+    let tries = 0;
+    const t = setInterval(() => {
+      tries += 1;
+      const want = pendingFocusRef.current;
+      const n = want ? byId.get(want) : undefined;
+      if (n && n.x !== undefined && n.y !== undefined) {
+        clearInterval(t);
+        pendingFocusRef.current = null;
+        if (!pinnedRef.current.has(n.id)) pinNode(n);
+        setSelected(n);
+        fgRef.current?.centerAt(n.x, n.y, 500);
+      } else if (tries > 30) {
+        clearInterval(t);
+        pendingFocusRef.current = null;
+      }
+    }, 200);
+    return () => clearInterval(t);
+  }, [focusDocId, byId, pinNode]);
+
+  // CR-37: 포커스 해제 → 전체 개요 그래프 복귀
+  const exitFocus = useCallback(() => {
+    setFocusDocId(null);
+    setSelected(null);
+    pinnedRef.current.clear();
+    setPinnedVersion((v) => v + 1);
+    didFitRef.current = false;
+    void load();
+  }, [load]);
 
   // 핀 꽂힌 문서·노트 (범위 리서치 대상)
   const pinnedDocNodes = useMemo(() => {
@@ -561,8 +615,8 @@ export default function GraphRagView(): React.ReactElement {
         })}
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          {/* 노드 검색 — 선택 시 해당 노드로 이동+핀 */}
-          <div style={{ position: "relative" }}>
+          {/* 노드 검색 — 컨트롤 바 최우측(order:99)에 두어 드롭다운이 그래프를 안 가리게 */}
+          <div style={{ position: "relative", order: 99 }}>
             <Search
               size={12}
               style={{
@@ -625,9 +679,9 @@ export default function GraphRagView(): React.ReactElement {
                   <button
                     key={d.doc_id}
                     onClick={() => {
-                      // 로드된 그래프에 있으면 이동+핀, 없으면(스냅샷 상한) 원본 열기
-                      if (byId.has(d.doc_id)) focusNodeById(d.doc_id);
-                      else openDocument(d.doc_id, d.title);
+                      // CR-37: 그 문서 중심 포커스 서브그래프로 교체 (스냅샷 상한 우회 —
+                      // 대규모 그래프에서 검색 대상이 항상 표시된다)
+                      focusOnDoc(d.doc_id);
                       setSearch("");
                     }}
                     style={{
@@ -1305,12 +1359,12 @@ export default function GraphRagView(): React.ReactElement {
           />
         )}
 
-        {/* CR-21: 상세 패널 (문서=다운로드, 노트=열기, 공통=연결 칩) */}
+        {/* CR-21: 상세 패널 — 좌측 배치(우측 최상단 검색 드롭다운과 겹침 방지) */}
         {selected && (
           <div
             style={{
               position: "absolute",
-              right: 10,
+              left: 10,
               top: 10,
               width: 250,
               maxHeight: "calc(100% - 60px)",
@@ -1451,6 +1505,35 @@ export default function GraphRagView(): React.ReactElement {
               </>
             )}
           </div>
+        )}
+
+        {/* CR-37: 포커스 모드 — 전체 그래프로 복귀 버튼 (상단 중앙) */}
+        {focusDocId && (
+          <button
+            onClick={exitFocus}
+            title="전체 개요 그래프로 돌아가기"
+            style={{
+              position: "absolute",
+              top: 12,
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 15,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              fontSize: "var(--fs-12)",
+              padding: "5px 12px",
+              borderRadius: 8,
+              border: `1px solid ${accent}`,
+              background: isDark ? "rgba(22,24,28,0.92)" : "rgba(255,255,255,0.95)",
+              color: "var(--color-text)",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
+            }}
+          >
+            <Network size={13} style={{ color: accent }} /> 전체 그래프로 돌아가기
+          </button>
         )}
 
         {/* 좌하단 범례 + 조작 힌트 */}

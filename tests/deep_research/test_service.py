@@ -165,12 +165,24 @@ class TestPipeline:
     @pytest.mark.asyncio
     async def test_gap_queries_extend_search(self) -> None:
         agent = FakeAgent(plan_queries=["q1"], gap_queries=["보완질의"])
-        graph = FakeGraphRag({"q1": [_hit("c1")], "보완질의": [_hit("c2")]})
+        # 서로 다른 문서 → 참고자료 2건 (gap 질의가 새 문서를 추가)
+        graph = FakeGraphRag({"q1": [_hit("c1", doc="문서A")], "보완질의": [_hit("c2", doc="문서B")]})
         svc = DeepResearchService(agent, FakeRag([]), graph)
 
         done = (await _collect(svc.run("discovery", "분야")))[-1]
         assert "보완질의" in done["sub_queries"]
         assert len(done["sources"]) == 2
+
+    async def test_sources_deduped_by_document(self) -> None:
+        """같은 문서의 여러 청크는 참고자료 1건으로 (최고 score 대표)."""
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag(
+            {"q1": [_hit("c1", doc="문서A", score=0.7), _hit("c2", doc="문서A", score=0.9)]}
+        )
+        svc = DeepResearchService(agent, FakeRag([]), graph)
+        done = (await _collect(svc.run("discovery", "분야")))[-1]
+        assert len(done["sources"]) == 1  # 두 청크 → 한 문서
+        assert done["sources"][0]["score"] == 0.9  # 최고 score 대표
 
 
 class TestGuards:

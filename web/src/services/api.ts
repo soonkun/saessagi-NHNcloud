@@ -311,6 +311,12 @@ export async function fetchGraphRagStatus(): Promise<GraphRagStatus> {
   return apiFetch<GraphRagStatus>("/api/graphrag/status");
 }
 
+// CR-37: 한 문서 중심 포커스 서브그래프 (검색→선택 시 그 과제와 연결만)
+export async function fetchGraphDocFocus(docId: string, limit = 40): Promise<GraphRagData> {
+  const q = new URLSearchParams({ doc_id: docId, limit: String(limit) });
+  return apiFetch<GraphRagData>(`/api/graphrag/doc-focus?${q.toString()}`);
+}
+
 // CR-35: onlyMissing=true면 그래프에 없는 문서만 인덱싱 (증분)
 export async function requestGraphReindex(
   docId?: string,
