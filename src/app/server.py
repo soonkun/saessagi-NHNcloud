@@ -52,6 +52,15 @@ class AppWebSocketServer:
             allow_headers=["*"],
         )
 
+        # M_21 (CR-38): 웹 UI 인증. 라우터 등록보다 먼저 미들웨어를 걸어 HTTP·정적파일·
+        # WebSocket을 한 번에 덮는다. /client-ws가 빠지면 대화·TTS가 통째로 무인증이 된다.
+        self._init_web_auth()
+
+        # 인증 라우트 (로그인 페이지·로그인·로그아웃) — 미들웨어가 면제하는 경로
+        from .auth_routes import router as auth_router
+
+        self.app.include_router(auth_router)
+
         # AppWebSocketHandler 주입된 /client-ws 라우터 등록
         self.app.include_router(init_app_ws_route(default_context_cache=self.default_context_cache))
 
@@ -107,19 +116,18 @@ class AppWebSocketServer:
                 f"새싹이 아바타 디렉토리 없음, /avatars 마운트 건너뜀: {saessagi_avatar_dir}"
             )
 
-        # 프론트엔드 — web/dist → frontend/dist → CWD/frontend 순으로 탐색
+        # 프론트엔드 — web/dist (CR-38: Electron 제거로 frontend/dist 폴백 삭제)
         _saessagi_root = os.environ.get("SAESSAGI_ROOT", "")
         _web_dist = Path(_saessagi_root) / "web" / "dist" if _saessagi_root else None
-        _frontend_dist = Path(_saessagi_root) / "frontend" / "dist" if _saessagi_root else None
 
         if _web_dist and (_web_dist / "index.html").exists():
             frontend_dir = str(_web_dist)
             logger.info(f"프론트엔드: web/dist 사용: {frontend_dir}")
-        elif _frontend_dist and (_frontend_dist / "index.html").exists():
-            frontend_dir = str(_frontend_dist)
-            logger.info(f"프론트엔드: frontend/dist 사용: {frontend_dir}")
         else:
-            frontend_dir = "frontend"
+            frontend_dir = "web/dist"
+            logger.warning(
+                "web/dist 빌드가 없습니다. 'cd web && npm run build'를 먼저 실행하세요."
+            )
 
         if os.path.exists(frontend_dir):
             self.app.mount(
@@ -129,3 +137,51 @@ class AppWebSocketServer:
             )
         else:
             logger.warning(f"프론트엔드 디렉토리 없음, / 마운트 건너뜀: {frontend_dir}")
+
+    def _init_web_auth(self) -> None:
+        """M_21 (CR-38): 웹 인증 미들웨어 설치 + 위험한 설정 조합 차단.
+
+        auth_routes가 request.app.state에서 비밀번호·salt를 읽으므로 여기서 함께 심는다.
+        """
+        from .web_auth import (
+            WebAuthMiddleware,
+            load_or_create_salt,
+            resolve_password,
+            validate_web_config,
+        )
+
+        web_cfg = self.full_config.app.web
+        password = resolve_password(web_cfg.auth_password)
+
+        # 설정 실수(열어두고 인증 끔)를 조용한 노출이 아니라 기동 실패로 바꾼다.
+        validate_web_config(web_cfg.host, web_cfg.auth_enabled, password)
+
+        salt = (
+            load_or_create_salt(self.full_config.app.paths.data_dir)
+            if web_cfg.auth_enabled
+            else ""
+        )
+
+        # run()이 uvicorn 바인딩에 사용 (CLI 인자가 있으면 그쪽이 우선)
+        self.app.state.web_host = web_cfg.host
+        self.app.state.web_port = web_cfg.port
+
+        self.app.state.web_auth_enabled = web_cfg.auth_enabled
+        self.app.state.web_auth_password = password
+        self.app.state.web_auth_salt = salt
+        self.app.state.web_auth_ttl_hours = web_cfg.session_ttl_hours
+
+        self.app.add_middleware(
+            WebAuthMiddleware,
+            enabled=web_cfg.auth_enabled,
+            password=password,
+            salt=salt,
+        )
+
+        if web_cfg.auth_enabled:
+            logger.info(
+                f"web_auth: 인증 활성 (host={web_cfg.host}:{web_cfg.port}, "
+                f"세션 {web_cfg.session_ttl_hours}시간)"
+            )
+        else:
+            logger.info(f"web_auth: 인증 비활성 (로컬 전용 {web_cfg.host}:{web_cfg.port})")

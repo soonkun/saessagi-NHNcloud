@@ -145,6 +145,16 @@ character_config:
       translate_provider: deeplx
 app:
   profile: min
+  # M_21 (CR-38): 웹 UI 바인딩·인증.
+  # 기본은 로컬 전용. 사내망에 열려면 host를 0.0.0.0으로 바꾸고 인증을 켜야 한다 —
+  # 루프백이 아닌데 auth_enabled가 false면 백엔드가 기동을 거부한다(무인증 노출 방지).
+  # 비밀번호는 환경변수 SAESSAGI_WEB_PASSWORD가 있으면 그쪽이 우선한다.
+  web:
+    host: 127.0.0.1
+    port: 12393
+    auth_enabled: false
+    auth_password: ""
+    session_ttl_hours: 12
   llm_provider: ollama
   openai:
     api_key: sk-REPLACE-WITH-YOUR-OPENAI-API-KEY

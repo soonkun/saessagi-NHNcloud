@@ -116,6 +116,35 @@ class OpenAISubConfig(BaseModel):
     model: str = Field(default="gpt-4o-mini")
 
 
+class WebConfig(BaseModel):
+    """M_21 (CR-38): 웹 UI 바인딩·인증 설정.
+
+    기본값은 로컬 전용(127.0.0.1 + 인증 off)이라 기존 동작과 같다. 사내망 노출은
+    host를 명시적으로 바꿔야만 일어나고, 그때는 인증이 강제된다(web_auth.validate_web_config).
+    """
+
+    host: str = Field(
+        default="127.0.0.1",
+        description=(
+            "바인드 주소. 사내망에 열려면 '0.0.0.0'. 루프백이 아니면 auth_enabled가 "
+            "true여야 기동된다 — 인증 없이 노출되는 사고를 막기 위해 실행을 실패시킨다."
+        ),
+    )
+    port: int = Field(default=12393, ge=1, le=65535)
+    auth_enabled: bool = Field(
+        default=False,
+        description="웹 UI 비밀번호 인증 사용 여부. HTTP·정적파일·WebSocket에 모두 적용된다.",
+    )
+    auth_password: str = Field(
+        default="",
+        description=(
+            "웹 UI 접속 비밀번호. 환경변수 SAESSAGI_WEB_PASSWORD가 있으면 그쪽이 우선한다 "
+            "(conf.yaml에 평문을 남기지 않으려면 환경변수 사용)."
+        ),
+    )
+    session_ttl_hours: int = Field(default=12, ge=1, le=720)
+
+
 class PathsConfig(BaseModel):
     data_dir: str = Field(default="data")
     assets_dir: str = Field(default="assets")
@@ -293,6 +322,7 @@ class AppConfig(BaseModel):
     ollama: OllamaConfig = Field(default_factory=OllamaConfig)
     openai: OpenAISubConfig = Field(default_factory=OpenAISubConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    web: WebConfig = Field(default_factory=WebConfig)  # M_21 (CR-38)
     paths: PathsConfig = Field(default_factory=PathsConfig)
     tts: TtsConfig = Field(default_factory=TtsConfig)
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)

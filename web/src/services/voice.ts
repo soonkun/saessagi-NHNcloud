@@ -1,6 +1,10 @@
 // STT: push-to-talk + 2s silence auto-stop → WAV → POST /asr
 
-const ASR_URL = "http://127.0.0.1:12393/asr";
+import { API_BASE } from "./api";
+
+// API_BASE는 Electron에서 절대 주소, 브라우저에서 빈 문자열(=현재 origin 상대경로)이다.
+// 브라우저에서 127.0.0.1로 박아두면 다른 PC에서 열었을 때 그 PC를 가리킨다 (CR-38).
+const ASR_URL = `${API_BASE}/asr`;
 const SILENCE_MS = 2000;
 const SILENCE_THRESHOLD = 10; // 0-255 average frequency energy
 const SAMPLE_RATE = 16000;

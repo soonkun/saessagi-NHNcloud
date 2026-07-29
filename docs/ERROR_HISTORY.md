@@ -970,3 +970,23 @@ interop(explorer.exe)로 열어야 한다.
 **교훈**: **참고자료/인용은 청크가 아니라 문서 단위로 집계**할 것(RAG는 한 문서를 여러
 청크로 쪼갬). 마크다운 렌더 컨테이너에는 표·목록 CSS를 반드시 갖출 것(GFM 파싱만으론
 테두리가 안 생긴다).
+
+---
+
+## E-65: 런처의 `uv run`이 실행 직전 melotts를 제거해 신규 설치 환경이 매번 깨짐
+
+**날짜**: 2026-07-29
+**증상**: bootstrap 직후에는 TTS·대화가 정상인데, `새싹이.sh`(또는 `start.sh`)로 기동하면
+melotts가 사라져 TTS 초기화가 실패하고 E-54 경로를 그대로 타 LLM 대화까지 전멸.
+**원인**: 두 런처가 `uv run --project "$ROOT" uvicorn ...`으로 백엔드를 띄운다. `uv run`은
+실행 전 프로젝트 환경을 `uv.lock`에 맞춰 동기화하며, **락파일에 없는 패키지를 제거한다.**
+melotts와 truststore는 pypinyin 버전 충돌 때문에 의도적으로 `pyproject.toml`에서 빠져
+있고 `bootstrap.py`가 `uv pip install`로 따로 넣는다. 그래서 매 실행마다
+`melotts==0.1.2` 제거 + `pypinyin 0.50.0 → 0.55.0` 다운그레이드가 반복됐다
+(`uv sync --dry-run`으로 재현: "Would uninstall 3 packages").
+**수정**: 두 런처의 `uv run`에 `--no-sync` 추가 (`start.sh`, `새싹이.sh`).
+**검증**: `uv run --no-sync --project . python -c "import melo, pypinyin"` → melo 정상 import,
+pypinyin 0.50.0 유지. 백엔드 기동 후 WebSocket E2E로 응답 텍스트 + 오디오 423KB 수신 확인.
+**교훈**: **`uv pip install`로 넣은 락파일 외 패키지는 `uv run`이 지운다.** 락파일 밖 의존성이
+하나라도 있으면 실행 경로는 반드시 `--no-sync`(또는 venv 인터프리터 직접 호출)여야 한다.
+"bootstrap은 됐는데 실행만 하면 깨진다"는 증상을 보면 이 조합을 먼저 의심할 것.

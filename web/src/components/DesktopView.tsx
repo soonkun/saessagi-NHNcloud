@@ -1,5 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from "react";
-import { useStore } from "../store";
+import { useStore, isElectronRuntime } from "../store";
 import { send } from "../services/websocket";
 import {
   Calendar,
@@ -48,6 +48,9 @@ export function DesktopView(): React.ReactElement {
   const emotion = useStore((s) => s.emotion);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+
+  // 네이티브 전용 UI(창 제어·펫 모드·앱 종료) 노출 여부. 브라우저에서는 전부 감춘다.
+  const isElectron = isElectronRuntime();
 
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
 
@@ -137,32 +140,35 @@ export function DesktopView(): React.ReactElement {
           )}
         </div>
         {/* 오른쪽: 창 제어 버튼 */}
-        <div
-          style={{
-            display: "flex",
-            gap: 0,
-            flexShrink: 0,
-            // @ts-ignore
-            WebkitAppRegion: "no-drag",
-          }}
-        >
-          <TitleBarBtn onClick={() => sendWindowAction("window-minimize")} title="최소화">
-            <Minus size={13} />
-          </TitleBarBtn>
-          <TitleBarBtn
-            onClick={() => sendWindowAction("window-maximize")}
-            title={isMaximized ? "복원" : "최대화"}
+        {/* 창 제어는 Electron 창을 조작하는 IPC라 브라우저에선 누를 대상이 없다 (CR-38) */}
+        {isElectron && (
+          <div
+            style={{
+              display: "flex",
+              gap: 0,
+              flexShrink: 0,
+              // @ts-ignore
+              WebkitAppRegion: "no-drag",
+            }}
           >
-            {isMaximized ? <RestoreIcon size={11} /> : <Square size={11} />}
-          </TitleBarBtn>
-          <TitleBarBtn
-            onClick={() => sendWindowAction("window-close")}
-            title="창 닫기 (앱은 트레이에 남음)"
-            danger
-          >
-            <XIcon size={13} />
-          </TitleBarBtn>
-        </div>
+            <TitleBarBtn onClick={() => sendWindowAction("window-minimize")} title="최소화">
+              <Minus size={13} />
+            </TitleBarBtn>
+            <TitleBarBtn
+              onClick={() => sendWindowAction("window-maximize")}
+              title={isMaximized ? "복원" : "최대화"}
+            >
+              {isMaximized ? <RestoreIcon size={11} /> : <Square size={11} />}
+            </TitleBarBtn>
+            <TitleBarBtn
+              onClick={() => sendWindowAction("window-close")}
+              title="창 닫기 (앱은 트레이에 남음)"
+              danger
+            >
+              <XIcon size={13} />
+            </TitleBarBtn>
+          </div>
+        )}
       </header>
 
       {/* 본문: 사이드바 + 메인 영역 */}
@@ -250,15 +256,38 @@ export function DesktopView(): React.ReactElement {
             gap: 6,
           }}
         >
+          {/* 펫 모드·앱 종료는 Electron 창을 조작하는 기능이라 브라우저에선 숨긴다 (CR-38).
+              테마 토글만 남으면 혼자 폭을 차지하도록 flex:1을 넘겨준다. */}
+          {isElectron && (
+            <button
+              onClick={() => void window.petMode?.enable()}
+              title="펫 모드로 전환"
+              style={{
+                flex: 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                background: "transparent",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                padding: "8px 10px",
+                fontSize: "var(--fs-13)",
+              }}
+            >
+              <PanelLeftClose size={14} />
+              펫 모드
+            </button>
+          )}
           <button
-            onClick={() => void window.petMode?.enable()}
-            title="펫 모드로 전환"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
             style={{
-              flex: 1,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              flex: isElectron ? undefined : 1,
               gap: 6,
+              justifyContent: "center",
               background: "transparent",
               border: "1px solid var(--color-border)",
               borderRadius: 8,
@@ -266,43 +295,31 @@ export function DesktopView(): React.ReactElement {
               cursor: "pointer",
               padding: "8px 10px",
               fontSize: "var(--fs-13)",
-            }}
-          >
-            <PanelLeftClose size={14} />
-            펫 모드
-          </button>
-          <button
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
-            style={{
-              background: "transparent",
-              border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              color: "var(--color-text-muted)",
-              cursor: "pointer",
-              padding: "8px 10px",
               display: "flex",
               alignItems: "center",
             }}
           >
             {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
+            {!isElectron && (theme === "dark" ? "라이트 모드" : "다크 모드")}
           </button>
-          <button
-            onClick={() => window.electronAPI?.quit()}
-            title="새싹이 종료"
-            style={{
-              background: "transparent",
-              border: "1px solid var(--color-border)",
-              borderRadius: 8,
-              color: "var(--color-text-muted)",
-              cursor: "pointer",
-              padding: "8px 10px",
-              display: "flex",
-              alignItems: "center",
-            }}
-          >
-            <Power size={13} />
-          </button>
+          {isElectron && (
+            <button
+              onClick={() => window.electronAPI?.quit()}
+              title="새싹이 종료"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <Power size={13} />
+            </button>
+          )}
         </div>
       </aside>
 

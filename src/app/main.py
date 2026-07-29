@@ -150,8 +150,13 @@ def run() -> None:
         action="store_true",
         help="DEBUG 레벨 로깅 활성화",
     )
-    parser.add_argument("--host", default="127.0.0.1", help="바인드 호스트")
-    parser.add_argument("--port", type=int, default=12393, help="바인드 포트")
+    # 기본값을 두지 않는다 — 미지정 시 conf.yaml의 app.web.host/port를 따른다 (CR-38).
+    parser.add_argument(
+        "--host", default=None, help="바인드 호스트 (미지정 시 conf.yaml app.web.host)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=None, help="바인드 포트 (미지정 시 conf.yaml app.web.port)"
+    )
     args = parser.parse_args()
 
     if args.verbose:
@@ -163,4 +168,11 @@ def run() -> None:
         logger.error(f"앱 초기화 실패: {exc}")
         sys.exit(1)
 
-    uvicorn.run(app, host=args.host, port=args.port)
+    host = args.host or getattr(app.state, "web_host", "127.0.0.1")
+    port = args.port or getattr(app.state, "web_port", 12393)
+    logger.info(f"서버 바인딩: {host}:{port}")
+    uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    run()

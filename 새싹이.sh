@@ -1,24 +1,51 @@
 #!/usr/bin/env bash
-# 새싹이.sh — Linux/WSL 런처 (새싹이.cmd 의 리눅스 버전)
-# 사용: ./새싹이.sh
+# 새싹이.sh — 웹 UI 백엔드 런처 (CR-38)
+#
+# Electron 앱은 제거됐다. 이 스크립트는 백엔드만 띄우고, 사용자는 브라우저로 접속한다.
+# 바인딩 주소·포트·인증은 conf.yaml의 app.web 섹션을 따른다.
+#   - 로컬 전용(기본): host 127.0.0.1, auth_enabled false
+#   - 사내망 공개    : host 0.0.0.0  + auth_enabled true + auth_password
+#     (열어놓고 인증을 끄면 백엔드가 기동을 거부한다 — 무인증 노출 방지)
+#
+# 사용: ./새싹이.sh [--no-build]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT"
 
-# ── conf.yaml 부트스트랩 (API 키 포함이라 git 미추적) ─────────────────────────
+PIDFILE="$ROOT/data/run/backend.pid"
+LOG="$ROOT/data/logs/backend.log"
+mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOG")"
+
+SKIP_BUILD=0
+[ "${1:-}" = "--no-build" ] && SKIP_BUILD=1
+
+# ── conf.yaml 부트스트랩 ──────────────────────────────────────────────────────
 if [ ! -f "$ROOT/conf.yaml" ]; then
     if [ -f "$ROOT/conf.example.yaml" ]; then
         cp "$ROOT/conf.example.yaml" "$ROOT/conf.yaml"
-        echo "conf.yaml 생성됨(conf.example.yaml 복사). 'api_key'/'llm_api_key'에 OpenAI 키를 넣으세요."
+        echo "conf.yaml 생성됨 (conf.example.yaml 복사)."
     else
         echo "[오류] conf.yaml / conf.example.yaml 둘 다 없음." >&2
         exit 1
     fi
 fi
 
+# ── 이전 인스턴스 정리 ────────────────────────────────────────────────────────
+# pidfile 기준으로 종료한다. pgrep/pkill -f는 자기 자신의 명령줄까지 매칭해
+# 런처 스크립트를 스스로 죽이는 사고가 난다.
+if [ -f "$PIDFILE" ]; then
+    OLD="$(cat "$PIDFILE")"
+    if kill -0 "$OLD" 2>/dev/null; then
+        echo "이전 백엔드(PID $OLD) 종료..."
+        kill "$OLD" 2>/dev/null || true
+        for _ in $(seq 1 20); do kill -0 "$OLD" 2>/dev/null || break; sleep 0.5; done
+    fi
+    rm -f "$PIDFILE"
+fi
+
 # ── 프론트엔드 빌드 (dist 없거나 소스가 더 새로울 때) ─────────────────────────
-# check-rebuild.mjs: 재빌드 필요 시 exit 1, 최신이면 exit 0
-if ! node "$ROOT/web/scripts/check-rebuild.mjs"; then
+if [ "$SKIP_BUILD" -eq 0 ] && ! node "$ROOT/web/scripts/check-rebuild.mjs" 2>/dev/null; then
     echo "프론트엔드 빌드 중..."
     (
         cd "$ROOT/web"
@@ -27,99 +54,58 @@ if ! node "$ROOT/web/scripts/check-rebuild.mjs"; then
         else
             npm install
         fi
-        ELECTRON_BUILD=1 npm run build
+        npm run build
     )
-    # 사고 1 방지: Electron(file://)용 빌드는 상대 경로(./assets)여야 한다
-    if grep -q 'src="/assets' "$ROOT/web/dist/index.html"; then
-        echo "[오류] web/dist/index.html 의 script 경로가 절대 경로(/assets)입니다." >&2
-        echo "ELECTRON_BUILD=1 이 적용되지 않은 잘못된 빌드 — Electron에서 흰 화면이 뜹니다." >&2
-        exit 1
-    fi
 fi
 
-# ── 환경 변수 (CR-17: vendor/ 벤더링 — upstream 클론 불필요) ──────────────────
+# ── Ollama 확인·기동 ─────────────────────────────────────────────────────────
+if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
+    echo "Ollama 시작 중..."
+    setsid nohup ollama serve >"$ROOT/data/logs/ollama.log" 2>&1 </dev/null &
+    for _ in $(seq 1 30); do
+        sleep 1
+        curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break
+    done
+    curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 \
+        || echo "[경고] Ollama가 응답하지 않습니다. 계속 진행합니다..."
+fi
+
 export SAESSAGI_ROOT="$ROOT"
 export SAESSAGI_CONFIG_PATH="$ROOT/conf.yaml"
 export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 
-# ── 한글 입력기 (fcitx5) — WSLg는 Windows IME를 못 받으므로 리눅스 IME 필요 ────
-# 설치: sudo apt install -y fcitx5 fcitx5-hangul
-# 주의: WSLg Weston이 Wayland input_method 바인딩을 거부하므로 X11 전용으로 실행
-# (wayland 애드온이 켜지면 즉시 종료됨 — systemd 유저 서비스 fcitx5.service 참조)
-if command -v fcitx5 >/dev/null 2>&1; then
-    export GTK_IM_MODULE=fcitx
-    export QT_IM_MODULE=fcitx
-    export XMODIFIERS=@im=fcitx
-    if ! pgrep -x fcitx5 >/dev/null 2>&1; then
-        # systemd 유저 서비스가 있으면 그걸로 (상주 보장), 없으면 직접 실행
-        if ! systemctl --user start fcitx5.service 2>/dev/null; then
-            env -u WAYLAND_DISPLAY nohup fcitx5 -d --disable=wayland,waylandim \
-                >/dev/null 2>&1 &
-        fi
-        sleep 1
-    fi
-    echo "한글 입력기(fcitx5) 활성 — 한/영 전환: 한/영 키 또는 Ctrl+Space"
-fi
+# ── 백엔드 기동 ──────────────────────────────────────────────────────────────
+# uv run이 아니라 venv 인터프리터를 직접 부른다 — uv run은 실행 전 환경을 uv.lock에
+# 맞춰 동기화하면서 락파일에 없는 melotts를 제거하고, TTS 초기화 실패가 LLM 대화까지
+# 죽인다 (E-65).
+setsid nohup "$ROOT/.venv/bin/python" -m app.main >"$LOG" 2>&1 </dev/null &
+echo $! > "$PIDFILE"
+echo "백엔드 기동 (PID $(cat "$PIDFILE")) — 로그: $LOG"
 
-echo ""
-echo "새싹이 시작 중..."
-echo ""
+# ── 준비 대기 ────────────────────────────────────────────────────────────────
+PORT="$(sed -n '/^  web:/,/^  [a-z]/p' conf.yaml | sed -n 's/^ *port: *\([0-9]*\).*/\1/p' | head -1)"
+PORT="${PORT:-12393}"
 
-# ── Ollama 확인·기동 (백엔드가 시작 시 접속 확인, 없으면 중단됨) ──────────────
-if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-    echo "Ollama 시작 중..."
-    nohup ollama serve >/dev/null 2>&1 &
-    for _ in $(seq 1 30); do
-        sleep 1
-        if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-            break
-        fi
-    done
-    if ! curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-        echo "[경고] Ollama가 30초 내에 응답하지 않음. 일단 계속 진행합니다..."
-    fi
-fi
-echo "Ollama 준비 완료."
-
-# ── 이전 세션 잔여 백엔드 정리 (포트 12393 점유 시 재기동 실패) ───────────────
-STALE_PID="$(lsof -ti tcp:12393 -sTCP:LISTEN 2>/dev/null || true)"
-if [ -n "$STALE_PID" ]; then
-    echo "포트 12393 점유 중인 이전 백엔드(PID $STALE_PID) 종료..."
-    kill "$STALE_PID" 2>/dev/null || true
-    sleep 1
-fi
-
-# ── 백엔드 기동 (로그: data/logs/backend.log) ─────────────────────────────────
-LOG="$ROOT/data/logs/backend.log"
-mkdir -p "$(dirname "$LOG")"
-(
-    cd "$ROOT"
-    exec uv run --project "$ROOT" uvicorn "app.main:create_app" --factory \
-        --host 127.0.0.1 --port 12393
-) >"$LOG" 2>&1 &
-BACKEND_PID=$!
-trap 'echo ""; echo "백엔드 종료 중..."; kill "$BACKEND_PID" 2>/dev/null || true' EXIT
-
-echo "백엔드 대기 중... (로그: $LOG)"
-BE_READY=0
 for _ in $(seq 1 180); do
     sleep 1
-    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-        break
-    fi
-    if curl -sf http://127.0.0.1:12393/ >/dev/null 2>&1; then
-        BE_READY=1
-        break
+    if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then break; fi
+    if curl -sf -o /dev/null "http://127.0.0.1:$PORT/login" 2>/dev/null \
+       || curl -sf -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then
+        HOST="$(sed -n '/^  web:/,/^  [a-z]/p' conf.yaml | sed -n 's/^ *host: *\(.*\)/\1/p' | head -1 | tr -d '"' | tr -d "'")"
+        echo ""
+        echo "새싹이 준비 완료. 브라우저에서 접속하세요:"
+        if [ "$HOST" = "0.0.0.0" ]; then
+            IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+            echo "  http://${IP:-<서버IP>}:$PORT"
+        else
+            echo "  http://127.0.0.1:$PORT"
+        fi
+        echo ""
+        echo "종료: kill \$(cat $PIDFILE)"
+        exit 0
     fi
 done
-if [ "$BE_READY" -ne 1 ]; then
-    echo "[오류] 백엔드가 준비되지 않았습니다. 로그 마지막 30줄:" >&2
-    tail -n 30 "$LOG" >&2
-    exit 1
-fi
 
-echo "백엔드 준비 완료. 앱 실행..."
-
-# ── Electron 실행 (창을 닫으면 백엔드도 함께 종료) ────────────────────────────
-cd "$ROOT/frontend"
-npm run start
+echo "[오류] 백엔드가 준비되지 않았습니다. 로그 마지막 30줄:" >&2
+tail -n 30 "$LOG" >&2
+exit 1

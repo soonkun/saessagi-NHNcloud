@@ -1,7 +1,8 @@
-# 새싹이 설치 가이드 — Linux / WSL2
+# 새싹이 설치 가이드 — Linux
 
 처음 클론한 뒤 실행까지의 전체 과정을 순서대로 정리한 문서다.
-(2026-07-14, Windows 11 + WSL2(Ubuntu) + WSLg + RTX 4090 환경에서 검증)
+UI는 웹 페이지이므로 **서버에 디스플레이가 없어도 된다** (CR-38).
+(2026-07-29, Ubuntu 24.04 + NVIDIA B200 헤드리스 서버에서 검증)
 
 ---
 
@@ -9,13 +10,17 @@
 
 | 항목 | 요구 사항 | 확인 명령 |
 |------|-----------|-----------|
-| OS | Windows 11 + WSL2 (WSLg 포함) 또는 리눅스 데스크톱 | `echo $WAYLAND_DISPLAY` → `wayland-0` 나오면 GUI 가능 |
-| Python | 3.11+ | `python3 --version` |
-| Node.js | 18+ (npm 포함) | `node --version` |
+| OS | 리눅스 (디스플레이 불필요) | `uname -a` |
+| Python | 3.12+ | `python3 --version` |
+| Node.js | 18+ **npm 포함** | `node --version && npm --version` |
 | Git | 최신 | `git --version` |
 | Ollama | 설치 + 서비스 실행 가능 | `ollama --version` |
 | GPU (권장) | CUDA 지원 NVIDIA GPU — LLM·TTS 가속 | `nvidia-smi` |
-| 디스크 | 모델 포함 약 15GB 여유 | |
+| 디스크 | 모델 포함 약 30GB 여유 | `df -h .` |
+| 브라우저 | 접속하는 PC에 최신 크롬/엣지 | — |
+
+> 배포판 `nodejs` 패키지에 npm이 빠져 있는 경우가 있다(Ubuntu 24.04 등).
+> `npm --version`이 실패하면 Node를 공식 타르볼로 따로 설치하는 편이 빠르다.
 
 Ollama가 없다면:
 
@@ -127,80 +132,50 @@ grep "model: gemma" conf.yaml
 런처가 순서대로 처리한다:
 
 1. conf.yaml 없으면 템플릿에서 생성
-2. 프론트엔드 소스가 빌드보다 새로우면 자동 재빌드 (`ELECTRON_BUILD=1` 포함)
+2. 프론트엔드 소스가 빌드보다 새로우면 자동 재빌드 (`--no-build`로 생략 가능)
 3. Ollama 미실행 시 백그라운드로 기동
-4. 포트(12393)를 점유한 이전 백엔드 정리
-5. 백엔드 기동 → 준비 대기 (로그: `data/logs/backend.log`)
-6. Electron 앱 실행 → **캐릭터가 화면 우하단에 나타남**
+4. 이전 백엔드 정리 (`data/run/backend.pid` 기준)
+5. 백엔드 기동 → 준비되면 **접속할 주소를 출력한다** (로그: `data/logs/backend.log`)
 
-**터미널이 `[PetMode] enable` 로그에서 멈춘 것처럼 보이는 게 정상이다** — 앱이 실행 중이라는
-뜻이다. 종료는 그 터미널에서 `Ctrl+C` (백엔드도 함께 정리된다).
+출력된 주소를 **브라우저로 열면** 된다. 종료는 `kill $(cat data/run/backend.pid)`.
 
 첫 메시지 응답은 Ollama 모델 로딩 때문에 30초~1분 걸릴 수 있다. 이후로는 빠르다.
 
----
-
-## 6. 한글 입력 설정 (WSL 필수)
-
-WSLg 창은 Windows 한/영 IME를 받지 못하므로 리눅스 입력기(fcitx5)가 필요하다:
-
-```bash
-sudo apt install -y fcitx5 fcitx5-hangul
-```
-
-**주의: WSLg의 Weston은 Wayland 입력기 등록을 거부하므로 fcitx5를 X11 전용으로
-실행해야 한다** (기본 실행 시 `permission to bind input_method denied`로 즉시 종료됨).
-systemd 유저 서비스로 상주시키는 것을 권장:
-
-```bash
-mkdir -p ~/.config/systemd/user ~/.config/fcitx5
-
-cat > ~/.config/systemd/user/fcitx5.service <<'EOF'
-[Unit]
-Description=Fcitx5 Input Method (WSLg 한글 입력)
-
-[Service]
-Environment=DISPLAY=:0
-ExecStart=/usr/bin/fcitx5 --disable=wayland,waylandim
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=default.target
-EOF
-
-cat > ~/.config/fcitx5/profile <<'EOF'
-[Groups/0]
-Name=Default
-Default Layout=us
-DefaultIM=hangul
-
-[Groups/0/Items/0]
-Name=keyboard-us
-
-[Groups/0/Items/1]
-Name=hangul
-
-[GroupOrder]
-0=Default
-EOF
-
-cat > ~/.config/fcitx5/config <<'EOF'
-[Hotkey/TriggerKeys]
-0=Control+space
-1=Hangul
-EOF
-
-systemctl --user daemon-reload
-systemctl --user enable --now fcitx5.service
-```
-
-`새싹이.sh`가 IME 환경 변수(GTK_IM_MODULE 등)를 자동 설정하므로, 이후 앱을
-(재)시작하면 입력창에서 **Ctrl+Space**로 한/영 전환이 된다.
+> **CR-38**: Electron 앱은 제거됐다. 예전엔 캐릭터가 바탕화면에 상주하는 펫 모드가
+> 있었지만, 헤드리스 서버 배포로 전환하면서 웹 UI 하나로 단순화했다.
 
 ---
 
-## 6b. (선택) GraphRAG — Neo4j 지식그래프 (CR-18)
+## 5b. 사내망에 공개하기 (선택)
+
+기본값은 `127.0.0.1`이라 서버 안에서만 열린다. 다른 PC에서 접속하게 하려면 conf.yaml:
+
+```yaml
+app:
+  web:
+    host: 0.0.0.0
+    auth_enabled: true
+    auth_password: "원하는-비밀번호"
+```
+
+**인증을 켜지 않으면 백엔드가 기동을 거부한다.** 이 앱에는 로그인·권한 개념이 없어서
+열어두면 사내 문서·LLM이 통째로 노출되기 때문이다. 비밀번호를 conf.yaml에 남기고 싶지
+않으면 환경변수 `SAESSAGI_WEB_PASSWORD`를 쓰면 된다(이쪽이 우선한다).
+
+접속하면 로그인 화면이 먼저 뜨고, 통과하면 세션 쿠키가 12시간 유지된다.
+
+### 알아둘 제약 — 마이크는 HTTPS에서만 된다
+
+브라우저는 secure context가 아니면 마이크 접근(`getUserMedia`)을 차단한다. 즉 평문
+HTTP로 원격 접속하면 **음성 입력이 막힌다.** 텍스트 대화와 새싹이 음성 출력(TTS)은
+정상 동작한다. 음성 입력이 필요하면 앞단에 TLS를 붙여야 한다
+(리버스 프록시를 쓰면 `X-Forwarded-Proto: https`를 보고 쿠키에 Secure가 붙는다).
+
+화면 분석(스크린샷)은 서버 화면을 캡처하므로 헤드리스 서버에서는 의미가 없다.
+
+---
+
+## 6. (선택) GraphRAG — Neo4j 지식그래프 (CR-18)
 
 문서·노트에서 개체(조직·사업·인물 등)와 관계를 추출해 그래프로 축적하고, 검색을
 벡터+그래프 하이브리드로 보강하는 기능. **선택 사항** — 설치하지 않으면 앱은 기존
@@ -257,50 +232,36 @@ conf.yaml 설정:
 
 ---
 
-## 7. WSLg 입출력 제약 (알아둘 것)
-
-Windows ↔ WSLg 창 사이에는 다음이 **전달되지 않는다** (앱 버그 아님, 플랫폼 제약):
-
-| 동작 | 지원 | 대안 |
-|------|------|------|
-| 텍스트 복사/붙여넣기 | ✅ | — |
-| 이미지(스크린샷) 붙여넣기 | ❌ | 캡처를 파일로 저장 → "클릭해서 파일 선택"에서 `/mnt/c/Users/<이름>/Pictures/Screenshots/` |
-| 파일 복사→붙여넣기 | ❌ | "클릭해서 파일 선택" |
-| 탐색기에서 파일 드래그 | ❌ | "클릭해서 파일 선택" (Windows 파일은 `/mnt/c/...`) |
-
----
-
-## 8. 문제 해결
+## 7. 문제 해결
 
 | 증상 | 원인/해법 |
 |------|-----------|
-| 캐릭터(창)가 아예 안 보임 | WSLg 표시 계층 고착 (오래 켜두면 발생). **Windows PowerShell에서 `wsl --shutdown`** 후 WSL 터미널을 새로 열고 재실행. 이때 진행 중인 WSL 작업이 모두 종료되니 주의 |
 | 대화가 전부 무반응 + 로그에 `'NoneType' object has no attribute 'chat'` | 3단계(TTS 모델) 누락. TTS 초기화 실패가 LLM까지 전멸시킨다 — 3단계 실행 후 재시작 |
+| bootstrap은 됐는데 실행하면 위 증상 재발 | 런처가 `uv run`으로 바뀌었는지 확인. `uv run`은 락파일에 없는 melotts를 지운다 — `.venv/bin/python` 직접 호출 또는 `--no-sync` 필요 (E-65) |
 | LLM 응답 없음 | `ollama list` 태그와 conf.yaml `model:` 불일치 (4단계 참조), 또는 `curl http://127.0.0.1:11434/api/version`으로 Ollama 생존 확인 |
 | 목소리만 안 나옴 (`/api/tts/speak` 503) | 백엔드 시작 직후에는 TTS 초기화에 ~8초 더 걸려 일시 503이 정상. 지속되면 3단계 확인 |
-| 흰 화면 | `web/dist`가 `ELECTRON_BUILD=1` 없이 빌드된 것. `cd web && ELECTRON_BUILD=1 npm run build` 후 재실행 (E-22) |
+| 백엔드가 즉시 죽고 `auth_enabled` 오류 | `app.web.host`를 열어놓고 인증을 안 켠 것. 의도된 차단이다 — 5b 참조 |
+| 로그인 화면만 반복 (쿠키가 안 붙음) | 평문 HTTP인데 쿠키에 Secure가 붙은 경우. 리버스 프록시가 `X-Forwarded-Proto`를 잘못 보내는지 확인 |
+| 다른 PC에서 접속했는데 대화만 안 됨 | WebSocket이 `127.0.0.1`로 연결을 시도하는 상태. 설정 화면의 WebSocket 주소를 비우면 현재 접속 주소에서 자동 유도한다 |
+| 마이크 버튼이 동작하지 않음 | 브라우저 제약 — HTTPS(또는 localhost)가 아니면 마이크가 차단된다. 5b 참조 |
 
-**금지**: 브라우저로 `http://127.0.0.1:12393`을 열지 말 것 — Electron 전용 UI다.
+### 리눅스 특이사항
 
-### 리눅스 특이사항 (이 저장소에 이미 반영된 수정들)
-
-- Electron 하드웨어 가속을 리눅스에서 자동 비활성화 (투명창 렌더링, E-52)
-- 펫 모드 클릭스루 해제용 커서 폴러 — X 서버 `QueryPointer` 직접 조회 (E-53).
-  WSLg에서 Electron의 `getCursorScreenPoint()`는 신뢰 불가
-- 백엔드/프론트 로그: `data/logs/backend.log` / 런처 실행 터미널
+- 백엔드 로그: `data/logs/backend.log`, Ollama 로그: `data/logs/ollama.log`
+- PID 파일: `data/run/backend.pid` (런처가 이걸로 이전 인스턴스를 정리한다)
 
 ---
 
 ## 부록: 수동 실행 (런처 없이)
 
 ```bash
-# 터미널 1 — 백엔드
 export SAESSAGI_ROOT="$(pwd)" SAESSAGI_CONFIG_PATH="$(pwd)/conf.yaml"
 export PYTHONPATH="$(pwd):$(pwd)/src:$(pwd)/vendor"
-uv run uvicorn "app.main:create_app" --factory --host 127.0.0.1 --port 12393
-
-# 터미널 2 — 프론트엔드
-cd frontend && npm run start
+.venv/bin/python -m app.main
 ```
 
-백엔드만 검증하려면: `uv run python scripts/ws_test.py "안녕"` (LLM 응답·오디오 payload 수신 확인)
+`uv run`은 쓰지 말 것 — 락파일에 없는 melotts를 제거해 TTS·LLM이 죽는다 (E-65).
+바인딩 주소·포트는 conf.yaml의 `app.web`을 따르며, `--host`/`--port`로 덮어쓸 수 있다.
+
+백엔드만 검증하려면: `.venv/bin/python scripts/ws_test.py "안녕"`
+(LLM 응답·오디오 payload 수신 확인)

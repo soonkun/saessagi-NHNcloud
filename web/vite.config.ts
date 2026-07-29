@@ -2,11 +2,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
-// Electron 프로덕션 빌드 시 ELECTRON_BUILD=1 로 실행 → base를 './'로 설정
-const isElectronBuild = process.env.ELECTRON_BUILD === "1";
-
+// CR-38: Electron(file://) 지원 제거 — 백엔드가 '/'에 서빙하므로 base는 항상 '/'.
+// 과거 ELECTRON_BUILD=1을 빠뜨려 흰 화면이 뜨던 함정(E-22)도 이걸로 사라진다.
 export default defineConfig({
-  base: isElectronBuild ? "./" : "/",
+  base: "/",
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {

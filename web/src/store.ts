@@ -32,11 +32,18 @@ function loadCharSize(): number {
   return 120;
 }
 
+// 기본 WebSocket 주소.
+// Electron은 file:// 로드라 location이 백엔드를 가리키지 않으므로 절대 주소가 필요하다.
+// 브라우저에서는 반드시 현재 접속 주소(location)에서 유도해야 한다 — 127.0.0.1로 박아두면
+// 다른 PC에서 열었을 때 그 PC 자신을 가리켜 연결이 실패한다 (CR-38).
+function defaultWsUrl(): string {
+  if (window.electronAPI) return "ws://127.0.0.1:12393/client-ws";
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${window.location.host}/client-ws`;
+}
+
 function loadWsUrl(): string {
-  return (
-    localStorage.getItem("saessagi_ws_url") ??
-    "ws://127.0.0.1:12393/client-ws"
-  );
+  return localStorage.getItem("saessagi_ws_url") ?? defaultWsUrl();
 }
 
 function loadTtsRate(): number {
@@ -73,8 +80,18 @@ function loadTheme(): ThemeMode {
 
 // 마지막 사용 창 모드 — 저장이 "window"면 창 모드, 없거나 그 외면 pet(제품 기본).
 // 창 모드 사용자가 매 실행마다 pet으로 떴다 토글하지 않도록 기억한다.
+//
+// 단, 브라우저(비-Electron)에서는 저장값과 무관하게 항상 창 모드다. 펫 모드는 투명 배경·
+// 항상 위·클릭 관통이라는 Electron 창 기능 위에 성립하는데 브라우저엔 그게 없어서,
+// 펫으로 뜨면 빈 페이지에 캐릭터만 덩그러니 남고 조작이 안 된다 (CR-38).
 function loadWindowMode(): "pet" | "window" {
+  if (!window.electronAPI) return "window";
   return localStorage.getItem("saessagi_window_mode") === "window" ? "window" : "pet";
+}
+
+/** Electron 런타임 위에서 동작 중인가 — 창 제어·펫 모드 등 네이티브 전용 UI 노출 판단용. */
+export function isElectronRuntime(): boolean {
+  return !!window.electronAPI;
 }
 
 // UI 글씨 크기 배율 (CSS zoom). 캐릭터(Live2D)에는 적용하지 않음.
@@ -254,7 +271,7 @@ function nextId(): string {
   return `msg_${Date.now()}_${++_msgCounter}`;
 }
 
-export const useStore = create<AppStore>((set, get) => ({
+export const useStore = create<AppStore>((set) => ({
   // Chat
   messages: [],
   aiStatus: "idle",
@@ -369,11 +386,9 @@ export const useStore = create<AppStore>((set, get) => ({
   setResearchScope: (scope) =>
     set(scope ? { researchScope: scope, chatTab: "research" } : { researchScope: null }),
   setUiScale: (scale) => {
-    // 현재 모드의 글씨 크기만 변경 — 펫/데스크톱 별도 저장
-    const isPet = get().windowMode === "pet";
-    const key = isPet ? "saessagi_ui_scale_pet" : "saessagi_ui_scale_desktop";
-    try { localStorage.setItem(key, String(scale)); } catch { /* ignore */ }
-    set(isPet ? { uiScalePet: scale } : { uiScaleDesktop: scale });
+    // CR-38: 펫 모드 제거로 화면이 하나뿐 — 데스크탑 값만 유지한다.
+    try { localStorage.setItem("saessagi_ui_scale_desktop", String(scale)); } catch { /* ignore */ }
+    set({ uiScaleDesktop: scale });
   },
   setTheme: (theme) => {
     try { localStorage.setItem("saessagi_theme", theme); } catch { /* ignore */ }

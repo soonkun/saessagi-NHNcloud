@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>새싹이 AI 비서</title>
+    <!-- CR-38: 브라우저 탭 아이콘. 백엔드가 /avatars에 캐릭터 스프라이트를 서빙한다.
+         (Electron 시절엔 불필요했고, 없으면 favicon.ico 404가 콘솔에 남는다) -->
+    <link rel="icon" type="image/png" href="/avatars/neutral.png" />
   </head>
   <body>
     <div id="root"></div>

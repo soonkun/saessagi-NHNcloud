@@ -24,7 +24,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 WHEELS_DIR="${PROJECT_ROOT}/assets/wheels"
 MODELS_DIR="${PROJECT_ROOT}/assets/models"
-NPM_CACHE_DIR="${PROJECT_ROOT}/assets/npm_cache"  # M_12 §12.2 frontend 오프라인 번들
+NPM_CACHE_DIR="${PROJECT_ROOT}/assets/npm_cache"  # M_12 §12.2 web 오프라인 번들
 
 mkdir -p "${WHEELS_DIR}"
 mkdir -p "${MODELS_DIR}"
@@ -200,18 +200,18 @@ pip download \
 # ==============================================================================
 # M_12 Frontend npm 캐시 (§12.2 / §15.2)
 # ------------------------------------------------------------------------------
-# frontend/ 디렉토리의 node_modules를 오프라인에서 재구성할 수 있도록
-# npm 캐시를 assets/npm_cache로 수집한다. Q-14 화이트리스트 정책에 따라
-# electron·electron-builder·electron-rebuild·canvas만 postinstall 허용.
+# web/ 디렉토리의 node_modules를 오프라인에서 재구성할 수 있도록
+# npm 캐시를 assets/npm_cache로 수집한다.
 #
-# 실행 조건: frontend/package-lock.json이 최신 상태여야 한다.
-# 오프라인 설치 시 frontend/에서 `npm ci --offline --cache=<asset_path>` 실행.
+# CR-38: Electron 제거로 대상이 frontend/ → web/으로 바뀌었다.
+# 실행 조건: web/package-lock.json이 최신 상태여야 한다.
+# 오프라인 설치 시 web/에서 `npm ci --offline --cache=<asset_path>` 실행.
 # ==============================================================================
 
-FRONTEND_DIR="${PROJECT_ROOT}/frontend"
+FRONTEND_DIR="${PROJECT_ROOT}/web"
 if [ -f "${FRONTEND_DIR}/package-lock.json" ]; then
     echo ""
-    echo "[npm] frontend/ 캐시 수집 → ${NPM_CACHE_DIR}"
+    echo "[npm] web/ 캐시 수집 → ${NPM_CACHE_DIR}"
     # npm cache는 tarball + metadata. --prefer-offline로 네트워크 최소화.
     (
         cd "${FRONTEND_DIR}"
@@ -222,9 +222,9 @@ if [ -f "${FRONTEND_DIR}/package-lock.json" ]; then
             --no-audit \
             --no-fund
     )
-    echo "[npm] 완료. 오프라인 PC에서 재현: cd frontend && npm ci --offline --cache=${NPM_CACHE_DIR}"
+    echo "[npm] 완료. 오프라인 PC에서 재현: cd web && npm ci --offline --cache=${NPM_CACHE_DIR}"
 else
-    echo "[npm] ${FRONTEND_DIR}/package-lock.json 부재 — M_12 frontend 빌드 전 생략"
+    echo "[npm] ${FRONTEND_DIR}/package-lock.json 부재 — M_12 web 빌드 전 생략"
 fi
 
 echo ""
@@ -236,4 +236,4 @@ echo ""
 echo "다음 단계: assets/ 디렉토리를 통째로 오프라인 배포 패키지에 포함시킨다."
 echo "오프라인 설치 시:"
 echo "  pip install --no-index --find-links=${WHEELS_DIR} faster-whisper ctranslate2 jsonschema mss Pillow"
-echo "  cd frontend && npm ci --offline --cache=${NPM_CACHE_DIR}"
+echo "  cd web && npm ci --offline --cache=${NPM_CACHE_DIR}"

@@ -7,7 +7,6 @@ import {
   deleteCalendarEvent,
 } from "../services/api";
 import type { CalendarEvent } from "../types";
-import { useStore } from "../store";
 
 // ────────────────────────────────────────────────────────────
 // 유틸
@@ -382,8 +381,8 @@ const saveBtnStyle: React.CSSProperties = {
 // ────────────────────────────────────────────────────────────
 
 export function CalendarView(): React.ReactElement {
-  const windowMode = useStore((s) => s.windowMode);
-  const isDesktop = windowMode === "window";
+  // CR-38: 펫 모드(좁은 플로팅 패널) 제거로 항상 데스크탑 레이아웃이다.
+  const isDesktop = true;
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
