@@ -41,6 +41,10 @@ cd saessagi-Linux
 
 ## 2. 부트스트랩 실행
 
+> **한 번에 끝내려면**: `bash deploy/nhncloud-setup.sh`
+> 아래 2~4단계(툴체인·의존성·모델·빌드·conf)를 자동으로 처리한다. 배포판에 npm이 없는
+> 경우와 TTS 모델 누락 함정까지 반영돼 있다. 단계별로 확인하며 진행하려면 아래를 따른다.
+
 ```bash
 python3 scripts/bootstrap.py
 ```

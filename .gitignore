@@ -90,3 +90,6 @@ conf.yaml
 # Claude Code 워크트리 + Windows 다운로드 흔적
 .claude/worktrees/
 *Zone.Identifier
+
+# deploy/nhncloud-setup.sh 가 설치하는 자체 툴체인 (node, ollama)
+.local/
