@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useAppHeight } from "./hooks/useAppHeight";
 import { useStore } from "./store";
 import { connect } from "./services/websocket";
 import { showStartupGreeting } from "./services/startup";
@@ -17,6 +18,9 @@ export function App(): React.ReactElement {
   const uiScale = useStore((s) => s.uiScaleDesktop);
 
   // 테마 → documentElement data-theme 속성 반영
+  // 보이는 영역에 앱 높이를 맞춘다 (모바일 크롬 상단 잘림, E-76)
+  useAppHeight();
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -51,7 +55,11 @@ export function App(): React.ReactElement {
   }, []);
 
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
+    // 100vw/100vh를 쓰면 안 된다. 모바일에서 100vh는 **주소창이 숨겨진** 큰 뷰포트라
+    // 실제 보이는 높이보다 커지고, 그만큼 화면 밖으로 밀려 잘린다(모바일 크롬에서
+    // 상단 두 줄이 사라진 실제 원인, E-76). #root가 이미 보이는 높이에 맞춰져 있으므로
+    // 100%로 채우면 된다. 100vw도 스크롤바 폭까지 세어 가로 넘침을 만든다.
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <DesktopView />
     </div>
   );

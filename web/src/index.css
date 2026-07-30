@@ -98,6 +98,14 @@ body {
   }
 }
 
+/* 최종 기준은 JS가 visualViewport로 **직접 잰 값**이다 (E-76).
+   브라우저마다 svh 계산이 달라 모바일 크롬에서 상단이 잘렸는데, 측정값은 그런 차이가 없다.
+   변수가 없는 순간(초기 페인트·JS 실패)에는 위의 단위 규칙이 그대로 쓰인다. */
+html,
+body {
+  height: var(--app-height, 100%);
+}
+
 #root {
   width: 100%;
   height: 100%;

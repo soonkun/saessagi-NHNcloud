@@ -543,6 +543,18 @@ export function connect(url: string): void {
     }
     // CR-23: 연결 직후 대화 목록 로드 — 마운트 시점엔 소켓이 안 열려 요청이 유실됨
     send({ type: "fetch-history-list" });
+
+    // 이 세션이 쓸 히스토리를 확보한다 (E-75).
+    // 백엔드 store_message는 history_uid가 비어 있으면 **아무것도 저장하지 않고 반환**한다.
+    // 새로 접속한 세션은 history_uid가 ""이라 첫 대화가 통째로 유실됐고, 나중에
+    // "새 대화"를 누르는 순간에야 히스토리가 생겨 그때부터 저장됐다 — 그래서 질문과
+    // 답변이 서로 다른 히스토리에 갈라져 목록에 인사말만 든 대화가 남았다.
+    // 대화를 이어보는 중(currentHistoryUid 있음)이거나 이미 메시지가 있으면 건드리지 않는다.
+    // 빈 히스토리는 백엔드 목록 조회가 알아서 정리하므로 쌓이지 않는다.
+    const st = useStore.getState();
+    if (!st.currentHistoryUid && st.messages.length === 0) {
+      send({ type: "create-new-history" });
+    }
   };
 
   ws.onmessage = (event: MessageEvent) => {

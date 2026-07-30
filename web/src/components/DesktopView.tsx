@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useStore, isElectronRuntime } from "../store";
-import { send } from "../services/websocket";
+import { startNewHistoryIfSafe } from "../services/history";
 import {
   Calendar,
   PanelLeftClose,
@@ -251,10 +251,9 @@ export function DesktopView(): React.ReactElement {
             <button
               key={id}
               onClick={() => {
-                // "새 대화" 탭: 진행 중 대화가 있으면 새 히스토리 시작 (빈 대화면 이동만)
-                if (id === "chat" && useStore.getState().messages.length > 0) {
-                  send({ type: "create-new-history" });
-                }
+                // "새 대화" 탭: 대화가 있고 생성 중이 아닐 때만 새 히스토리 시작.
+                // (빈 대화거나 답변 생성 중이면 이동만 — E-75)
+                if (id === "chat") startNewHistoryIfSafe();
                 setChatTab(id);
                 setDrawerOpen(false); // 좁은 화면: 선택하면 서랍을 닫아 본문을 보여준다
               }}

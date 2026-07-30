@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { useStore } from "../store";
 import { send } from "../services/websocket";
+import { startNewHistoryIfSafe } from "../services/history";
 import { invalidateDocsCache } from "../services/websocket";
 import { openDocument, uploadDocument } from "../services/api";
 import type { MessageAttachment, MessageImage } from "../types";
@@ -137,8 +138,9 @@ export function ChatContent({
   const [pendingImages, setPendingImages] = useState<MessageImage[]>([]);
 
   function handleNewHistory(): void {
-    send({ type: "create-new-history" });
-    // 백엔드 응답(new-history-created)으로 clearMessages가 호출됨
+    // 백엔드 응답(new-history-created)으로 clearMessages가 호출된다.
+    // 생성 중에는 무시된다 — 바꾸면 도착할 답변이 새 히스토리로 흘러간다 (E-75).
+    startNewHistoryIfSafe();
   }
 
 
@@ -1173,10 +1175,8 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
                 <button
                   key={id}
                   onClick={() => {
-                    // "새 대화" 탭: 진행 중 대화가 있으면 새 히스토리 시작
-                    if (id === "chat" && useStore.getState().messages.length > 0) {
-                      send({ type: "create-new-history" });
-                    }
+                    // "새 대화" 탭: 대화가 있고 생성 중이 아닐 때만 (E-75)
+                    if (id === "chat") startNewHistoryIfSafe();
                     setChatTab(id);
                     setNavOpen(false);
                   }}
