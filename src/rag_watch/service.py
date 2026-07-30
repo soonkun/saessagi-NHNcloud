@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -146,9 +147,9 @@ class RagWatchService:
                 max_per_cycle=self._max,
             )
 
-            known_next = await self._apply_folders(plan, known_before)
-            await self._apply_ingest(plan)
-            await self._apply_moves(plan)
+            known_next, deleted_folders = await self._apply_folders(plan, known_before)
+            await self._apply_ingest(plan, deleted_folders)
+            await self._apply_moves(plan, deleted_folders)
             await self._apply_deletions(plan)
 
             # CR-46: known은 **이번에 실제로 처리한 결과**로만 갱신한다.
@@ -178,21 +179,29 @@ class RagWatchService:
 
         return {str(f["name"]) for f in _load_folders()}
 
-    async def _apply_folders(self, plan: ScanPlan, known_before: set[str]) -> set[str]:
-        """폴더 계획을 실행하고, 다음 주기에 쓸 known 집합을 돌려준다.
+    async def _apply_folders(
+        self, plan: ScanPlan, known_before: set[str]
+    ) -> tuple[set[str], set[str]]:
+        """폴더 계획을 실행하고 (다음 주기에 쓸 known, 이번에 삭제한 폴더 이름)을 돌려준다.
 
         known은 "양쪽에 있다고 확인된 폴더"다. 여기서 만든 것은 추가하고, 실제로 지운 것만
         제거한다 — 지우려 했지만 보존한 경우(파일 남음·ignore 정책)는 그대로 유지해야
         다음 주기에 신규로 오인되어 부활하지 않는다.
+
+        삭제한 폴더 이름을 함께 돌려주는 이유: 인제스트·이동은 이 함수보다 **나중에** 돌면서
+        파일의 폴더를 필요하면 만든다. 그런데 그 대상 목록은 삭제 **이전에** 세운 계획이므로,
+        방금 지운 폴더를 같은 주기 안에서 되살릴 수 있다.
         """
         # 양쪽에 다 있는 것으로 관측된 폴더를 먼저 학습한다 (known의 자기 치유 경로).
         known = set(known_before) | set(plan.folders_confirmed)
+        deleted: set[str] = set()
 
         for name in plan.folders_to_create_in_app:
             try:
-                await asyncio.to_thread(self._create_app_folder, name)
+                await asyncio.to_thread(
+                    partial(self._create_app_folder, name, reason="디스크에서 발견")
+                )
                 known.add(name)
-                logger.info(f"rag_watch: 앱 폴더 생성 '{name}' (디스크에서 발견)")
             except Exception as exc:
                 logger.warning(f"rag_watch: 앱 폴더 생성 실패 '{name}': {exc!r}")
 
@@ -229,6 +238,7 @@ class RagWatchService:
             try:
                 await asyncio.to_thread(self._delete_app_folder, name)
                 known.discard(name)
+                deleted.add(name)
                 logger.info(f"rag_watch: 앱 폴더 삭제 '{name}' (디스크 디렉토리가 사라짐)")
             except Exception as exc:
                 # known에 남겨 두면 다음 주기에 다시 시도한다 (신규로 오인해 부활시키지 않는다).
@@ -247,7 +257,13 @@ class RagWatchService:
                 remaining = []
             if remaining:
                 try:
-                    await asyncio.to_thread(self._create_app_folder, name)
+                    await asyncio.to_thread(
+                        partial(
+                            self._create_app_folder,
+                            name,
+                            reason=f"UI에서 지웠으나 디스크에 파일 {len(remaining)}개 남음",
+                        )
+                    )
                 except Exception:
                     pass
                 logger.warning(
@@ -259,11 +275,12 @@ class RagWatchService:
             try:
                 d.rmdir()
                 known.discard(name)
+                deleted.add(name)
                 logger.info(f"rag_watch: 디스크 폴더 삭제 '{safe}' (UI에서 삭제됨, 비어 있었음)")
             except Exception as exc:
                 logger.warning(f"rag_watch: 디스크 폴더 삭제 실패 '{safe}': {exc!r}")
 
-        return known
+        return known, deleted
 
     def _delete_app_folder(self, name: str) -> None:
         """앱 폴더와 그 안의 문서를 제거한다 (라우트의 delete_folder와 동일 효과)."""
@@ -288,8 +305,13 @@ class RagWatchService:
         ]:
             self._state.forget(digest)
 
-    def _create_app_folder(self, name: str) -> str:
-        """rag_folders.json에 폴더를 추가하고 folder_id를 돌려준다."""
+    def _create_app_folder(self, name: str, *, reason: str = "동기화") -> str:
+        """rag_folders.json에 폴더를 추가하고 folder_id를 돌려준다.
+
+        새로 만들 때는 **반드시 로그를 남긴다.** 예전에는 조용히 만들었는데, 그 때문에
+        "지운 폴더가 되살아났다"는 사고에서 누가 되살렸는지 로그로 추적할 수 없었다.
+        폴더 생성은 UI에 보이는 상태를 바꾸는 일이므로 설명 없이 일어나선 안 된다.
+        """
         import uuid
 
         from app.rag_routes import _ensure_folder_dir, _load_folders, _save_folders
@@ -303,25 +325,38 @@ class RagWatchService:
         folders.append({"folder_id": folder_id, "name": name})
         _save_folders(folders)
         _ensure_folder_dir(folder_id)
+        logger.info(f"rag_watch: 앱 폴더 생성 '{name}' (id={folder_id}, 사유: {reason})")
         return folder_id
 
-    def _folder_id_for(self, name: str | None) -> str | None:
+    def _folder_id_for(self, name: str | None, *, reason: str) -> str | None:
         if name is None:
             return None
-        return self._create_app_folder(name)
+        return self._create_app_folder(name, reason=reason)
 
     # ── 인제스트 ────────────────────────────────────────────────────────────
 
-    async def _apply_ingest(self, plan: ScanPlan) -> None:
+    async def _apply_ingest(self, plan: ScanPlan, deleted_folders: set[str] = frozenset()) -> None:  # type: ignore[assignment]
         from app.rag_routes import ingest_document_bytes
 
         for cand in plan.to_ingest:
+            if cand.folder_name in deleted_folders:
+                # 이 주기에 지워진 폴더다. 계획은 삭제 전에 세워졌으므로 여기서 인제스트하면
+                # 폴더가 되살아난다. 다음 주기에 (파일이 아직 있으면) 정상 경로로 처리된다.
+                logger.info(
+                    f"rag_watch: 인제스트 보류 {cand.rel_path} "
+                    f"— 폴더 '{cand.folder_name}'가 이번 주기에 삭제됨"
+                )
+                continue
             try:
                 data = await asyncio.to_thread(cand.path.read_bytes)
                 # 해시는 읽은 내용에서 다시 계산한다 — 스캔 시점과 다르면 그 사이 바뀐 것이라
                 # 다음 주기에 처리하도록 넘긴다.
                 digest = await asyncio.to_thread(file_digest, cand.path)
-                folder_id = await asyncio.to_thread(self._folder_id_for, cand.folder_name)
+                folder_id = await asyncio.to_thread(
+                    partial(
+                        self._folder_id_for, cand.folder_name, reason=f"인제스트 {cand.rel_path}"
+                    )
+                )
 
                 res = await ingest_document_bytes(
                     self._ctx,
@@ -346,12 +381,21 @@ class RagWatchService:
 
     # ── 폴더 이동 ───────────────────────────────────────────────────────────
 
-    async def _apply_moves(self, plan: ScanPlan) -> None:
+    async def _apply_moves(self, plan: ScanPlan, deleted_folders: set[str] = frozenset()) -> None:  # type: ignore[assignment]
         for cand, doc_id in plan.to_move:
             if not doc_id:
                 continue
+            if cand.folder_name in deleted_folders:
+                # 인제스트와 같은 이유 — 방금 지운 폴더로 옮기면 그 폴더가 되살아난다.
+                logger.info(
+                    f"rag_watch: 이동 보류 {cand.rel_path} "
+                    f"— 폴더 '{cand.folder_name}'가 이번 주기에 삭제됨"
+                )
+                continue
             try:
-                folder_id = await asyncio.to_thread(self._folder_id_for, cand.folder_name)
+                folder_id = await asyncio.to_thread(
+                    partial(self._folder_id_for, cand.folder_name, reason=f"이동 {cand.rel_path}")
+                )
                 moved = await asyncio.to_thread(self._move_doc, doc_id, folder_id)
                 digest = await asyncio.to_thread(file_digest, cand.path)
 

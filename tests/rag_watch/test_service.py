@@ -591,9 +591,9 @@ class TestFolderSync:
         # 주기 도중(인제스트 중) 사용자가 UI에서 삭제하는 상황을 재현한다.
         original = svc._apply_ingest
 
-        async def delete_midway(plan: Any) -> None:
+        async def delete_midway(plan: Any, deleted: Any = frozenset()) -> None:
             fenv.folders = []
-            await original(plan)
+            await original(plan, deleted)
 
         monkeypatch.setattr(svc, "_apply_ingest", delete_midway)
         await svc.run_once()
@@ -606,6 +606,70 @@ class TestFolderSync:
         await svc.run_once()  # 이제 UI 삭제로 정상 인식되어야 한다
         assert "완결보고서" not in fenv.names, "앱 폴더가 부활하면 안 된다"
         assert not (root / "완결보고서").exists()
+
+    @pytest.mark.asyncio
+    async def test_f8_ingest_and_move_skip_folder_deleted_this_cycle(
+        self, env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """인제스트·이동은 폴더 처리보다 **나중에** 돌지만 대상 목록은 삭제 **전에** 세운
+        계획이다. 그대로 진행하면 파일의 폴더를 다시 만들어 같은 주기 안에서 부활시킨다.
+        이 경로는 `_create_app_folder`를 조용히 호출해 로그조차 남지 않았다.
+
+        가드를 직접 검증한다(전체 주기로는 재현할 수 없다 — 디렉토리를 지우면 후보 파일도
+        함께 사라지므로 계획에 후보가 남지 않는다). 방어 목적의 불변식 테스트다.
+        """
+        root, _store, svc = env
+        p = write(root / "f" / "a.md")
+        fenv = _FolderEnv([])
+        _install_folders(monkeypatch, fenv)
+
+        ingested: list[str] = []
+
+        async def fake_ingest(_ctx: Any, **_kw: Any) -> Any:
+            ingested.append("x")
+            raise AssertionError("삭제된 폴더의 파일을 인제스트하면 안 된다")
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", fake_ingest)
+
+        from rag_watch.types import FileCandidate, ScanPlan
+
+        cand = FileCandidate(path=p, rel_path="f/a.md", folder_name="f", size=6, mtime=0.0)
+        plan = ScanPlan()
+        plan.to_ingest = [cand]
+        plan.to_move = [(cand, "d1")]
+
+        await svc._apply_ingest(plan, {"f"})
+        await svc._apply_moves(plan, {"f"})
+
+        assert ingested == [], "인제스트가 보류되어야 한다"
+        assert "f" not in fenv.names, "폴더가 되살아나면 안 된다"
+
+    @pytest.mark.asyncio
+    async def test_f9_folder_creation_is_always_logged(
+        self, env, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """폴더 생성은 UI에 보이는 상태를 바꾸므로 반드시 로그를 남겨야 한다.
+        조용히 만들던 탓에 실서버에서 "누가 되살렸는지" 추적이 불가능했다.
+        """
+        _root, _store, svc = env
+        fenv = _FolderEnv([])
+        _install_folders(monkeypatch, fenv)
+
+        records: list[str] = []
+        from loguru import logger as _logger
+
+        sink = _logger.add(lambda m: records.append(m), level="INFO")
+        try:
+            svc._create_app_folder("새폴더", reason="테스트 사유")
+        finally:
+            _logger.remove(sink)
+
+        joined = "".join(records)
+        assert "새폴더" in joined and "테스트 사유" in joined, (
+            f"생성 사유가 로그에 남아야 한다: {joined!r}"
+        )
 
 
 # ────────────────────────────────────────────────────────────

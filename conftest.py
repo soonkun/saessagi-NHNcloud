@@ -213,3 +213,36 @@ def _register_src_module(name: str) -> None:
 
 for _src_mod_name in ("app", "vad", "asr", "tts", "graph_rag"):
     _register_src_module(_src_mod_name)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 실서비스 데이터 보호 (CR-46)
+# ────────────────────────────────────────────────────────────────────────────
+#
+# `pytest tests/`를 돌리면 rag 폴더 목록(data/rag_folders.json)과 원본 저장소
+# (data/rag_originals/)에 **실제로 썼다.** 폴더 헬퍼를 monkeypatch하지 않은 테스트가
+# 하나라도 있으면 그 테스트가 만든 임시 폴더('f' 등)가 운영 중인 시스템의 UI에 나타난다.
+# 실제로 그렇게 만들어진 폴더를 "지웠는데 되살아난 폴더"로 오인해 한참 추적했다.
+# 개별 테스트를 고치는 것으로는 재발을 막을 수 없으므로 세션 전체를 격리한다.
+#
+# `_delete_app_folder`는 폴더 안 청크를 전부 지우므로, 격리가 없으면 실 문서가
+# 삭제될 수도 있다 — 편의가 아니라 안전 장치다.
+import pytest as _pytest  # noqa: E402
+
+
+@_pytest.fixture(autouse=True, scope="session")
+def _isolate_rag_data_paths(tmp_path_factory):  # type: ignore[no-untyped-def]
+    try:
+        import app.rag_routes as rr
+    except Exception:  # rag_routes를 못 불러오는 환경이면 격리할 대상도 없다
+        yield
+        return
+
+    tmp = tmp_path_factory.mktemp("rag_data")
+    saved = (rr._FOLDERS_FILE, rr._ORIGINALS_DIR)
+    rr._FOLDERS_FILE = tmp / "rag_folders.json"
+    rr._ORIGINALS_DIR = tmp / "rag_originals"
+    try:
+        yield
+    finally:
+        rr._FOLDERS_FILE, rr._ORIGINALS_DIR = saved
