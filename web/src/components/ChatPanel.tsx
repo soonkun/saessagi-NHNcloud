@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  ArrowUp,
   BookOpen,
-  Send,
+  FileText,
+  Image as ImageIcon,
   Mic,
-  MicOff,
   Menu,
   X,
+  Plus,
   RotateCcw,
   ExternalLink,
   Paperclip,
@@ -87,6 +89,16 @@ const STATUS_COLOR: Record<string, string> = {
 
 const TABS = CHAT_TABS.map(({ id, petLabel, Icon }) => ({ id, label: petLabel, Icon }));
 
+// CR-48 입력창 자동 높이 — ChatGPT처럼 줄바꿈되며 늘어나다 일정 줄 수부터 스크롤.
+export const LINE_HEIGHT = 22;
+export const MAX_ROWS = 7;
+export const TEXTAREA_PAD = 16; // 위아래 padding 8+8
+
+/** 내용 높이(scrollHeight)를 실제로 적용할 높이로 바꾼다 — MAX_ROWS를 넘으면 스크롤. */
+export function composerHeight(scrollHeight: number): number {
+  return Math.min(scrollHeight, MAX_ROWS * LINE_HEIGHT + TEXTAREA_PAD);
+}
+
 // ────────────────────────────────────────────────────────────
 // Chat content
 // ────────────────────────────────────────────────────────────
@@ -107,8 +119,11 @@ export function ChatContent({
   const [input, setInput] = useState("");
   const [voiceActive, setVoiceActive] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  // CR-48: +메뉴에서 이미지/파일을 따로 고를 수 있게 선택기를 나눠 둔다.
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const docInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false);
 
   // 첨부 자료 (업로드 완료된 doc 목록 + 업로드 진행 중 항목)
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
@@ -178,10 +193,37 @@ export function ChatContent({
     setPendingImages([]);
   }
 
-  // 첨부 파일 업로드
-  function handleAttachClick(): void {
-    fileInputRef.current?.click();
-  }
+  // 내용에 맞춰 높이를 다시 잰다. 먼저 auto로 되돌려야 글을 지웠을 때 줄어든다
+  // (scrollHeight는 현재 높이보다 작아지지 않으므로 한 번 커지면 그대로 남는다).
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${composerHeight(el.scrollHeight)}px`;
+  }, [input]);
+
+  // 보낼 내용이 있는가 — 전송 버튼 활성 조건이 여러 곳에 흩어지면 어긋난다.
+  const canSend =
+    input.trim().length > 0 || attachments.length > 0 || pendingImages.length > 0;
+
+  // +메뉴는 바깥을 누르거나 Esc로 닫힌다. 메뉴가 열린 채 남으면 입력창을 가린다.
+  useEffect(() => {
+    if (!attachMenuOpen) return;
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('[data-testid="attach-menu"],[data-testid="attach-button"]')) return;
+      setAttachMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setAttachMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [attachMenuOpen]);
 
   async function handleFilesPicked(files: FileList | null): Promise<void> {
     if (!files || files.length === 0) return;
@@ -194,8 +236,12 @@ export function ChatContent({
         await uploadOneFile(file);
       }
     }
-    // 같은 파일 재선택 가능하도록 reset
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    // 같은 파일 재선택 가능하도록 reset.
+    // 선택기가 셋이므로 전부 비운다 — 값이 남은 쪽은 같은 파일을 다시 골라도
+    // change 이벤트가 안 나서 아무 일도 일어나지 않는다.
+    for (const ref of [imageInputRef, docInputRef]) {
+      if (ref.current) ref.current.value = "";
+    }
   }
 
   function removeAttachment(id: string): void {
@@ -207,7 +253,7 @@ export function ChatContent({
   }
 
   // 클립보드 paste — 이미지/파일 분기
-  async function handlePaste(e: React.ClipboardEvent<HTMLInputElement>): Promise<void> {
+  async function handlePaste(e: React.ClipboardEvent<HTMLTextAreaElement>): Promise<void> {
     const cd = e.clipboardData;
     if (!cd) return;
     const items = Array.from(cd.items);
@@ -278,7 +324,7 @@ export function ChatContent({
     }
   }
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>): void {
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>): void {
     // nativeEvent.isComposing: 한국어/일본어 IME 조합 중 Enter는 무시
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -798,105 +844,238 @@ export function ChatContent({
         </div>
       )}
 
-      {/* 입력 영역 */}
+      {/* 입력 영역 — Gemini 스타일 알약 한 덩어리 (CR-48).
+          +(첨부) · 입력 · 마이크 · 전송 순서. 스트리밍(실시간 대화)은 지원하지 않으므로
+          Gemini에 있는 라이브 버튼은 두지 않는다. */}
       <div
         style={{
-          padding: "10px 12px",
-          borderTop: "1px solid var(--color-border)",
+          // 아래쪽을 넉넉히 띄운다. 바닥에 붙어 있으면 눌리기 불편하고, 모바일에서는
+          // 브라우저 툴바·홈 인디케이터와 겹친다(env(safe-area-inset-bottom)).
+          padding: "10px 12px calc(22px + env(safe-area-inset-bottom, 0px))",
           display: "flex",
-          gap: 8,
-          alignItems: "center",
+          justifyContent: "center",
           flexShrink: 0,
         }}
       >
-        <button
-          onClick={handleMicToggle}
-          title={voiceActive ? "녹음 중단" : "마이크 누르고 말하기"}
-          style={{
-            background: voiceActive ? "rgba(231,76,60,0.2)" : "transparent",
-            border: `1px solid ${voiceActive ? "#e74c3c" : "var(--color-border)"}`,
-            borderRadius: 8,
-            color: voiceActive ? "#e74c3c" : "var(--color-text-muted)",
-            cursor: "pointer",
-            padding: "6px 8px",
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-          }}
-        >
-          {voiceActive ? <Mic size={16} /> : <MicOff size={16} />}
-        </button>
-
-        {/* 파일 첨부 */}
+        {/* 숨은 파일 선택기 — +메뉴의 '이미지'와 '파일'이 각각 연다.
+            accept를 나눠 두면 사진 앱/문서 폴더가 바로 열려 고르기 쉽다.
+            고른 뒤 처리는 기존 handleFilesPicked 하나로 합류한다(이미지는 비전 입력,
+            문서는 RAG 업로드로 자동 분기). */}
         <input
-          ref={fileInputRef}
+          ref={imageInputRef}
           type="file"
           multiple
-          accept=".txt,.md,.pdf,.docx,.pptx,.hwpx,.markdown,image/*"
+          accept="image/*"
           style={{ display: "none" }}
           onChange={(e) => void handleFilesPicked(e.target.files)}
         />
-        <button
-          onClick={handleAttachClick}
-          title="파일 첨부 (RAG 자동 임베딩 + 노트 자동 정리)"
-          style={{
-            background: "transparent",
-            border: "1px solid var(--color-border)",
-            borderRadius: 8,
-            color: "var(--color-text-muted)",
-            cursor: "pointer",
-            padding: "6px 8px",
-            display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-          }}
-        >
-          <Paperclip size={16} />
-        </button>
-
         <input
-          ref={inputRef}
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onPaste={(e) => void handlePaste(e)}
-          onClick={() => window.electronAPI?.restoreFocus()}
-          placeholder="메시지 또는 파일/스크린샷 붙여넣기 (⌘V)"
-          style={{
-            flex: 1,
-            background: "var(--color-bg)",
-            border: "1px solid var(--color-border)",
-            borderRadius: 8,
-            color: "var(--color-text)",
-            padding: "7px 12px",
-            fontSize: "var(--fs-13)",
-            outline: "none",
-          }}
+          ref={docInputRef}
+          type="file"
+          multiple
+          accept=".txt,.md,.pdf,.docx,.pptx,.hwpx,.markdown"
+          style={{ display: "none" }}
+          onChange={(e) => void handleFilesPicked(e.target.files)}
         />
 
-        <button
-          onClick={handleSend}
-          disabled={!input.trim() && attachments.length === 0 && pendingImages.length === 0}
-          title="전송"
+        <div
+          data-testid="composer"
           style={{
-            background: (input.trim() || attachments.length > 0 || pendingImages.length > 0)
-              ? "var(--color-accent)"
-              : "var(--color-border)",
-            border: "none",
-            borderRadius: 8,
-            color: "#fff",
-            cursor: (input.trim() || attachments.length > 0 || pendingImages.length > 0) ? "pointer" : "default",
-            padding: "6px 10px",
+            position: "relative",
+            width: "100%",
+            maxWidth: 860,
             display: "flex",
-            alignItems: "center",
-            flexShrink: 0,
-            transition: "background 0.15s",
+            // 입력창이 여러 줄로 늘어나면 버튼은 아래쪽에 붙어 있어야 자연스럽다.
+            alignItems: "flex-end",
+            gap: 6,
+            background: "var(--color-panel)",
+            border: "1px solid var(--color-border)",
+            // 한 줄일 때 딱 알약이 되는 값(높이 52 ÷ 2). 여러 줄로 커지면 자연스럽게
+            // 둥근 사각형이 된다 — 999로 두면 길어졌을 때 양끝이 기괴하게 부푼다.
+            borderRadius: 26,
+            padding: "6px 8px 6px 6px",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
           }}
         >
-          <Send size={16} />
-        </button>
+          {/* + 첨부 메뉴 */}
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            {attachMenuOpen && (
+              <div
+                data-testid="attach-menu"
+                role="menu"
+                style={{
+                  position: "absolute",
+                  bottom: "calc(100% + 10px)",
+                  left: 0,
+                  minWidth: 210,
+                  background: "var(--color-panel)",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 12,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+                  padding: 6,
+                  zIndex: 30,
+                }}
+              >
+                <AttachMenuItem
+                  icon={<ImageIcon size={16} />}
+                  label="이미지"
+                  hint="화면 캡처·사진"
+                  onClick={() => {
+                    setAttachMenuOpen(false);
+                    imageInputRef.current?.click();
+                  }}
+                />
+                <AttachMenuItem
+                  icon={<FileText size={16} />}
+                  label="파일"
+                  hint="문서 등록 후 답변에 활용"
+                  onClick={() => {
+                    setAttachMenuOpen(false);
+                    docInputRef.current?.click();
+                  }}
+                />
+              </div>
+            )}
+            <button
+              data-testid="attach-button"
+              onClick={() => setAttachMenuOpen((o) => !o)}
+              aria-haspopup="menu"
+              aria-expanded={attachMenuOpen}
+              title="첨부"
+              style={{
+                ...roundBtnStyle,
+                background: attachMenuOpen ? "var(--color-bg)" : "transparent",
+                color: "var(--color-text-muted)",
+                transform: attachMenuOpen ? "rotate(45deg)" : "none",
+                transition: "transform 0.15s, background 0.15s",
+              }}
+            >
+              <Plus size={20} />
+            </button>
+          </div>
+
+          <textarea
+            ref={inputRef}
+            value={input}
+            rows={1}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={(e) => void handlePaste(e)}
+            onClick={() => window.electronAPI?.restoreFocus()}
+            placeholder="새싹이에게 물어보기"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: "transparent",
+              border: "none",
+              color: "var(--color-text)",
+              padding: "8px 4px",
+              fontSize: "var(--fs-14)",
+              lineHeight: `${LINE_HEIGHT}px`,
+              outline: "none",
+              // 긴 글은 줄바꿈되며 MAX_ROWS줄까지 늘어나고 그 뒤에는 스크롤한다.
+              // 높이는 아래 useEffect가 내용에 맞춰 계산한다(rows만으로는 줄지 않는다).
+              resize: "none",
+              overflowY: "auto",
+              maxHeight: MAX_ROWS * LINE_HEIGHT + TEXTAREA_PAD,
+              fontFamily: "inherit",
+            }}
+          />
+
+          <button
+            onClick={handleMicToggle}
+            title={voiceActive ? "녹음 중단" : "음성으로 입력"}
+            style={{
+              ...roundBtnStyle,
+              background: voiceActive ? "rgba(231,76,60,0.14)" : "transparent",
+              color: voiceActive ? "#e74c3c" : "var(--color-text-muted)",
+            }}
+          >
+            {/* 평소에도 그냥 마이크를 보여준다. MicOff(빗금)를 기본으로 두면
+                "음성 입력을 쓸 수 없다"는 뜻으로 읽혀 아무도 누르지 않는다. */}
+            <Mic size={18} />
+          </button>
+
+          <button
+            onClick={handleSend}
+            disabled={!canSend}
+            title="전송"
+            style={{
+              ...roundBtnStyle,
+              background: canSend ? "var(--color-accent)" : "var(--color-border)",
+              color: "#fff",
+              cursor: canSend ? "pointer" : "default",
+              transition: "background 0.15s",
+            }}
+          >
+            <ArrowUp size={18} />
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+/** 알약 안의 동그란 아이콘 버튼 — 크기를 한 곳에서 맞춘다. */
+const roundBtnStyle: React.CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: "50%",
+  border: "none",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  cursor: "pointer",
+  flexShrink: 0,
+  padding: 0,
+};
+
+function AttachMenuItem({
+  icon,
+  label,
+  hint,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  onClick: () => void;
+}): React.ReactElement {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        width: "100%",
+        background: hover ? "var(--color-bg)" : "transparent",
+        border: "none",
+        borderRadius: 8,
+        padding: "9px 10px",
+        cursor: "pointer",
+        color: "var(--color-text)",
+        textAlign: "left",
+      }}
+    >
+      <span style={{ color: "var(--color-text-muted)", display: "flex" }}>{icon}</span>
+      <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span style={{ fontSize: "var(--fs-13)", fontWeight: 600 }}>{label}</span>
+        <span
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {hint}
+        </span>
+      </span>
+    </button>
   );
 }
 

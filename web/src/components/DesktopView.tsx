@@ -3,7 +3,6 @@ import { useStore, isElectronRuntime } from "../store";
 import { send } from "../services/websocket";
 import {
   Calendar,
-  LayoutGrid,
   PanelLeftClose,
   Power,
   Minus,
@@ -36,15 +35,6 @@ const SIDEBAR_TABS = CHAT_TABS.map(({ id, desktopLabel, Icon }) => ({
   label: desktopLabel,
   Icon,
 }));
-
-const SAMPLE_PROMPTS = [
-  { title: "오늘 한 업무 기록", body: "오늘 ⟨이 자료⟩로 ⟨이 업무⟩를 이렇게 처리했어" },
-  { title: "이미지·스크린샷 붙여넣기", body: "자료를 붙여넣고 내용을 읽고 업무노트에 기록해줘" },
-  { title: "사내 문서에서 답 찾기", body: "연구책임자 변경신청 방법을 알려줘" },
-  { title: "지난 업무 다시 찾기", body: "지난번 LG 협의 결과 뭐였지?" },
-  { title: "일정 등록·확인", body: "내일 오후 2시 팀 회의 잡아줘" },
-  { title: "회의 결과보고서 작성", body: "회의록 탭에서 음성 파일 업로드 → 한글 보고서까지" },
-];
 
 export function DesktopView(): React.ReactElement {
   const chatTab = useStore((s) => s.chatTab);
@@ -352,43 +342,49 @@ export function DesktopView(): React.ReactElement {
               펫 모드
             </button>
           )}
+          {/* 테마 전환은 가끔 쓰는 기능이라 아이콘만. 자리는 로그아웃에 양보한다. */}
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
             title={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
+            aria-label={theme === "dark" ? "라이트 모드로 전환" : "다크 모드로 전환"}
             style={{
-              flex: isElectron ? undefined : 1,
-              gap: 6,
+              width: 36,
+              height: 36,
+              flexShrink: 0,
               justifyContent: "center",
               background: "transparent",
               border: "1px solid var(--color-border)",
               borderRadius: 8,
               color: "var(--color-text-muted)",
               cursor: "pointer",
-              padding: "8px 10px",
-              fontSize: "var(--fs-13)",
+              padding: 0,
               display: "flex",
               alignItems: "center",
             }}
           >
-            {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
-            {!isElectron && (theme === "dark" ? "라이트 모드" : "다크 모드")}
+            {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
           </button>
           {authEnabled && (
             <button
               onClick={() => void logout()}
               title="로그아웃 — 세션을 끊고 로그인 화면으로"
               style={{
+                flex: 1,
+                gap: 6,
+                justifyContent: "center",
                 background: "transparent",
                 border: "1px solid var(--color-border)",
                 borderRadius: 8,
                 color: "var(--color-text-muted)",
                 cursor: "pointer",
                 padding: "8px 10px",
+                fontSize: "var(--fs-13)",
                 display: "flex",
                 alignItems: "center",
               }}
             >
-              <LogOut size={13} />
+              <LogOut size={14} />
+              로그아웃
             </button>
           )}
           {isElectron && (
@@ -611,38 +607,6 @@ function WelcomeHero(): React.ReactElement {
         )}
       </div>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 12,
-          width: "100%",
-          maxWidth: 720,
-        }}
-      >
-        {SAMPLE_PROMPTS.map((p, i) => (
-          <div
-            key={i}
-            style={{
-              background: "var(--color-panel)",
-              border: "1px solid var(--color-border)",
-              borderRadius: 12,
-              padding: "14px 16px",
-            }}
-          >
-            <div style={{ fontSize: "var(--fs-13)", fontWeight: 600, marginBottom: 6 }}>
-              <LayoutGrid
-                size={13}
-                style={{ marginRight: 6, verticalAlign: "-2px", opacity: 0.6 }}
-              />
-              {p.title}
-            </div>
-            <div style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
-              {p.body}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
