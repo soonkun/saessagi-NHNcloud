@@ -1,0 +1,152 @@
+"""M_22 스캐너 (CR-41) — 디스크를 훑어 "무엇을 할지"만 결정한다.
+
+임베딩·저장은 하지 않는다. 판단 규칙을 파일시스템만 있는 상태에서 단위 테스트할 수 있게
+분리한 것이다.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from loguru import logger
+
+from .state import WatchState, file_digest
+from .types import FileCandidate, ScanPlan
+
+# 앱의 업로드 라우트와 동일하게 유지할 것 — 여기만 넓히면 파싱 실패로 이어진다.
+ALLOWED_SUFFIXES = frozenset({".txt", ".md", ".pdf", ".docx", ".pptx", ".hwpx"})
+
+# 편집기·SFTP 클라이언트가 남기는 임시 파일. 인제스트하면 쓰레기가 색인된다.
+_IGNORED_PREFIXES = (".", "~$")
+_IGNORED_SUFFIXES = (".tmp", ".part", ".crdownload", ".filepart", ".swp")
+
+
+def sanitize_folder_name(raw: str) -> str | None:
+    """디렉토리 이름을 앱 폴더 이름으로 정규화. 부적절하면 None.
+
+    경로 탈출(`..`)과 구분자를 막는다 — 감시 루트는 사용자가 파일을 던져 넣는 곳이므로
+    디렉토리 이름을 그대로 신뢰하지 않는다.
+    """
+    name = raw.strip().strip("/\\").replace("\x00", "")
+    if not name or name in (".", ".."):
+        return None
+    if "/" in name or "\\" in name:
+        return None
+    return name
+
+
+def _is_ignored(path: Path) -> bool:
+    n = path.name
+    if n.startswith(_IGNORED_PREFIXES):
+        return True
+    return n.lower().endswith(_IGNORED_SUFFIXES)
+
+
+def collect_candidates(root: Path) -> tuple[list[FileCandidate], set[str]]:
+    """감시 루트를 훑어 후보 파일과 서브디렉토리 이름 집합을 돌려준다.
+
+    앱 폴더 모델이 1단이므로, 2단 이상 깊이의 파일은 최상위 서브디렉토리 폴더로 평탄화한다.
+    """
+    candidates: list[FileCandidate] = []
+    folder_names: set[str] = set()
+
+    for entry in sorted(root.iterdir(), key=lambda p: p.name):
+        if entry.is_dir():
+            folder = sanitize_folder_name(entry.name)
+            if folder is None:
+                logger.warning(f"rag_watch: 폴더명 사용 불가, 건너뜀: {entry.name!r}")
+                continue
+            folder_names.add(folder)
+            for sub in sorted(entry.rglob("*")):
+                if sub.is_file() and not _is_ignored(sub):
+                    candidates.append(_make_candidate(sub, root, folder))
+        elif entry.is_file() and not _is_ignored(entry):
+            # 루트 직하 파일 → 폴더 없음
+            candidates.append(_make_candidate(entry, root, None))
+
+    return candidates, folder_names
+
+
+def _make_candidate(path: Path, root: Path, folder: str | None) -> FileCandidate:
+    st = path.stat()
+    return FileCandidate(
+        path=path,
+        rel_path=str(path.relative_to(root)),
+        folder_name=folder,
+        size=st.st_size,
+        mtime=st.st_mtime,
+    )
+
+
+def build_plan(
+    root: Path,
+    state: WatchState,
+    *,
+    app_folder_names: set[str],
+    max_per_cycle: int,
+) -> ScanPlan:
+    """한 주기 실행 계획을 세운다."""
+    plan = ScanPlan()
+    candidates, disk_folders = collect_candidates(root)
+
+    # 폴더 양방향 맞춤
+    plan.folders_to_create_in_app = sorted(disk_folders - app_folder_names)
+    plan.folders_to_create_on_disk = sorted(app_folder_names - disk_folders)
+
+    seen_rel: set[str] = set()
+    live_digests: set[str] = set()
+
+    for cand in candidates:
+        seen_rel.add(cand.rel_path)
+
+        if cand.path.suffix.lower() not in ALLOWED_SUFFIXES:
+            plan.skipped += 1
+            continue
+
+        # 전송 중 파일 걸러내기 — 해시 계산 전에 확인해 큰 파일을 헛되게 읽지 않는다.
+        if not state.is_stable(cand.rel_path, cand.size, cand.mtime):
+            plan.unstable.append(cand)
+            continue
+
+        try:
+            digest = file_digest(cand.path)
+        except OSError as exc:
+            logger.warning(f"rag_watch: 읽기 실패, 건너뜀 {cand.rel_path}: {exc}")
+            continue
+
+        live_digests.add(digest)
+        known = state.get(digest)
+
+        if known is None:
+            if len(plan.to_ingest) >= max_per_cycle:
+                plan.deferred.append(cand)
+            else:
+                plan.to_ingest.append(cand)
+            continue
+
+        if known.get("folder_name") != cand.folder_name:
+            plan.to_move.append((cand, str(known.get("doc_id") or "")))
+        else:
+            plan.skipped += 1
+
+    # 상태에는 있는데 디스크에 없는 것.
+    #
+    # live_digests만으로 판단하면 안 된다. 안정화 대기(첫 주기·전송 중) 파일은 해시를
+    # 계산하지 않으므로 live_digests에 없고, 그러면 **재시작 직후 모든 문서가 삭제 대상으로
+    # 잡힌다**. delete_policy=unindex였다면 색인 전체가 날아간다.
+    # 그래서 기록된 경로가 실제로 남아 있는지 stat으로 함께 확인한다.
+    plan.missing_digests = sorted(
+        d
+        for d in state.known_digests() - live_digests
+        if not _recorded_path_exists(root, state, d)
+    )
+    state.drop_seen(seen_rel)
+    return plan
+
+
+def _recorded_path_exists(root: Path, state: WatchState, digest: str) -> bool:
+    entry = state.get(digest)
+    rel = str((entry or {}).get("path") or "")
+    if not rel:
+        return False
+    return (root / rel).exists()

@@ -214,6 +214,42 @@ class IntentGateConfig(BaseModel):
     timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
+class RagWatchDeletePolicy(str, Enum):
+    """감시 중인 파일이 사라졌을 때의 처리 (M_22)."""
+
+    IGNORE = "ignore"
+    """색인을 유지한다 (기본). 파일시스템 사고로 문서가 조용히 사라지는 것을 막는다."""
+
+    UNINDEX = "unindex"
+    """색인에서도 제거한다."""
+
+
+class RagWatchConfig(BaseModel):
+    """M_22 (CR-41): RAG 폴더 감시 자동 인제스트.
+
+    root에 넣은 파일을 주기적으로 스캔해 임베딩하고, 서브디렉토리 이름을 앱 문서 폴더와
+    맞춘다. inotify를 쓰지 않는 이유는 Lustre 등 병렬 파일시스템에서 다른 클라이언트의
+    변경 이벤트가 전달되지 않기 때문이다 (스펙 참조).
+    """
+
+    enabled: bool = Field(default=False)
+    root: str = Field(
+        default="",
+        description="감시할 디렉토리 절대경로. 비우면 비활성. 서브디렉토리 = 문서 폴더.",
+    )
+    interval_seconds: int = Field(default=30, ge=5, le=3600)
+    delete_policy: RagWatchDeletePolicy = Field(default=RagWatchDeletePolicy.IGNORE)
+    max_per_cycle: int = Field(
+        default=20,
+        ge=1,
+        le=500,
+        description=(
+            "한 주기에 인제스트할 최대 파일 수. 수백 개가 한꺼번에 들어와도 "
+            "채팅·TTS가 굶지 않도록 나눠 처리한다."
+        ),
+    )
+
+
 class DeepResearchConfig(BaseModel):
     """M_20 딥 리서치 전용 LLM 선택 (CR-39).
 
@@ -359,6 +395,7 @@ class AppConfig(BaseModel):
     intent_gate: IntentGateConfig = Field(default_factory=IntentGateConfig)  # M_16
     graphrag: GraphRagConfig = Field(default_factory=GraphRagConfig)  # M_19
     deep_research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)  # M_20 (CR-39)
+    rag_watch: RagWatchConfig = Field(default_factory=RagWatchConfig)  # M_22 (CR-41)
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)

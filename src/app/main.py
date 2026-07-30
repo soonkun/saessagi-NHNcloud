@@ -8,7 +8,8 @@ import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from pathlib import Path
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from loguru import logger
@@ -112,12 +113,23 @@ def create_app(config_path: str = "") -> FastAPI:
             except Exception as exc:
                 logger.warning(f"proactive_dispatcher.start() 실패: {exc}")
 
+        # M_22 (CR-41): RAG 폴더 감시 시작
+        _rag_watch_task = await _start_rag_watch(ctx, full_config.app)
+        if _rag_watch_task is not None:
+            fastapi_app.state.rag_watch_task = _rag_watch_task
+
         logger.info("애플리케이션 startup 완료")
 
         yield  # 앱 실행
 
         # shutdown
         logger.info("애플리케이션 shutdown 시작")
+        if _rag_watch_task is not None:
+            _rag_watch_task.cancel()
+            try:
+                await _rag_watch_task
+            except (asyncio.CancelledError, Exception):
+                pass
         try:
             await ctx.close()
         except Exception as exc:
@@ -133,6 +145,57 @@ def create_app(config_path: str = "") -> FastAPI:
     app = ws_server.app
 
     return app
+
+
+async def _start_rag_watch(ctx: Any, app_config: Any) -> "asyncio.Task[None] | None":
+    """M_22 (CR-41): RAG 폴더 감시 루프를 백그라운드 태스크로 띄운다.
+
+    비활성이거나 루트가 없으면 조용히 None을 돌려준다 — 감시는 부가 기능이므로
+    설정 누락으로 기동을 막지 않는다.
+    """
+    cfg = getattr(app_config, "rag_watch", None)
+    if cfg is None or not cfg.enabled or not cfg.root:
+        return None
+
+    root = Path(cfg.root)
+    if not root.is_dir():
+        logger.warning(f"rag_watch: 감시 루트가 없어 비활성화합니다: {root}")
+        return None
+
+    if getattr(ctx, "rag_service", None) is None:
+        logger.warning("rag_watch: RagService가 없어 비활성화합니다 (임베딩 불가)")
+        return None
+
+    from rag_watch import RagWatchService
+
+    state_path = Path(app_config.paths.data_dir) / "rag_watch_state.json"
+    service = RagWatchService(
+        root=root,
+        state_path=state_path,
+        service_context=ctx,
+        max_per_cycle=cfg.max_per_cycle,
+        delete_policy=cfg.delete_policy.value,
+    )
+    ctx.rag_watch_service = service
+
+    async def _loop() -> None:
+        # 기동 직후엔 임베더·벡터스토어가 아직 덜 준비됐을 수 있어 한 주기 쉬고 시작한다.
+        await asyncio.sleep(min(cfg.interval_seconds, 15))
+        while True:
+            try:
+                await service.run_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # 루프는 절대 죽이지 않는다 — 한 번 죽으면 재시작까지 감시가 멈춘다.
+                logger.error(f"rag_watch: 스캔 중 예외 (계속 진행): {exc!r}")
+            await asyncio.sleep(cfg.interval_seconds)
+
+    logger.info(
+        f"rag_watch: 감시 시작 root={root}, 주기 {cfg.interval_seconds}초, "
+        f"삭제정책={cfg.delete_policy.value}, 주기당 최대 {cfg.max_per_cycle}건"
+    )
+    return asyncio.create_task(_loop())
 
 
 def run() -> None:

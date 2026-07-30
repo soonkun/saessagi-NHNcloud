@@ -457,7 +457,9 @@ async def upload_document(request: Request) -> UploadResponse:
     folder_name: str | None = folder_name_raw.strip() if isinstance(folder_name_raw, str) else None
 
     ctx = _get_context(request)
-    rag = _require_rag(ctx)
+    # RagService 준비 여부는 여기서 먼저 확인한다 — 폼을 다 읽고 나서 503을 주면
+    # 큰 파일을 헛되게 업로드시킨다. (실제 사용은 ingest_document_bytes 안에서)
+    _require_rag(ctx)
 
     filename = _sanitize_filename(file.filename or "upload")
     suffix = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
@@ -487,6 +489,24 @@ async def upload_document(request: Request) -> UploadResponse:
         _get_folder_or_404(folder_id)
 
     data = await file.read()
+    return await ingest_document_bytes(ctx, filename=filename, data=data, folder_id=folder_id)
+
+
+async def ingest_document_bytes(
+    ctx: Any,
+    *,
+    filename: str,
+    data: bytes,
+    folder_id: str | None,
+) -> UploadResponse:
+    """파싱→청킹→임베딩→원본저장. 업로드 라우트와 폴더 감시자(M_22)가 공유한다.
+
+    인제스트 로직을 두 벌 두면 청킹 파라미터가 갈라져 브라우저 업로드와 자동 인제스트의
+    결과가 달라진다. 그래서 한 함수로 모으고 라우트는 폼 파싱만 담당한다.
+
+    호출자는 filename 새니타이즈·확장자 검증·folder_id 유효성을 먼저 끝내야 한다.
+    """
+    rag = _require_rag(ctx)
     try:
         # 파싱을 별도 프로세스에서 수행 — 네이티브 파서 크래시로부터 백엔드 보호 (E-48)
         meta_segments = await _parse_isolated(filename, data)

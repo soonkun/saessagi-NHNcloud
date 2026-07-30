@@ -201,6 +201,19 @@ app:
     ollama_model: gemma4:e4b
     confidence_threshold: 0.55
     timeout_seconds: 8.0
+  # M_22 (CR-41) RAG 폴더 감시 — 이 디렉토리에 파일을 넣으면 자동 임베딩된다.
+  # 서브디렉토리 이름 = 문서 탭 폴더 이름(양방향 동기화).
+  # 처음 켤 때, 이미 인제스트된 파일이 root 안에 있으면 반드시
+  #   .venv/bin/python scripts/rag_watch_seed.py
+  # 를 먼저 실행할 것 — 안 하면 전부 중복 임베딩된다.
+  # delete_policy: ignore(기본) — 파일이 사라져도 색인 유지. 파일시스템 사고로 문서가
+  # 조용히 사라지는 것이 잘못 남는 것보다 위험하다. unindex면 색인도 제거.
+  rag_watch:
+    enabled: false
+    root: ""
+    interval_seconds: 30
+    delete_policy: ignore
+    max_per_cycle: 20
   # M_20 (CR-39) 딥 리서치 전용 LLM. 장문 추론이라 큰 모델이 유리하다.
   # keep_alive는 대형 모델 로딩(수십 GB면 1~2분)을 매번 반복하지 않도록 길게 잡는다.
   deep_research:
