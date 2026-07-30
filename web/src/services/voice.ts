@@ -8,6 +8,20 @@ const ASR_URL = `${API_BASE}/asr`;
 const SILENCE_MS = 2000;
 const SILENCE_THRESHOLD = 10; // 0-255 average frequency energy
 const SAMPLE_RATE = 16000;
+/** 이 실효값 미만이면 말이 없었던 것으로 본다(무음 환각 방지). */
+const SILENCE_RMS = 0.004;
+
+/**
+ * Whisper가 무음·잡음에서 지어내는 상투 문구.
+ * 학습 데이터(자막)에 워낙 흔해서, 들린 게 없으면 이런 문장이 튀어나온다.
+ * 사용자가 실제로 이 말을 할 가능성은 거의 없고, 잘못 보내면 대화가 오염된다.
+ */
+const HALLUCINATION_RE =
+  /^[\s.,!?]*(다음 영상에서 만나요|시청해 주셔서 감사합니다|구독과 좋아요|감사합니다)[\s.,!?~]*$/;
+
+export function isHallucination(text: string): boolean {
+  return HALLUCINATION_RE.test(text.trim());
+}
 
 export type VoiceCallbacks = {
   onStart: () => void;
@@ -94,14 +108,27 @@ export async function startVoice(cb: VoiceCallbacks): Promise<void> {
 
     try {
       const blob = new Blob(chunks, { type: mimeType });
-      const wav = await toWav(blob);
+      const { wav, rms } = await toWav(blob);
+
+      // 사실상 무음이면 보내지 않는다.
+      // Whisper는 무음을 받으면 학습 데이터에 흔한 문구("다음 영상에서 만나요." 등)를
+      // 지어낸다. 그 결과가 그대로 대화로 전송되므로, 말하지 않고 마이크를 껐을 때
+      // 엉뚱한 메시지가 나가 버린다. 실제로 무음 WAV에서 재현된다.
+      if (rms < SILENCE_RMS) {
+        _cb?.onError("소리가 들리지 않았어요. 다시 말씀해 주세요.");
+        _cb?.onStop();
+        _cb = null;
+        return;
+      }
+
       const form = new FormData();
       form.append("file", wav, "voice.wav");
       const res = await fetch(ASR_URL, { method: "POST", body: form });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await (res.json() as Promise<{ text?: string }>);
       const text = (json.text ?? "").trim();
-      if (text) _cb?.onText(text);
+      if (text && !isHallucination(text)) _cb?.onText(text);
+      else if (text) _cb?.onError("소리가 잘 들리지 않았어요. 다시 말씀해 주세요.");
     } catch (e) {
       _cb?.onError(`음성 인식 오류: ${String(e)}`);
     }
@@ -123,7 +150,7 @@ export function stopVoice(): void {
   _stream = null;
 }
 
-async function toWav(blob: Blob): Promise<Blob> {
+async function toWav(blob: Blob): Promise<{ wav: Blob; rms: number }> {
   const raw = await blob.arrayBuffer();
   const decodeCtx = new AudioContext();
   const decoded = await decodeCtx.decodeAudioData(raw);
@@ -157,5 +184,10 @@ async function toWav(blob: Blob): Promise<Blob> {
   dv.setUint32(40, int16.byteLength, true);
   new Int16Array(wavBuf, 44).set(int16);
 
-  return new Blob([wavBuf], { type: "audio/wav" });
+  // 실효값(RMS) — 사실상 무음인지 판별하는 데 쓴다.
+  let sum = 0;
+  for (let i = 0; i < pcm.length; i++) sum += pcm[i] * pcm[i];
+  const rms = pcm.length > 0 ? Math.sqrt(sum / pcm.length) : 0;
+
+  return { wav: new Blob([wavBuf], { type: "audio/wav" }), rms };
 }

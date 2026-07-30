@@ -17,6 +17,11 @@ dependencies = [
     "python-dotenv>=1.0,<2",
     "faster-whisper>=1.0,<2",
     "ctranslate2>=4.4,<5",
+    # ctranslate2 4.x는 CUDA 12용 cuBLAS(libcublas.so.12)를 dlopen한다. torch가 끌어오는
+    # nvidia 패키지는 CUDA 13이라 이것만 따로 없으면 GPU 전사가
+    # "Library libcublas.so.12 is not found"로 즉시 실패한다(STT가 통째로 죽는다, E-73).
+    # GPU가 없는 환경에서는 설치만 되고 쓰이지 않는다(conf.yaml device: auto → cpu).
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'linux'",
     "silero-vad>=5.0,<6",
     # M_04 TTSEngine
     # melotts: pypinyin 버전 충돌로 pyproject.toml 제외 -- bootstrap.py에서 별도 설치
