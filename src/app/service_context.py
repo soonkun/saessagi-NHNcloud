@@ -592,10 +592,24 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 # 모델을 물릴 수 있게 한다. 기본값(same_as_chat)이면 기존과 동일.
                 _dr_agent, _dr_label = await self._build_deep_research_agent(gemma_agent)
 
+                # CR-44: mode("duplication"/"discovery"/"proposal") → 커스텀 지침.
+                # _prompt_provider()는 M_17 dict를 lazy 조회하므로 지침 저장 즉시
+                # 다음 딥 리서치 실행부터 반영된다(agent 재초기화 불필요).
+                _dr_mode_to_key = {
+                    "duplication": "deep_research_duplication",
+                    "discovery": "deep_research_discovery",
+                    "proposal": "deep_research_proposal",
+                }
+
+                def _dr_prompt_provider(mode: str) -> str:
+                    key = _dr_mode_to_key.get(mode)
+                    return _prompt_provider().get(key, "") if key else ""
+
                 self.deep_research_service = DeepResearchService(
                     agent=_dr_agent,
                     rag_service=self.rag_service,
                     graph_rag_service=self.graph_rag_service,
+                    prompt_provider=_dr_prompt_provider,
                 )
                 logger.info(
                     "AppServiceContext.init_agent: DeepResearchService 배선 완료 "
@@ -1000,10 +1014,17 @@ def _make_prompt_provider(
             doc = (getattr(ap, "doc_query_answer", "") or "").strip()
             work = (getattr(ap, "work_query_answer", "") or "").strip()
             note = (getattr(ap, "knowledge_note", "") or "").strip()
+            # CR-44: 딥 리서치 3모드 지침도 같은 클로저로 lazy 조회한다.
+            dr_dup = (getattr(ap, "deep_research_duplication", "") or "").strip()
+            dr_disc = (getattr(ap, "deep_research_discovery", "") or "").strip()
+            dr_prop = (getattr(ap, "deep_research_proposal", "") or "").strip()
             return {
                 "doc_query_answer": doc,
                 "work_query_answer": work,
                 "knowledge_note": note,
+                "deep_research_duplication": dr_dup,
+                "deep_research_discovery": dr_disc,
+                "deep_research_proposal": dr_prop,
             }
         except Exception as _exc:
             logger.debug(f"prompt_provider 조회 실패 (무시): {_exc!r}")

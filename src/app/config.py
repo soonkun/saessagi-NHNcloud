@@ -394,6 +394,16 @@ class AgentPromptsConfig(BaseModel):
         default="",
         description="지식그래프 엔티티·관계 추출 지침. 빈값이면 EXTRACT_SYSTEM_PROMPT 사용.",
     )
+    # CR-44: 딥 리서치 3모드 종합 지침. 빈값이면 각 모드의 코드 기본값 사용.
+    deep_research_duplication: str = Field(
+        default="", description="딥 리서치 '과제 중복성 검토' 지침. 빈값이면 기본값 사용."
+    )
+    deep_research_discovery: str = Field(
+        default="", description="딥 리서치 '신규과제 발굴' 지침. 빈값이면 기본값 사용."
+    )
+    deep_research_proposal: str = Field(
+        default="", description="딥 리서치 '과제 계획서 초안' 지침. 빈값이면 기본값 사용."
+    )
 
 
 class AppConfig(BaseModel):

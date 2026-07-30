@@ -44,6 +44,7 @@ class FakeAgent:
         self.plan_raises = plan_raises
         self.json_calls = 0
         self.text_calls = 0
+        self.last_system_prompt = ""
 
     async def complete_json(
         self, system_prompt: str, user_prompt: str, json_schema: Any, **kw: Any
@@ -57,6 +58,7 @@ class FakeAgent:
 
     async def complete_text(self, system_prompt: str, user_prompt: str, **kw: Any) -> str:
         self.text_calls += 1
+        self.last_system_prompt = system_prompt
         return self.report
 
 
@@ -274,3 +276,68 @@ class TestScopeFilter:
         done = events[-1]
         assert done["sources"] == []
         assert agent.text_calls == 0
+
+
+class TestCustomPrompt:
+    """CR-44: M_17 커스텀 지침이 실제 LLM 호출에 반영되는지 (prompt_provider 배선)."""
+
+    @pytest.mark.asyncio
+    async def test_custom_instructions_reach_the_llm_call(self) -> None:
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1")]})
+
+        def provider(mode: str) -> str:
+            return "커스텀-마커-XYZ" if mode == "duplication" else ""
+
+        svc = DeepResearchService(agent, FakeRag([]), graph, prompt_provider=provider)
+        await _collect(svc.run("duplication", "과제 내용"))
+
+        assert "커스텀-마커-XYZ" in agent.last_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_safety_rules_survive_custom_override(self) -> None:
+        """지침을 갈아끼워도 근거 인용 강제(EVIDENCE_RULES)는 항상 붙어야 한다 —
+        그렇지 않으면 사용자가 실수로 환각 억제 장치를 지워버릴 수 있다."""
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1")]})
+        svc = DeepResearchService(
+            agent, FakeRag([]), graph, prompt_provider=lambda mode: "완전히 새로운 지침"
+        )
+        await _collect(svc.run("proposal", "RFP 내용"))
+
+        assert "완전히 새로운 지침" in agent.last_system_prompt
+        assert "근거 사용 절대 규칙" in agent.last_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_empty_custom_falls_back_to_default(self) -> None:
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1")]})
+        svc = DeepResearchService(agent, FakeRag([]), graph, prompt_provider=lambda mode: "")
+        await _collect(svc.run("discovery", "분야"))
+
+        assert "신규 과제를 발굴하는 전략 기획자" in agent.last_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_provider_exception_falls_back_to_default(self) -> None:
+        """지침 조회가 실패해도 딥 리서치 자체는 죽으면 안 된다."""
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1")]})
+
+        def boom(mode: str) -> str:
+            raise RuntimeError("조회 실패")
+
+        svc = DeepResearchService(agent, FakeRag([]), graph, prompt_provider=boom)
+        events = await _collect(svc.run("proposal", "RFP 내용"))
+
+        assert events[-1]["stage"] == "done"
+        assert "책임연구원" in agent.last_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_provider_uses_default(self) -> None:
+        """prompt_provider를 안 줘도(기존 호출부) 기존 동작 그대로 — 회귀 방지."""
+        agent = FakeAgent(plan_queries=["q1"])
+        graph = FakeGraphRag({"q1": [_hit("c1")]})
+        svc = DeepResearchService(agent, FakeRag([]), graph)
+        await _collect(svc.run("duplication", "과제 내용"))
+
+        assert "냉정한 평가위원" in agent.last_system_prompt

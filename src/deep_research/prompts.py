@@ -131,10 +131,32 @@ _SYNTHESIS_BY_MODE = {
     "proposal": _SYNTHESIS_PROPOSAL,
 }
 
+# CR-44: agent_prompts 레지스트리 키 → 이 모듈의 기본 지침 상수.
+# registry.get_default()가 이 딕셔너리를 통해 조회한다(순환 임포트 회피용 단방향 의존).
+MODE_TO_PROMPT_KEY = {
+    "duplication": "deep_research_duplication",
+    "discovery": "deep_research_discovery",
+    "proposal": "deep_research_proposal",
+}
+SYNTHESIS_DEFAULTS_BY_KEY = {
+    "deep_research_duplication": _SYNTHESIS_DUPLICATION,
+    "deep_research_discovery": _SYNTHESIS_DISCOVERY,
+    "deep_research_proposal": _SYNTHESIS_PROPOSAL,
+}
 
-def synthesis_prompts(mode: str, user_input: str, evidence_block: str) -> tuple[str, str]:
-    """(system, user) 종합 프롬프트."""
-    system = f"{_SYNTHESIS_BY_MODE[mode]}\n\n{EVIDENCE_RULES}\n\n{OUTPUT_FORMAT_RULES}"
+
+def synthesis_prompts(
+    mode: str, user_input: str, evidence_block: str, custom_instructions: str = ""
+) -> tuple[str, str]:
+    """(system, user) 종합 프롬프트.
+
+    custom_instructions(M_17 커스텀 지침, 비어있지 않을 때만)가 있으면 모드별 기본
+    지침(_SYNTHESIS_BY_MODE) 대신 그것을 "무엇을·어떤 관점으로 쓰는가" 부분으로 쓴다.
+    EVIDENCE_RULES(근거 인용 강제)와 OUTPUT_FORMAT_RULES(출력 형식)는 사용자가 지침을
+    비워도 항상 붙는다 — 환각 억제 안전장치라 편집 대상이 아니다.
+    """
+    base = custom_instructions.strip() or _SYNTHESIS_BY_MODE[mode]
+    system = f"{base}\n\n{EVIDENCE_RULES}\n\n{OUTPUT_FORMAT_RULES}"
     user = f"## 사용자 요청\n{user_input}\n\n## 근거 자료\n{evidence_block}"
     return system, user
 

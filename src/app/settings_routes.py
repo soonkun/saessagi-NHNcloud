@@ -840,7 +840,16 @@ async def _save_prompt(
         is_custom = bool(prompt.strip())
         return {"status": "ok", "key": key, "is_custom": is_custom, "applied": apply_path}
 
-    if key in ("knowledge_note", "doc_query_answer", "work_query_answer", "graph_extract"):
+    if key in (
+        "knowledge_note",
+        "doc_query_answer",
+        "work_query_answer",
+        "graph_extract",
+        # CR-44: 딥 리서치 3모드 지침도 동일한 lazy 조회 방식(재초기화 불필요)
+        "deep_research_duplication",
+        "deep_research_discovery",
+        "deep_research_proposal",
+    ):
         # gate_injection: agent 재초기화 없음. prompt_provider lazy 조회
         is_custom = bool(prompt.strip())
         return {"status": "ok", "key": key, "is_custom": is_custom, "applied": apply_path}
@@ -872,6 +881,9 @@ def _apply_path_for(key: str) -> str:
         "intent_classify": "classifier_reload",
         "meeting_minutes": "set_custom_prompt",
         "graph_extract": "gate_injection",
+        "deep_research_duplication": "gate_injection",
+        "deep_research_discovery": "gate_injection",
+        "deep_research_proposal": "gate_injection",
     }
     return _map.get(key, "unknown")
 

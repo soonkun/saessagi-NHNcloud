@@ -19,6 +19,9 @@ PromptKey = Literal[
     "intent_classify",
     "meeting_minutes",
     "graph_extract",
+    "deep_research_duplication",
+    "deep_research_discovery",
+    "deep_research_proposal",
 ]
 
 PROMPT_KEYS: tuple[PromptKey, ...] = (
@@ -29,6 +32,12 @@ PROMPT_KEYS: tuple[PromptKey, ...] = (
     "intent_classify",
     "meeting_minutes",
     "graph_extract",
+    # CR-44: 딥 리서치 3모드 종합(synthesis) 지침. 근거 인용 규칙(EVIDENCE_RULES)과
+    # 출력 형식(OUTPUT_FORMAT_RULES)은 안전장치라 편집 대상에서 제외 — 이 지침은
+    # "무엇을 어떤 관점으로 쓰는가" 부분만 교체한다.
+    "deep_research_duplication",
+    "deep_research_discovery",
+    "deep_research_proposal",
 )
 
 
@@ -82,6 +91,28 @@ _REGISTRY: dict[PromptKey, PromptMeta] = {
     "graph_extract": PromptMeta(
         key="graph_extract",
         label="지식그래프 추출 지침 (문서 등록 시)",
+        risk="medium",
+        apply_path="gate_injection",
+    ),
+    # CR-44: 딥 리서치 3모드 — 각 모드 화면에서 "무엇을 근거로 어떻게 판정·제안·작성할지"
+    # 를 담당하는 종합(synthesis) 지침. medium인 이유: 근거 인용 규칙 자체는 코드에
+    # 고정돼 있어(EVIDENCE_RULES) 편집해도 환각 억제는 유지되지만, 보고서 구성·판정
+    # 기준을 바꾸므로 결과물 품질에 직접 영향을 준다.
+    "deep_research_duplication": PromptMeta(
+        key="deep_research_duplication",
+        label="딥 리서치 — 과제 중복성 검토 지침",
+        risk="medium",
+        apply_path="gate_injection",
+    ),
+    "deep_research_discovery": PromptMeta(
+        key="deep_research_discovery",
+        label="딥 리서치 — 신규과제 발굴 지침",
+        risk="medium",
+        apply_path="gate_injection",
+    ),
+    "deep_research_proposal": PromptMeta(
+        key="deep_research_proposal",
+        label="딥 리서치 — 과제 계획서 초안 지침",
         risk="medium",
         apply_path="gate_injection",
     ),
@@ -141,6 +172,18 @@ def get_default(key: PromptKey) -> str | None:
             return str(KEYWORD_EXTRACT_SYSTEM_PROMPT)
         except ImportError:
             logger.warning("graph_rag.extractor 임포트 실패")
+            return ""
+    if key in (
+        "deep_research_duplication",
+        "deep_research_discovery",
+        "deep_research_proposal",
+    ):
+        try:
+            from deep_research.prompts import SYNTHESIS_DEFAULTS_BY_KEY
+
+            return str(SYNTHESIS_DEFAULTS_BY_KEY[key])
+        except ImportError:
+            logger.warning("deep_research.prompts 임포트 실패")
             return ""
     return None
 

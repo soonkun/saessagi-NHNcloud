@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
 from vector_search.types import SearchHit
@@ -73,11 +73,16 @@ class DeepResearchService:
         agent: _CompletionAgent,
         rag_service: Any,  # vector_search.RagService (순환 의존 회피용 Any)
         graph_rag_service: Any = None,  # GraphRagService | None
+        prompt_provider: "Callable[[str], str] | None" = None,
     ) -> None:
         self._agent = agent
         self._rag = rag_service
         self._graph_rag = graph_rag_service
         self._lock = asyncio.Lock()
+        # M_17 연동 (CR-44): mode("duplication"/"discovery"/"proposal") → 커스텀 지침
+        # raw 텍스트(빈 문자열 = 미설정). 호출 시점 lazy 조회라 지침 저장 즉시 다음
+        # 실행부터 반영되고, agent 재초기화가 필요 없다.
+        self._prompt_provider = prompt_provider
 
     # ── 파이프라인 ────────────────────────────────────────────────────────────
 
@@ -190,7 +195,13 @@ class DeepResearchService:
             "message": f"근거 {len(sources)}건으로 보고서 작성 중... (수 분 소요될 수 있음)",
         }
         evidence_block = self._evidence_block(sources)
-        system, user = synthesis_prompts(mode, user_input, evidence_block)
+        custom_instructions = ""
+        if self._prompt_provider is not None:
+            try:
+                custom_instructions = (self._prompt_provider(mode) or "").strip()
+            except Exception as exc:
+                logger.warning("DeepResearch 커스텀 지침 조회 실패 (기본값 사용): %s", exc)
+        system, user = synthesis_prompts(mode, user_input, evidence_block, custom_instructions)
         try:
             report = await self._agent.complete_text(
                 system,

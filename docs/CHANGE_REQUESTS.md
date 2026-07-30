@@ -1988,3 +1988,48 @@ ERROR로 크게 남긴다.
 - 서랍 동작 실측: 메뉴 버튼 클릭 → 서랍 열림 → 탭 선택 → 자동 닫힘(`aside.left = -240`),
   본문 폭 768 = 화면 폭.
 - `web` 테스트 10건(반응형 4건 신규) 통과.
+
+---
+
+## CR-44: 딥 리서치 3모드 지침 편집 + 설정 UI 목록화 + textarea 잘림 버그 수정
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-30)
+
+**배경**: 딥 리서치의 "과제 중복성 검토·신규과제 발굴·과제 계획서 초안" 3모드가 무엇을
+어떤 관점으로 쓰는지는 `src/deep_research/prompts.py`에 하드코딩돼 있어 확인·수정할
+방법이 전혀 없었다. 또 설정 → 지침 관리 화면은 (당시) 7개 지침이 전부 한 번에 펼쳐져
+있어 찾기 어려웠고, textarea에 걸린 `whiteSpace: "pre"` 때문에 긴 줄이 화면 밖으로
+잘려 보이는 버그가 있었다(E-66).
+
+**구현**:
+- M_17 `agent_prompts` 레지스트리에 3키 추가: `deep_research_duplication`,
+  `deep_research_discovery`, `deep_research_proposal` (risk=medium — 근거 인용 규칙 자체는
+  코드에 고정돼 있어 편집해도 환각 억제는 유지되지만, 보고서 구성·판정 기준을 바꾸므로
+  결과물에 직접 영향을 준다).
+- `deep_research/prompts.py`의 `synthesis_prompts()`에 `custom_instructions` 인자 추가.
+  커스텀이 있으면 모드별 기본 지침 대신 그것을 "무엇을·어떤 관점으로 쓰는가" 부분으로
+  쓰되, `EVIDENCE_RULES`(근거 인용 강제)와 `OUTPUT_FORMAT_RULES`(출력 형식)는 **항상 붙는다**
+  — 안전장치라 편집 대상에서 제외했다.
+- `DeepResearchService`가 `prompt_provider: Callable[[str], str] | None`를 받아 매 실행마다
+  lazy 조회 — 기존 `graph_extract`/`doc_query_answer` 등과 동일한 패턴(agent 재초기화 불필요,
+  지침 저장 즉시 다음 실행부터 반영). `service_context.py`의 기존 `_make_prompt_provider`
+  dict에 3키를 얹고, mode→key 매핑 어댑터로 감쌌다.
+- 프론트 "지침 관리"를 **목록→상세** 방식으로 재구성(사용자 요청). 이전엔 10개 항목이
+  전부 펼쳐져 있었다. "일반 대화·업무"/"딥 리서치" 두 그룹으로 나눠 목록을 보여주고,
+  클릭하면 그 지침만 편집 화면에 뜬다. 다른 섹션으로 이동하거나 "지침 관리"를 다시
+  클릭하면 목록으로 돌아간다.
+- **E-66 버그 수정**: textarea `whiteSpace: "pre"` → `"pre-wrap"` + `wordBreak: "break-word"`.
+  들여쓰기·개행은 보존하되 긴 줄이 자동으로 줄바꿈되게 했다 — 사용자가 "UI가 꽉 차지 않고
+  중간에 짤려있다"고 보고한 증상의 실제 원인.
+- 설정 컨텐츠 폭 860→1040 (다른 탭들의 실측 본문폭과 정렬).
+
+**검증**:
+- 단위: `tests/agent_prompts/test_registry.py` 4건 신규(D1~D4) + 기존 2건을 10키 기준으로
+  갱신. `tests/deep_research/test_service.py` 5건 신규 — 커스텀 지침이 실제 LLM 호출에
+  반영됨, 지침을 갈아끼워도 안전규칙은 유지됨, 빈 커스텀은 기본값 폴백, provider 예외 시에도
+  파이프라인은 계속 진행, provider 미지정 시 기존 동작 회귀 없음. `tests/app/test_prompts_routes.py`
+  10키 기준 갱신. 전체 pytest **1136건 통과**.
+- **실 브라우저 E2E**: 설정→지침 관리 진입 → 목록에 10개 항목(그룹 2개) 확인 →
+  "딥 리서치 — 과제 중복성 검토 지침" 클릭 → 실제 기본 지침 텍스트 로드 확인 →
+  긴 줄인데 `scrollWidth === clientWidth`(924===924, 가로 오버플로 0) 확인 → 텍스트 편집 후
+  저장 → "저장됨 ✓" → 목록으로 돌아가면 "커스텀" 배지 표시 확인. 테스트 후 API로 원복.

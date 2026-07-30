@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
@@ -243,6 +244,33 @@ const petCardStyle: React.CSSProperties = {
   marginTop: 14,
 };
 
+// CR-44: 지침 목록·상세에서 반복되던 4벌의 동일한 span 배지를 하나로 정리.
+function Badge({
+  bg,
+  fg,
+  children,
+}: {
+  bg: string;
+  fg: string;
+  children: React.ReactNode;
+}): React.ReactElement {
+  return (
+    <span
+      style={{
+        fontSize: "var(--fs-11)",
+        fontWeight: 700,
+        background: bg,
+        color: fg,
+        borderRadius: 4,
+        padding: "1px 5px",
+        flexShrink: 0,
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
 // ── 데스크톱 마스터-디테일 카테고리 ─────────────────────────────────────────
 
 type SettingsSection =
@@ -367,6 +395,9 @@ export function SettingsView({
   const [promptErrors, setPromptErrors] = useState<Record<string, string>>({});
   // 펫 모드에서만 사용하는 접이식 토글
   const [promptsOpen, setPromptsOpen] = useState(false);
+  // CR-44: 지침 관리 — 목록에서 하나를 고르면 그 지침만 편집 화면에 뜬다.
+  // (이전엔 7개 이상의 지침이 전부 펼쳐져 있어 한 화면이 지나치게 길어졌다.)
+  const [selectedPromptKey, setSelectedPromptKey] = useState<string | null>(null);
 
   // LLM 공급자 상태
   const [llmProvider, setLlmProvider] = useState<"ollama" | "openai">(
@@ -1231,7 +1262,33 @@ export function SettingsView({
     );
   }
 
-  // isDesktop: textarea 크기·폰트 차별화용
+  // CR-44: 지침 목록 — 딥 리서치 3모드 지침을 추가하고, "일반 대화"와
+  // "딥 리서치"로 묶어서 보여준다(항목이 10개로 늘어 구분이 필요해졌다).
+  const PROMPT_GROUPS: { title: string; keys: readonly string[] }[] = [
+    {
+      title: "일반 대화·업무",
+      keys: [
+        "persona",
+        "knowledge_note",
+        "doc_query_answer",
+        "work_query_answer",
+        "graph_extract",
+        "intent_classify",
+        "meeting_minutes",
+      ],
+    },
+    {
+      title: "딥 리서치",
+      keys: [
+        "deep_research_duplication",
+        "deep_research_discovery",
+        "deep_research_proposal",
+      ],
+    },
+  ];
+
+  // isDesktop: textarea 크기·폰트 차별화용. 목록→상세 2단 구성 —
+  // 이전엔 10개에 가까운 지침이 한 화면에 전부 펼쳐져 있어 찾기 어려웠다.
   function renderPromptsContent(isDesktop: boolean): React.ReactElement {
     const getRows = (key: string): number => {
       if (isDesktop) {
@@ -1245,183 +1302,206 @@ export function SettingsView({
     };
     const taFontSize = isDesktop ? 14 : 13;
 
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-        {(
-          [
-            "persona",
-            "knowledge_note",
-            "doc_query_answer",
-            "work_query_answer",
-            "graph_extract",
-            "intent_classify",
-            "meeting_minutes",
-          ] as const
-        ).map((key) => {
-          const info = agentPrompts[key];
-          if (!info) return null;
-          const isSaving = promptSavingKey === key;
-          const isSaved = promptSavedKey === key;
-          const errorMsg = promptErrors[key] ?? "";
-          const isHigh = info.risk === "high";
-          const hasReset = key !== "persona" && info.default !== null;
-
-          return (
-            <div
-              key={key}
-              style={{
-                borderTop: "1px solid var(--color-border)",
-                paddingTop: 14,
-              }}
-            >
+    // ── 목록 화면 ──────────────────────────────────────────────────────────
+    if (!selectedPromptKey) {
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          {PROMPT_GROUPS.map(({ title, keys }) => (
+            <div key={title}>
               <div
                 style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
+                  fontSize: "var(--fs-11)",
+                  fontWeight: 700,
+                  color: "var(--color-text-muted)",
+                  letterSpacing: "0.04em",
                   marginBottom: 6,
                 }}
               >
-                <span style={{ fontWeight: 600, fontSize: "var(--fs-13)" }}>
-                  {info.label}
-                </span>
-                {info.is_custom === true && (
-                  <span
-                    style={{
-                      fontSize: "var(--fs-11)",
-                      fontWeight: 700,
-                      background: "var(--color-accent)",
-                      color: "#fff",
-                      borderRadius: 4,
-                      padding: "1px 5px",
-                    }}
-                  >
-                    커스텀
-                  </span>
-                )}
-                {isHigh && (
-                  <>
-                    <span
-                      style={{
-                        fontSize: "var(--fs-11)",
-                        fontWeight: 700,
-                        background: "#c0392b",
-                        color: "#fff",
-                        borderRadius: 4,
-                        padding: "1px 5px",
-                      }}
-                    >
-                      고급
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "var(--fs-11)",
-                        fontWeight: 700,
-                        background: "#7b2c2c",
-                        color: "#ffcccc",
-                        borderRadius: 4,
-                        padding: "1px 5px",
-                      }}
-                    >
-                      위험
-                    </span>
-                  </>
-                )}
+                {title}
               </div>
-              {isHigh && (
-                <p
-                  style={{
-                    fontSize: "var(--fs-11)",
-                    color: "#c0392b",
-                    marginBottom: 8,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  주의: 잘못 편집 시 의도 분류 정확도가 하락할 수 있습니다.
-                  문제 시 기본값으로 복원하세요.
-                </p>
-              )}
-              <textarea
-                value={promptDrafts[key] ?? ""}
-                onChange={(e) =>
-                  setPromptDrafts((prev) => ({
-                    ...prev,
-                    [key]: e.target.value,
-                  }))
-                }
-                onMouseDown={(e) => e.stopPropagation()}
-                onClick={() => window.electronAPI?.restoreFocus()}
-                rows={getRows(key)}
+              <div
                 style={{
-                  ...inputStyle,
-                  resize: "vertical",
-                  fontFamily: "monospace",
-                  fontSize: taFontSize,
-                  lineHeight: 1.55,
-                  whiteSpace: "pre",
-                  maxWidth: "100%",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 10,
+                  overflow: "hidden",
                 }}
-                placeholder={
-                  key === "persona"
-                    ? "페르소나를 입력하세요 (비워두면 저장 불가)"
-                    : `${info.label} 기본값 사용 중`
-                }
-              />
-              {errorMsg && (
-                <p
-                  style={{
-                    fontSize: "var(--fs-11)",
-                    color: "#c0392b",
-                    marginTop: 4,
-                  }}
-                >
-                  {errorMsg}
-                </p>
-              )}
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                {hasReset && (
-                  <button
-                    onMouseDown={(e) => {
-                      e.stopPropagation();
-                      handlePromptReset(key);
-                    }}
-                    style={{
-                      flex: 1,
-                      background: "transparent",
-                      border: "1px solid var(--color-border)",
-                      borderRadius: 8,
-                      color: "var(--color-text-muted)",
-                      cursor: "pointer",
-                      padding: "7px 8px",
-                      fontSize: "var(--fs-11)",
-                    }}
-                  >
-                    기본값으로 복원
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    void handlePromptSave(key);
-                  }}
-                  disabled={isSaving}
-                  style={{
-                    flex: 2,
-                    background: isSaved ? "var(--color-accent)" : "transparent",
-                    border: "1px solid var(--color-border)",
-                    borderRadius: 8,
-                    color: isSaved ? "#fff" : "var(--color-text)",
-                    cursor: isSaving ? "not-allowed" : "pointer",
-                    padding: "7px 10px",
-                    fontSize: "var(--fs-12)",
-                    opacity: isSaving ? 0.6 : 1,
-                  }}
-                >
-                  {isSaving ? "적용 중..." : isSaved ? "저장됨 ✓" : "지침 저장"}
-                </button>
+              >
+                {keys.map((key, i) => {
+                  const info = agentPrompts[key];
+                  if (!info) return null;
+                  const isHigh = info.risk === "high";
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setSelectedPromptKey(key)}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        width: "100%",
+                        background: "transparent",
+                        border: "none",
+                        borderTop: i === 0 ? "none" : "1px solid var(--color-border)",
+                        padding: "12px 14px",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        color: "var(--color-text)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontSize: "var(--fs-13)",
+                        }}
+                      >
+                        {info.label}
+                        {info.is_custom === true && <Badge bg="var(--color-accent)" fg="#fff">커스텀</Badge>}
+                        {isHigh && (
+                          <>
+                            <Badge bg="#c0392b" fg="#fff">고급</Badge>
+                            <Badge bg="#7b2c2c" fg="#ffcccc">위험</Badge>
+                          </>
+                        )}
+                      </span>
+                      <ChevronRight size={16} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          );
-        })}
+          ))}
+        </div>
+      );
+    }
+
+    // ── 상세(편집) 화면 ────────────────────────────────────────────────────
+    const key = selectedPromptKey;
+    const info = agentPrompts[key];
+    if (!info) {
+      // 알 수 없는 키로 진입한 경우(구버전 캐시 등) — 목록으로 돌려보낸다.
+      setSelectedPromptKey(null);
+      return <></>;
+    }
+    const isSaving = promptSavingKey === key;
+    const isSaved = promptSavedKey === key;
+    const errorMsg = promptErrors[key] ?? "";
+    const isHigh = info.risk === "high";
+    const hasReset = key !== "persona" && info.default !== null;
+
+    return (
+      <div>
+        <button
+          onClick={() => setSelectedPromptKey(null)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "transparent",
+            border: "none",
+            color: "var(--color-text-muted)",
+            cursor: "pointer",
+            padding: "4px 0",
+            marginBottom: 14,
+            fontSize: "var(--fs-12)",
+          }}
+        >
+          <ChevronLeft size={14} /> 지침 목록으로
+        </button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+          <span style={{ fontWeight: 600, fontSize: "var(--fs-14)" }}>{info.label}</span>
+          {info.is_custom === true && <Badge bg="var(--color-accent)" fg="#fff">커스텀</Badge>}
+          {isHigh && (
+            <>
+              <Badge bg="#c0392b" fg="#fff">고급</Badge>
+              <Badge bg="#7b2c2c" fg="#ffcccc">위험</Badge>
+            </>
+          )}
+        </div>
+        {isHigh && (
+          <p style={{ fontSize: "var(--fs-11)", color: "#c0392b", marginBottom: 8, lineHeight: 1.5 }}>
+            주의: 잘못 편집 시 의도 분류 정확도가 하락할 수 있습니다.
+            문제 시 기본값으로 복원하세요.
+          </p>
+        )}
+        <textarea
+          value={promptDrafts[key] ?? ""}
+          onChange={(e) =>
+            setPromptDrafts((prev) => ({
+              ...prev,
+              [key]: e.target.value,
+            }))
+          }
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => window.electronAPI?.restoreFocus()}
+          rows={getRows(key)}
+          style={{
+            ...inputStyle,
+            resize: "vertical",
+            fontFamily: "monospace",
+            fontSize: taFontSize,
+            lineHeight: 1.55,
+            // CR-44: 이전엔 "pre"라 긴 줄이 줄바꿈 없이 textarea 오른쪽 밖으로
+            // 흘러나가 문장 중간이 잘려 보였다(스크롤바도 없어 보이지도 않았음).
+            // "pre-wrap"으로 바꿔 줄바꿈은 유지하되(들여쓰기 보존) 자동 개행되게 한다.
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+            width: "100%",
+            maxWidth: "100%",
+            boxSizing: "border-box",
+          }}
+          placeholder={
+            key === "persona"
+              ? "페르소나를 입력하세요 (비워두면 저장 불가)"
+              : `${info.label} 기본값 사용 중`
+          }
+        />
+        {errorMsg && (
+          <p style={{ fontSize: "var(--fs-11)", color: "#c0392b", marginTop: 4 }}>{errorMsg}</p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          {hasReset && (
+            <button
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                handlePromptReset(key);
+              }}
+              style={{
+                flex: 1,
+                background: "transparent",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                padding: "7px 8px",
+                fontSize: "var(--fs-11)",
+              }}
+            >
+              기본값으로 복원
+            </button>
+          )}
+          <button
+            onClick={() => {
+              void handlePromptSave(key);
+            }}
+            disabled={isSaving}
+            style={{
+              flex: 2,
+              background: isSaved ? "var(--color-accent)" : "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: isSaved ? "#fff" : "var(--color-text)",
+              cursor: isSaving ? "not-allowed" : "pointer",
+              padding: "7px 10px",
+              fontSize: "var(--fs-12)",
+              opacity: isSaving ? 0.6 : 1,
+            }}
+          >
+            {isSaving ? "적용 중..." : isSaved ? "저장됨 ✓" : "지침 저장"}
+          </button>
+        </div>
       </div>
     );
   }
@@ -1673,7 +1753,12 @@ export function SettingsView({
           {SETTINGS_SECTIONS.map(({ id, label }) => (
             <button
               key={id}
-              onClick={() => setActiveSection(id)}
+              onClick={() => {
+                setActiveSection(id);
+                // CR-44: 다른 섹션으로 이동(또는 "지침 관리" 재클릭)하면 지침 목록으로
+                // 돌아간다 — 편집 화면에 머문 채로 갇히지 않도록.
+                setSelectedPromptKey(null);
+              }}
               style={{
                 width: "100%",
                 display: "flex",
@@ -1708,7 +1793,10 @@ export function SettingsView({
             flex: 1,
             overflowY: "auto",
             padding: "28px 32px",
-            maxWidth: 860,
+            // CR-44: 860 → 1040. 지침 편집 textarea가 넓은 화면에서 지나치게 좁은
+            // 칸에 갇혀 있다는 지적 반영 — 다른 탭들의 실측 본문폭(1280px 화면 기준
+            // 1040px)과 맞췄다.
+            maxWidth: 1040,
           }}
         >
           {sectionContentMap[activeSection]}
