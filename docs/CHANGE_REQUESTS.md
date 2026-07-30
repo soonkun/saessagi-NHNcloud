@@ -1744,3 +1744,73 @@ graph_rag 57건 통과. 실 Neo4j — 전체 스냅샷에 **없던** 문서로 d
 **남은 정리 대상(의도적 보류)**: 각 뷰 컴포넌트의 `window.electronAPI?.restoreFocus()` 계열
 옵셔널 호출 ~40곳. 브라우저에서 무동작이라 기능 영향이 없고, 13개 파일을 건드리는 위험 대비
 실익이 없어 남겨뒀다. `web/src/electron.d.ts`도 이들의 타입 선언용으로 유지.
+
+---
+
+## CR-39: 작업별 LLM 분리 — 딥 리서치 전용 모델 지정
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-29)
+
+**배경**: 배포 하드웨어가 B200(183GB)로 바뀌면서 9.6GB 단일 모델은 자원을 크게 놀린다.
+작업 성격이 서로 달라 한 모델로 묶을 이유도 없다 — 채팅은 응답 속도가, 그래프 추출은
+구조화 정확도가, 딥 리서치는 장문 추론 품질이 중요하다.
+
+이미 **그래프 추출**(`graphrag.extraction_provider`)과 **의도 분류**(M_16),
+**비전**(`ollama.vision_model`)은 모델을 따로 지정할 수 있게 되어 있는데,
+**딥 리서치만 채팅 agent를 그대로 재사용**하고 있었다:
+
+```python
+DeepResearchService(agent=gemma_agent, ...)   # service_context.init_agent
+```
+
+**구현**: 기존 `graphrag.extraction_*` 패턴을 그대로 따른다(새 개념 도입 없음).
+- `AppConfig.deep_research: DeepResearchConfig` 신설
+  - `provider`: `same_as_chat`(기본) | `ollama` | `openai`
+  - `ollama_model` / `openai_model`
+  - `keep_alive_seconds`: 딥 리서치 전용 모델의 상주 시간(기본 1800).
+    80GB급 모델은 로딩에 1~2분 걸려, 채팅용 기본값(300초)을 쓰면 쓸 때마다 재로딩한다.
+- `provider`가 `same_as_chat`이 아니면 전용 agent를 조립해 `DeepResearchService`에 주입.
+  cleanup 대상으로 `_deep_research_agent`에 보관(graphrag의 `_graphrag_extract_agent`와 동형).
+- 설정 화면 "보조 모델" 탭에서 바꿀 수 있도록 settings 라우트에 노출.
+
+**적용된 모델 배치** (2026-07-29 기준):
+
+| 작업 | 모델 | 근거 |
+|------|------|------|
+| 채팅 | `mistral-medium-3.5:128b` (80GB) | 사용자 선택. `tools`·`vision`·`thinking` 지원 확인 |
+| 의도 분류 | `gemma4:26b` (17GB) | **반드시 채팅과 분리할 것** — 아래 참조 |
+| 그래프 추출 | `gemma4:26b` | 구조화 정확도가 그래프 품질을 좌우 |
+| 딥 리서치 | `mistral-medium-3.5:128b` | 장문 추론·보고서 작성 |
+| 비전(이미지) | `gemma4:26b` | gemma4는 multimodal — vision/tools/thinking 모두 지원 |
+
+**⚠️ 의도 분류기에 대형 모델을 물리면 안 된다**: 처음에 `app.ollama.model`만 128B로
+바꿨더니 IntentClassifier도 그걸 따라가 **매 메시지마다 8초 타임아웃**이 발생했다.
+
+```
+IntentClassifier.classify 타임아웃 (fallback_error): model=mistral-medium-3.5:128b, timeout=8.0s
+IntentGate: intent=chat conf=0.00 source=fallback_error inject_rag=True rag_source=both
+```
+
+의도 분류는 "문서 질문인가?"를 판정하는 가벼운 작업이라 `timeout_seconds`(기본 8초) 안에
+끝나야 한다. 80GB 모델은 로딩만 1~2분이라 구조적으로 불가능하다. 폴백이 RAG를 뭉뚱그려
+주입(`rag_source=both`)하므로 기능이 죽지는 않지만, 의도 판정이 상실되고 매 턴 8초를 버린다.
+`intent_gate.provider: ollama` + `ollama_model: gemma4:26b`로 분리해 해결
+(conf 0.00 → **0.95**, `rag_source=both` → `docs`, 응답 76초 → 58초).
+
+**검증**:
+- **단위**: `tests/app/test_deep_research_model.py` 8건 신규 — 기본값 same_as_chat 회귀,
+  전용 agent 조립 시 모델·keep_alive 전달, 채팅 설정 미오염, cleanup 보관,
+  빈 모델명·조립 실패 시 채팅 agent 폴백, openai provider. 전체 pytest **1067건 통과**.
+- **실 배선 확인**(로그): 채팅 tools=6 → 128b / IntentClassifier → 26b(timeout 12s) /
+  GraphRAG 추출 → 26b / DeepResearch → 128b(keep_alive 3600s) / vision → 26b.
+- **실 RAG E2E**: 270건(청크 36,142) 인제스트 후 "인삼 신품종 육성 성과" 질의 →
+  `IntentGate: intent=doc_query conf=0.95 source=llm`, `RAG 주입 hits=5`,
+  실제 답변에 문서상의 품종명(음성1호·고려1호·충남4호)과 목표달성도 표 재현.
+  브라우저(puppeteer)로도 동일 확인, 콘솔 에러 0건.
+- **부수 수정**: `scripts/ws_test.py`가 CR-38 인증 도입 후 HTTP 403으로 막혀 있었다
+  (CLAUDE.md가 지정한 E2E 도구). conf.yaml에서 비밀번호를 읽어 로그인 후 세션 쿠키를
+  핸드셰이크에 실도록 수정.
+
+**함께 설치**: Neo4j Community 5.26 + JRE 21을 `opt/`에 사용자 공간 설치하고
+`graphrag.enabled: true`로 전환. bolt 연결·쓰기·삭제까지 실측 확인.
+270건은 그래프 탭에서 수동 재인덱싱 필요(`auto_index: false` 유지).

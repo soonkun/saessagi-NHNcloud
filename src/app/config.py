@@ -214,6 +214,36 @@ class IntentGateConfig(BaseModel):
     timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
 
 
+class DeepResearchConfig(BaseModel):
+    """M_20 딥 리서치 전용 LLM 선택 (CR-39).
+
+    graphrag.extraction_* 와 동일한 패턴. 기본값은 same_as_chat이라 설정하지 않으면
+    기존과 똑같이 채팅 모델을 재사용한다.
+    """
+
+    provider: IntentGateProviderKind = Field(
+        default=IntentGateProviderKind.SAME_AS_CHAT,
+        description=(
+            "딥 리서치 보고서 생성에 쓸 LLM. same_as_chat(기본) | ollama | openai. "
+            "장문 추론이 중요한 작업이라 채팅보다 큰 모델을 쓰는 것이 유리하다."
+        ),
+    )
+    ollama_model: str = Field(
+        default="",
+        description="provider=ollama일 때 사용할 모델 태그 (예: mistral-medium-3.5:128b).",
+    )
+    openai_model: str = Field(default="gpt-4o", description="provider=openai일 때 사용할 모델.")
+    keep_alive_seconds: int = Field(
+        default=1800,
+        ge=0,
+        description=(
+            "딥 리서치 전용 모델의 GPU 상주 시간. 80GB급 모델은 로딩에 1~2분 걸리므로 "
+            "채팅용 기본값(300초)을 쓰면 호출할 때마다 재로딩 대기가 발생한다. "
+            "0이면 즉시 언로드, -1 상당의 무한 상주가 필요하면 크게 잡을 것."
+        ),
+    )
+
+
 class GraphRagConfig(BaseModel):
     """M_19 GraphRAG 설정 (CR-18).
 
@@ -328,6 +358,7 @@ class AppConfig(BaseModel):
     proactive: ProactiveConfig = Field(default_factory=ProactiveConfig)
     intent_gate: IntentGateConfig = Field(default_factory=IntentGateConfig)  # M_16
     graphrag: GraphRagConfig = Field(default_factory=GraphRagConfig)  # M_19
+    deep_research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)  # M_20 (CR-39)
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)

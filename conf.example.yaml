@@ -194,8 +194,22 @@ app:
   rag_chunk_overlap: 150       # 오버랩 (≈80토큰)
   rag_topic_min_chars: 500     # 직전 주제가 이보다 작으면 다음 주제와 병합 (≈300토큰)
   rag_min_score: 0.35
+  # M_16 의도 분류 — 매 메시지 호출되는 가벼운 판정이라 timeout_seconds 안에 끝나야 한다.
+  # 채팅 모델을 큰 것으로 바꿀 때 여기를 같이 지정하지 않으면 매 턴 타임아웃이 난다 (CR-39).
+  intent_gate:
+    provider: same_as_chat   # same_as_chat | ollama | openai
+    ollama_model: gemma4:e4b
+    confidence_threshold: 0.55
+    timeout_seconds: 8.0
+  # M_20 (CR-39) 딥 리서치 전용 LLM. 장문 추론이라 큰 모델이 유리하다.
+  # keep_alive는 대형 모델 로딩(수십 GB면 1~2분)을 매번 반복하지 않도록 길게 잡는다.
+  deep_research:
+    provider: same_as_chat   # same_as_chat | ollama | openai
+    ollama_model: ""
+    openai_model: gpt-4o
+    keep_alive_seconds: 1800
   # M_19 GraphRAG (CR-18) — Neo4j 기반 그래프RAG 하이브리드. 기본 비활성.
-  # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 참조)
+  # 켜려면: Neo4j 설치 후 enabled: true + neo4j_password 설정 (install.md 6장 참조)
   graphrag:
     # CR-25: 업로드 시 그래프 자동 구축 여부 — false면 임베딩만, 그래프는 수동 재인덱싱
     auto_index: false

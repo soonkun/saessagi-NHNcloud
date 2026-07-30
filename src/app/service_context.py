@@ -66,6 +66,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
         # M_20: DeepResearchService 슬롯 (init_agent에서 조립 — LLM·검색 서비스 필요)
         self.deep_research_service: Any = None  # DeepResearchService | None
+        # CR-39: 딥 리서치 전용 agent (provider != same_as_chat일 때만 생성 — cleanup용)
+        self._deep_research_agent: Any = None  # GemmaChatAgent | None
         # CR-23: REST 라우트용 비스트리밍 완성 agent (init_agent에서 설정)
         self.gemma_agent: Any = None  # GemmaChatAgent | None
         self._intent_classifier_agent: Any = None  # 분류 전용 GemmaChatAgent | None (cleanup용)
@@ -586,20 +588,93 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             try:
                 from deep_research import DeepResearchService
 
+                # CR-39: 딥 리서치 전용 LLM. 장문 추론이 중요한 작업이라 채팅보다 큰
+                # 모델을 물릴 수 있게 한다. 기본값(same_as_chat)이면 기존과 동일.
+                _dr_agent, _dr_label = await self._build_deep_research_agent(gemma_agent)
+
                 self.deep_research_service = DeepResearchService(
-                    agent=gemma_agent,
+                    agent=_dr_agent,
                     rag_service=self.rag_service,
                     graph_rag_service=self.graph_rag_service,
                 )
                 logger.info(
                     "AppServiceContext.init_agent: DeepResearchService 배선 완료 "
-                    f"(graph={'on' if self.graph_rag_service is not None else 'off'})"
+                    f"(graph={'on' if self.graph_rag_service is not None else 'off'}, "
+                    f"llm={_dr_label})"
                 )
             except Exception as exc:
                 logger.warning(f"DeepResearchService 조립 실패 (기능 비활성): {exc!r}")
                 self.deep_research_service = None
         else:
             self.deep_research_service = None
+
+    async def _build_deep_research_agent(self, chat_agent: Any) -> tuple[Any, str]:
+        """CR-39: 딥 리서치 전용 LLM agent를 조립한다.
+
+        graphrag.extraction_* 와 동일한 패턴. provider가 same_as_chat이면 채팅 agent를
+        그대로 돌려주므로 기존 동작과 완전히 같다. 조립에 실패하면 채팅 agent로
+        폴백한다 — 모델 태그 오타 하나로 딥 리서치 기능 전체가 죽는 것보다 낫다.
+
+        반환: (agent, 로그용 라벨)
+        """
+        from app.config import IntentGateProviderKind
+
+        cfg = getattr(self.app_config, "deep_research", None)
+        if cfg is None or cfg.provider == IntentGateProviderKind.SAME_AS_CHAT:
+            model = getattr(getattr(self.app_config, "ollama", None), "model", "?")
+            return chat_agent, f"same_as_chat({model})"
+
+        from agent.builder import build_chat_agent as _build
+
+        try:
+            if cfg.provider == IntentGateProviderKind.OLLAMA:
+                if not cfg.ollama_model:
+                    raise ValueError("deep_research.provider=ollama인데 ollama_model이 비어 있음")
+                # 대형 모델은 로딩이 길어 keep_alive를 따로 준다 (채팅용 300초로는 매번 재로딩).
+                agent = await _build(
+                    app_config=self.app_config,
+                    ollama_config=self.app_config.ollama.model_copy(
+                        update={
+                            "model": cfg.ollama_model,
+                            "keep_alive_seconds": cfg.keep_alive_seconds,
+                        }
+                    ),
+                    tool_manager=None,
+                    tool_executor=None,
+                    system_prompt="",
+                    extra_tool_specs=None,
+                    tts_preprocessor_config=None,
+                )
+                label = f"ollama({cfg.ollama_model}, keep_alive={cfg.keep_alive_seconds}s)"
+            else:  # OPENAI
+                from app.config import LlmProviderKind as _LPK
+
+                agent = await _build(
+                    app_config=self.app_config.model_copy(
+                        update={
+                            "llm_provider": _LPK.OPENAI,
+                            "openai": self.app_config.openai.model_copy(
+                                update={"model": cfg.openai_model}
+                            ),
+                        }
+                    ),
+                    ollama_config=self.app_config.ollama,
+                    tool_manager=None,
+                    tool_executor=None,
+                    system_prompt="",
+                    extra_tool_specs=None,
+                    tts_preprocessor_config=None,
+                )
+                label = f"openai({cfg.openai_model})"
+        except Exception as exc:
+            logger.warning(
+                f"딥 리서치 전용 LLM 조립 실패 — 채팅 모델로 폴백합니다: {exc!r}"
+            )
+            model = getattr(getattr(self.app_config, "ollama", None), "model", "?")
+            return chat_agent, f"fallback_to_chat({model})"
+
+        self._deep_research_agent = agent
+        return agent, label
 
     async def load_app_services(self, app_config: "AppConfig") -> None:
         """본 프로젝트 고유 서비스(RAG/Calendar/Idle/Avatar/Proactive/Screenshot) 초기화.
@@ -833,6 +908,14 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 logger.debug("intent_classifier_agent.aclose() 완료")
             except Exception as exc:
                 logger.error(f"intent_classifier_agent.aclose() 실패: {exc}")
+
+        # CR-39: 딥 리서치 전용 agent (same_as_chat이면 None이라 건너뛴다)
+        if self._deep_research_agent is not None:
+            try:
+                await self._deep_research_agent.aclose()
+                logger.debug("deep_research_agent.aclose() 완료")
+            except Exception as exc:
+                logger.error(f"deep_research_agent.aclose() 실패: {exc}")
 
         if self.idle_monitor is not None:
             try:

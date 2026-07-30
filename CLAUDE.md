@@ -50,7 +50,21 @@ host + `auth_enabled: false` 조합에서 기동을 거부하도록 되어 있�
 
 ---
 
-### [사고 2] `uv run`이 melotts를 지워 TTS·LLM이 통째로 죽음 (E-65, 2026-07-29)
+### [사고 2] 의도 분류기에 대형 모델을 물려 매 턴 타임아웃 (CR-39, 2026-07-29)
+
+`app.ollama.model`만 128B로 바꿨더니 IntentClassifier가 그걸 따라가 **매 메시지마다 8초
+타임아웃**이 나고 의도 판정이 상실됐다(`source=fallback_error`, conf=0.00). 폴백이 RAG를
+뭉뚱그려 주입해서 겉보기엔 동작하므로 발견이 늦다.
+
+**규칙**: 작업별 모델은 각자의 설정 항목으로 분리할 것.
+`intent_gate`(가볍고 빨라야 함) / `graphrag.extraction_*`(정확도) /
+`deep_research`(장문 추론) / `ollama.vision_model`. 채팅 모델을 키울 때
+**`intent_gate.ollama_model`을 함께 지정**하지 않으면 이 사고가 재발한다.
+`app.ollama.model`과 `agent_config.llm_configs.ollama_llm.model` **두 곳**을 같이 봐야 한다.
+
+---
+
+### [사고 3] `uv run`이 melotts를 지워 TTS·LLM이 통째로 죽음 (E-65, 2026-07-29)
 
 `uv run`은 실행 전 환경을 `uv.lock`에 맞춰 동기화하면서 **락파일에 없는 패키지를 제거한다.**
 melotts는 pypinyin 충돌 때문에 의도적으로 `pyproject.toml` 밖에 있고 bootstrap이 따로
@@ -61,7 +75,7 @@ melotts는 pypinyin 충돌 때문에 의도적으로 `pyproject.toml` 밖에 있
 
 ---
 
-### [사고 3] 테스트 시 백엔드 없이 프론트만 확인 (2026-04-26, CR-38 반영)
+### [사고 4] 테스트 시 백엔드 없이 프론트만 확인 (2026-04-26, CR-38 반영)
 
 백엔드(uvicorn) 없이 UI만 열면 calendar·documents·LLM·TTS가 전부 실패해 앱이 고장난
 것처럼 보인다. 실제로는 정상이다.

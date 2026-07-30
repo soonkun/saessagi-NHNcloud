@@ -96,8 +96,9 @@ snapshot_download('mobiuslabsgmbh/faster-whisper-large-v3-turbo', cache_dir='ass
 "
 ```
 
-(선택) 이미지·스크린샷 첨부를 읽으려면 비전 모델을 받아둔다 (~6GB).
-gemma4 등 텍스트 전용 메인 모델은 이미지를 못 읽으므로, 이미지 턴만 이 모델이 대신 판독한다:
+(선택) 메인 모델이 이미지를 못 읽는 경우에만 별도 비전 모델을 받는다 (~6GB).
+**gemma4는 멀티모달이라 별도 모델이 필요 없다** (vision/tools/thinking 지원 — CR-39에서 확인).
+텍스트 전용 모델을 메인으로 쓸 때만 아래를 받아 이미지 턴을 대신 판독시킨다:
 
 ```bash
 ollama pull qwen2.5vl:7b   # 한글 OCR 우수
@@ -185,31 +186,37 @@ HTTP로 원격 접속하면 **음성 입력이 막힌다.** 텍스트 대화와 
 벡터+그래프 하이브리드로 보강하는 기능. **선택 사항** — 설치하지 않으면 앱은 기존
 벡터 RAG로 동작한다 (`graphrag.enabled: false` 기본).
 
-**설치 A — sudo 없이 사용자 공간 (WSL 개발 PC에서 검증된 방식):**
+**설치 A — 사용자 공간 (systemd 없는 컨테이너에서도 동작 — 2026-07-29 NHN 클라우드 검증):**
 
 ```bash
-mkdir -p ~/opt && cd ~/opt
+OPT=$(pwd)/../opt && mkdir -p "$OPT" && cd "$OPT"
+
 # JRE 21 (Temurin) + Neo4j Community 5.26
 curl -sLo jre21.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/linux/x64/jre/hotspot/normal/eclipse"
 curl -sLo neo4j.tar.gz "https://dist.neo4j.org/neo4j-community-5.26.0-unix.tar.gz"
-tar xzf jre21.tar.gz && mv jdk-*-jre jre21
-tar xzf neo4j.tar.gz && mv neo4j-community-* neo4j
-JAVA_HOME=~/opt/jre21 ~/opt/neo4j/bin/neo4j-admin dbms set-initial-password saessagi-graph
+tar xzf jre21.tar.gz && mv jdk-*-jre jre21 && rm jre21.tar.gz
+tar xzf neo4j.tar.gz && mv neo4j-community-* neo4j && rm neo4j.tar.gz
 
-# systemd 유저 서비스로 상주 (부팅 자동 시작 + 자동 재시작)
-mkdir -p ~/.config/systemd/user
-cat > ~/.config/systemd/user/neo4j.service <<'EOF'
-[Unit]
-Description=Neo4j Community (사용자 공간 설치 — M_19 GraphRAG)
-[Service]
-Environment=JAVA_HOME=%h/opt/jre21
-ExecStart=%h/opt/neo4j/bin/neo4j console
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=default.target
-EOF
-systemctl --user daemon-reload && systemctl --user enable --now neo4j.service
+# 비밀번호는 최초 기동 전에 설정해야 적용된다
+JAVA_HOME="$OPT/jre21" "$OPT/neo4j/bin/neo4j-admin" dbms set-initial-password saessagi-graph
+
+# 기동 (systemd 유저 서비스가 안 되는 환경이면 setsid로 상주시킨다)
+JAVA_HOME="$OPT/jre21" setsid nohup "$OPT/neo4j/bin/neo4j" console \
+    > "$OPT/../saessagi-Linux/data/logs/neo4j.log" 2>&1 < /dev/null &
+```
+
+> 주의: 다운로드 도메인은 `dist.neo4j.org`다. `.com`은 404가 나면서 tar가
+> "not in gzip format"으로 실패한다.
+
+기동 확인 (앱이 실제로 쓰는 bolt 경로로):
+
+```bash
+.venv/bin/python -c "
+from neo4j import GraphDatabase
+d = GraphDatabase.driver('bolt://127.0.0.1:7687', auth=('neo4j','saessagi-graph'))
+with d.session() as s:
+    print(s.run('CALL dbms.components() YIELD versions RETURN versions[0]').single()[0])
+d.close()"
 ```
 
 **설치 B — apt (sudo 가능한 환경):**
