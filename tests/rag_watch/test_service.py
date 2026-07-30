@@ -100,6 +100,50 @@ class TestIngest:
         assert calls == ["a.md"]
 
     @pytest.mark.asyncio
+    async def test_i3_state_persisted_per_file_survives_crash(
+        self, env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """주기 끝에만 저장하면 그 사이 죽었을 때 청크는 남고 기록은 사라져 재임베딩된다.
+        실제로 백엔드 재시작 중 1건이 중복 색인됐다 (E-71 조사 중 발견).
+        """
+        root, store, svc = env
+        write(root / "f" / "a.md")
+
+        class _Res:
+            doc_id = "doc-1"
+            chunk_count = 3
+
+        async def fake_ingest(_ctx: Any, **_kw: Any) -> Any:
+            return _Res()
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", fake_ingest)
+        monkeypatch.setattr(rr, "_load_folders", lambda: [{"folder_id": "fid", "name": "f"}])
+
+        await svc.run_once()  # 안정화
+
+        # 인제스트 직후, 주기가 끝나기 **전에** 프로세스가 죽는 상황을 만든다.
+        # (실제로는 내가 백엔드를 재시작해서 발생했다. run_once는 예외를 잡지 않으므로
+        #  이후의 주기-종료 저장이 실행되지 않는다 = 크래시와 동일.)
+        async def die(*_a: Any, **_kw: Any) -> None:
+            raise KeyboardInterrupt("주기 중간에 프로세스 종료")
+
+        monkeypatch.setattr(svc, "_apply_moves", die)
+        with pytest.raises(KeyboardInterrupt):
+            await svc.run_once()
+
+        # 새 프로세스로 기동 — 청크는 이미 색인에 있으므로 기록도 남아 있어야 한다.
+        reloaded = RagWatchService(
+            root=root,
+            state_path=tmp_path / "state.json",
+            service_context=_FakeCtx(store),
+        )
+        assert len(reloaded.state) == 1, (
+            "인제스트 기록이 파일에 남아 있어야 한다 — 없으면 같은 파일을 다시 임베딩해 중복된다"
+        )
+
+    @pytest.mark.asyncio
     async def test_i2_failure_retried_next_cycle(
         self, env, monkeypatch: pytest.MonkeyPatch
     ) -> None:

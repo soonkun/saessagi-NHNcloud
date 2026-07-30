@@ -371,6 +371,12 @@ class RagWatchService:
                     folder_name=cand.folder_name,
                     size=cand.size,
                 )
+                # 한 건마다 즉시 저장한다. 주기 끝에만 저장하면 그 사이 프로세스가 죽을 때
+                # (재시작·OOM) **청크는 이미 색인에 있는데 기록은 없는** 상태가 되어 다음
+                # 기동에서 같은 파일을 다시 임베딩한다 — 주기당 최대 max_per_cycle건이
+                # 중복된다. 실제로 재시작 중 1건이 이렇게 중복 색인됐다.
+                # 저장은 원자적 rename이고 파일도 작아서, PDF 임베딩 비용에 비하면 무시할 수준이다.
+                await asyncio.to_thread(self._state.save)
                 logger.info(
                     f"rag_watch: 인제스트 완료 {cand.rel_path} "
                     f"(doc_id={res.doc_id}, 청크 {res.chunk_count})"
