@@ -2,6 +2,11 @@
 
 사내 오프라인 AI 비서 (**웹 UI** + Python 백엔드). 대화 엔진: `vendor/open_llm_vtuber` (Open-LLM-VTuber 벤더링, CR-17 — 클론 불필요).
 
+**CR-47 (2026-07-31): 새싹이 캐릭터는 웹 페이지 위에 떠 있는 형태로 돌아왔다.**
+`web/src/components/FloatingAvatar.tsx`. 펫 모드와 달리 **눌러도 창이 열리지 않는다** —
+이동·크기조절만 되고 역할은 상태 표시뿐이다. 좁은 화면(<700px)에서는 입력줄을 가리므로 사라진다.
+진행 단계별 모습은 `upstream_adapter._status_event(text, emotion)`가 문구와 함께 정한다.
+
 **CR-38 (2026-07-29): Electron 앱은 제거됐다.** 배포 대상이 헤드리스 GPU 서버로 바뀌어 앱 창을 띄울 수 없게 됐고, UI는 백엔드가 `/`에 서빙하는 웹 페이지가 됐다. `frontend/` 디렉토리와 펫 모드(바탕화면 캐릭터)는 삭제됐다. 접근 통제는 `app.web.auth_enabled` 비밀번호 인증(M_21)이 담당한다.
 
 ---

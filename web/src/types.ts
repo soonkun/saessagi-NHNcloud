@@ -162,6 +162,11 @@ export interface WsToolCallStatusMessage {
   status: "running" | "completed" | "error";
   /** tool_name="_agent_status"일 때 진행 상태 문구 ("문서를 찾아보고 있어요…" 등) */
   content?: string;
+  /**
+   * CR-47: 그 단계에 해당하는 캐릭터 모습. 문구와 같은 표에서 나오므로 둘이 어긋나지 않는다.
+   * 예전 클라이언트를 위해 선택 필드다 — 없으면 모습은 그대로 둔다.
+   */
+  emotion?: Emotion;
 }
 
 export interface WsBackendSynthComplete {

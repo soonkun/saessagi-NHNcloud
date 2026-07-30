@@ -237,6 +237,15 @@ function parseEmotion(raw: string): Emotion | null {
   return EMOTION_MAP[key] ?? null;
 }
 
+/**
+ * CR-47: 지금 보이는 모습이 "진행 단계 때문에" 정해진 것인지 표시한다.
+ *
+ * 턴이 끝나면 작업 중 모습(study·thinking 등)은 원래대로 돌아가야 한다. 그런데 무조건
+ * neutral로 되돌리면 LLM이 `[happy]` 같은 태그로 정한 표정까지 지워진다. 그래서
+ * "단계 때문에 바뀐 것"만 되돌리고, LLM·백엔드가 감정을 정하면 그쪽에 양보한다.
+ */
+let activityEmotion = false;
+
 // display_text에서 [emotion] 태그를 제거하고 emotion을 추출.
 // 주의: `[[doc:...]]` / `[[note:...]]` 이중괄호 마커는 절대 건드리면 안 된다.
 // (이중괄호를 먹으면 마커가 깨져 다운로드 칩이 사라지고 본문에 stray `]`가 남는다.)
@@ -372,6 +381,11 @@ function dispatch(msg: WsIncomingMessage): void {
       } else if (msg.text === "conversation-chain-end") {
         clearThinkingTimer();
         store.setAiStatus("idle");
+        // CR-47: 작업이 끝났으니 "작업 중" 모습은 평소 모습으로 되돌린다.
+        if (activityEmotion && !store.isUploading) {
+          store.setEmotion("neutral");
+        }
+        activityEmotion = false;
       }
       break;
 
@@ -379,12 +393,18 @@ function dispatch(msg: WsIncomingMessage): void {
       // expression 필드로 감정 전환 (upstream avatar-state 미수신 시 폴백)
       if (msg.expression) {
         const e = parseEmotion(msg.expression);
-        if (e) store.setEmotion(e);
+        if (e) {
+          store.setEmotion(e);
+          activityEmotion = false; // LLM이 정한 표정이 우선
+        }
       }
       let displayText = "";
       if (msg.display_text?.text) {
         const { text: clean, emotion } = stripEmotionTags(msg.display_text.text);
-        if (emotion) store.setEmotion(emotion);
+        if (emotion) {
+          store.setEmotion(emotion);
+          activityEmotion = false; // LLM이 정한 표정이 우선
+        }
         displayText = clean || msg.display_text.text;
         const mid = store.addMessage({ role: "ai", text: displayText });
         void attachCitationsToMessage(mid, displayText);
@@ -414,6 +434,7 @@ function dispatch(msg: WsIncomingMessage): void {
       // 업로드 중에는 study 감정을 백엔드 avatar-state로 덮어쓰지 않음
       if (!store.isUploading) {
         store.setEmotion(mappedEmotion as Emotion);
+        activityEmotion = false; // 백엔드 avatar_state가 정한 감정이 우선
       }
       store.setSpeaking(msg.speaking);
       store.setAiStatus(msg.speaking ? "speaking" : "idle");
@@ -438,6 +459,13 @@ function dispatch(msg: WsIncomingMessage): void {
       if (msg.tool_name === "_agent_status") {
         if (msg.status === "running" && typeof msg.content === "string") {
           store.setAgentStatus(msg.content);
+          // CR-47: 진행 단계에 맞춰 캐릭터 모습도 바꾼다. 업로드 중에는 업로드 연출이
+          // 우선이므로 덮지 않는다(avatar-state 처리와 같은 규칙).
+          if (msg.emotion && !store.isUploading) {
+            const e = parseEmotion(msg.emotion) ?? msg.emotion;
+            store.setEmotion(e as Emotion);
+            activityEmotion = true;
+          }
         }
         break;
       }

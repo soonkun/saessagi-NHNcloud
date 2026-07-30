@@ -38,19 +38,28 @@ _RAG_TRIGGER_RE = re.compile(
 _MIN_INJECTION_SCORE = 0.50
 
 
-def _status_event(text: str) -> dict[str, Any]:
+def _status_event(text: str, emotion: str | None = None) -> dict[str, Any]:
     """프론트 진행 상태 말풍선용 이벤트.
 
     upstream single_conversation은 type=="tool_call_status"인 dict만 WS로 중계하므로
     그 채널을 재사용한다. tool_name="_agent_status"로 실제 도구 이벤트와 구분.
+
+    CR-47: 여기에 캐릭터 감정을 함께 실어 보낸다. 일반 대화에서는 avatar_state를 통해
+    감정이 전혀 흐르지 않아(고신뢰 의도분류에만 _INTENT_ANNOUNCE가 붙는다) 화면의 새싹이가
+    늘 neutral로 멈춰 있었다 — "지금 뭘 하고 있는지"를 그림으로 보여주지 못했다.
+    문구를 만드는 이 자리에서 감정도 같이 정하면 매핑이 한 곳에 모이고, 프론트가 한국어
+    문장을 정규식으로 되짚어 추측할 필요가 없다.
     """
-    return {
+    event: dict[str, Any] = {
         "type": "tool_call_status",
         "status": "running",
         "tool_id": "agent-status",
         "tool_name": "_agent_status",
         "content": text,
     }
+    if emotion is not None:
+        event["emotion"] = emotion
+    return event
 
 
 # 도구 호출 시작 → 진행 상태 문구 (save_knowledge_note는 별도 안내 메시지 경로 유지)
@@ -61,6 +70,20 @@ _TOOL_STATUS_TEXT: dict[str, str] = {
     "get_events": "일정을 확인하고 있어요…",
     "take_screenshot": "화면을 확인하고 있어요…",
 }
+
+# CR-47: 위 문구에 대응하는 캐릭터 모습. 문구와 그림이 같은 표에서 나와야 어긋나지 않는다.
+# 값은 assets/character/saessagi/<emotion>.png 와 1:1이며 avatar_state의 Emotion 집합이다.
+_TOOL_STATUS_EMOTION: dict[str, str] = {
+    "search_docs": "study",
+    "create_meeting_minutes": "writing",
+    "add_event": "writing",
+    "get_events": "thinking",
+    "take_screenshot": "surprised",
+}
+
+# 도구 호출과 무관한 공통 단계의 모습.
+_PHASE_EMOTION_SEARCH = "study"  # 관련 문서를 찾는 동안
+_PHASE_EMOTION_ANSWER = "thinking"  # 답변을 생성하는 동안 (가장 긴 구간)
 
 # 의도분류 직후 즉시 캐릭터 상태 전환 + 안내음 (고신뢰 분류에만, 사용자 요청 2026-06-12).
 # (감정 태그, 안내 멘트) — 턴 종료 시 [neutral]로 복귀한다.
@@ -483,12 +506,11 @@ def _make_adapter_class() -> type:
             # 첨부 문서('[첨부 자료:')뿐 아니라 첨부 이미지('[첨부 이미지:')도 포함 —
             # 이미지 첨부도 note_save 의도 신호 + 분류 실패 안전망 대상 (E-57).
             has_attachment = (
-                "[첨부 자료:" in user_text_for_classify
-                or "[첨부 이미지:" in user_text_for_classify
+                "[첨부 자료:" in user_text_for_classify or "[첨부 이미지:" in user_text_for_classify
             )
 
             # 진행 상태 1: 의도 분류는 LLM 1회 호출(~1초)이라 먼저 알린다
-            yield _status_event("질문을 살펴보고 있어요…")
+            yield _status_event("질문을 살펴보고 있어요…", "thinking")
 
             # ── CR-23: 후속 질문 감지 — 직전 답변 참조 요청은 분류·재검색 없이
             # 대화 맥락(메모리)으로 처리 ("그럼 요약해줘"가 doc_query로 빠져 무관한
@@ -611,13 +633,13 @@ def _make_adapter_class() -> type:
                 )
             )
             if will_search:
-                yield _status_event("관련 문서를 찾아보고 있어요…")
+                yield _status_event("관련 문서를 찾아보고 있어요…", _PHASE_EMOTION_SEARCH)
 
             # Proactive RAG 적용 (M_16 변경 3~5는 _augment_with_rag 내부에서 처리)
             input_data = await self._augment_with_rag(input_data)
 
             # 진행 상태 3: LLM 생성 시작 — 가장 긴 구간
-            yield _status_event("답변을 작성하고 있어요…")
+            yield _status_event("답변을 작성하고 있어요…", _PHASE_EMOTION_ANSWER)
 
             text_parts: list[str] = []
             note_call_started = False  # save_knowledge_note 호출 시작 여부
@@ -631,7 +653,10 @@ def _make_adapter_class() -> type:
                 elif isinstance(event, ToolCallStart):
                     # 진행 상태: 도구 실행 단계를 알린다
                     if event.name in _TOOL_STATUS_TEXT:
-                        yield _status_event(_TOOL_STATUS_TEXT[event.name])
+                        yield _status_event(
+                            _TOOL_STATUS_TEXT[event.name],
+                            _TOOL_STATUS_EMOTION.get(event.name),
+                        )
                     yield {
                         "type": "tool_call_start",
                         "tool_id": event.tool_id,
@@ -648,9 +673,7 @@ def _make_adapter_class() -> type:
                         if not announced:
                             _msg = "📝 업무 노트를 작성하고 있어요. 잠시만요…"
                             yield SentenceOutput(
-                                display_text=DisplayText(
-                                    text=f"[note_writing] {_msg}", name="AI"
-                                ),
+                                display_text=DisplayText(text=f"[note_writing] {_msg}", name="AI"),
                                 tts_text=_msg,
                                 actions=Actions(),
                             )
@@ -669,7 +692,7 @@ def _make_adapter_class() -> type:
                         "content": event.content,
                     }
                     # 도구 완료 → LLM이 결과를 정리하는 구간으로 복귀
-                    yield _status_event("답변을 작성하고 있어요…")
+                    yield _status_event("답변을 작성하고 있어요…", _PHASE_EMOTION_ANSWER)
                 elif isinstance(event, EndOfTurn):
                     break
                 elif isinstance(event, AgentError):
@@ -733,7 +756,7 @@ def _make_adapter_class() -> type:
                     "note_save 의도였으나 저장 성공 없음(미호출 또는 호출 실패) — "
                     "강제 저장 폴백 (E-45/E-46)"
                 )
-                yield _status_event("업무 노트를 저장하고 있어요…")
+                yield _status_event("업무 노트를 저장하고 있어요…", "note_writing")
                 fallback_out: Any = None
                 try:
                     fallback_out = await self._force_save_note(user_text_for_classify, full_text)

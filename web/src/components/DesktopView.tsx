@@ -21,6 +21,7 @@ import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
 import { DocumentsView } from "./DocumentsView";
+import { FloatingAvatar } from "./FloatingAvatar";
 import { HistoryList } from "./HistoryList";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
@@ -483,6 +484,9 @@ export function DesktopView(): React.ReactElement {
         {chatTab === "settings" && <SettingsView desktop />}
       </main>
       </div>
+      {/* CR-47 — 화면 위에 떠 있는 새싹이. 탭과 무관하게 항상 같은 자리에 있어야 하므로
+          최상위에 둔다(탭 안에 두면 탭을 옮길 때마다 사라졌다 나타난다). */}
+      <FloatingAvatar />
     </div>
   );
 }

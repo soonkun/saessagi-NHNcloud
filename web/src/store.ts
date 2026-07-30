@@ -11,6 +11,8 @@ import type {
 // ────────────────────────────────────────────────────────────
 // 초기 캐릭터 위치: 화면 오른쪽 아래 (저장된 값 우선)
 // ────────────────────────────────────────────────────────────
+const DEFAULT_CHAR_SIZE = 120;
+
 function loadPosition(): Position {
   try {
     const raw = localStorage.getItem("saessagi_char_pos");
@@ -18,7 +20,12 @@ function loadPosition(): Position {
   } catch {
     // ignore
   }
-  return { x: window.innerWidth - 32 - 120, y: window.innerHeight - 32 - 120 };
+  // 화면 맨 아래는 메시지 입력줄이다. 기본 자리가 그 위에 얹히면 첫 방문자가 전송 버튼을
+  // 누르지 못하고 캐릭터부터 치워야 한다 — 입력줄 높이만큼 띄워 둔다 (CR-47).
+  return {
+    x: window.innerWidth - 24 - DEFAULT_CHAR_SIZE,
+    y: Math.max(8, window.innerHeight - 88 - DEFAULT_CHAR_SIZE),
+  };
 }
 
 function loadCharSize(): number {
@@ -29,7 +36,7 @@ function loadCharSize(): number {
       if (n >= 60 && n <= 300) return n;
     }
   } catch { /* ignore */ }
-  return 120;
+  return DEFAULT_CHAR_SIZE;
 }
 
 // 기본 WebSocket 주소.

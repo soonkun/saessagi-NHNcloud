@@ -128,6 +128,38 @@ body {
   animation: char-bounce 0.6s ease-in-out infinite;
 }
 
+/* ── 감정 전환 크로스페이드 (CR-47 떠 있는 새싹이) ──
+   백엔드 AvatarState의 crossfade 계약(200~300ms)에 맞춘다. */
+@keyframes char-emotion-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes char-emotion-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* 화면이 좁아지면 캐릭터가 "쇽~" 하고 사라진다 (CR-47).
+   좁은 화면에서는 캐릭터가 입력줄·버튼을 가리므로 상태 표시보다 화면이 우선이다. */
+@keyframes char-shrink-out {
+  from { opacity: 1; transform: scale(1)   translateY(0); }
+  60%  { opacity: 0.6; transform: scale(0.55) translateY(6px); }
+  to   { opacity: 0; transform: scale(0.1)  translateY(14px); }
+}
+@keyframes char-pop-in {
+  from { opacity: 0; transform: scale(0.2) translateY(12px); }
+  to   { opacity: 1; transform: scale(1)   translateY(0); }
+}
+
+/* 애니메이션을 원치 않는 사용자(멀미·주의 분산)는 움직임을 끈다.
+   캐릭터는 상태를 알려주는 것이 목적이므로 그림 자체는 그대로 보여야 한다. */
+@media (prefers-reduced-motion: reduce) {
+  .char-idle,
+  .char-speaking {
+    animation: none;
+  }
+}
+
 /* ── 메시지 fade-in ── */
 @keyframes msg-in {
   from { opacity: 0; transform: translateY(6px); }
