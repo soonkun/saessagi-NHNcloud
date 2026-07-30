@@ -155,6 +155,12 @@ class TestMiddleware:
     def test_m4_login_path_exempt(self, auth_client: TestClient) -> None:
         assert auth_client.get("/login").status_code == 200
 
+    def test_m4b_status_path_exempt(self, auth_client: TestClient) -> None:
+        """UI가 로그아웃 버튼 노출 여부를 판단하려면 미인증 상태에서도 답해야 한다."""
+        from app.web_auth import EXEMPT_PATHS
+
+        assert "/api/auth/status" in EXEMPT_PATHS
+
     def test_m5_websocket_rejected_without_auth(self, auth_client: TestClient) -> None:
         """대화·TTS가 전부 이 경로로 흐르므로 여기가 뚫리면 인증 전체가 무의미하다."""
         from starlette.websockets import WebSocketDisconnect
@@ -184,6 +190,48 @@ class TestMiddleware:
 # ────────────────────────────────────────────────────────────
 # 쿠키 속성
 # ────────────────────────────────────────────────────────────
+
+
+class TestNoStoreHtml:
+    """CR-40: HTML을 캐시하면 로그아웃이 무력해진다 — 캐시된 index.html은 미들웨어를 건너뛴다."""
+
+    @staticmethod
+    def _app() -> FastAPI:
+        from fastapi.responses import HTMLResponse, JSONResponse
+
+        from app.web_auth import NoStoreHtmlMiddleware
+
+        app = FastAPI()
+
+        @app.get("/page")
+        async def page() -> HTMLResponse:
+            return HTMLResponse("<!doctype html><p>hi</p>")
+
+        @app.get("/data")
+        async def data() -> JSONResponse:
+            return JSONResponse({"ok": True})
+
+        @app.get("/cached-html")
+        async def cached() -> HTMLResponse:
+            # 다른 미들웨어가 이미 캐시 허용을 붙인 상황 — 덮어써야 한다
+            return HTMLResponse("<p>x</p>", headers={"cache-control": "public, max-age=3600"})
+
+        app.add_middleware(NoStoreHtmlMiddleware)
+        return app
+
+    def test_h1_html_gets_no_store(self) -> None:
+        res = TestClient(self._app()).get("/page")
+        assert res.headers["cache-control"] == "no-store, must-revalidate"
+
+    def test_h2_existing_cache_header_overridden(self) -> None:
+        res = TestClient(self._app()).get("/cached-html")
+        assert "max-age=3600" not in res.headers["cache-control"]
+        assert "no-store" in res.headers["cache-control"]
+
+    def test_h3_non_html_untouched(self) -> None:
+        """해시 붙은 asset은 캐시돼야 한다 — 그게 해시를 붙인 이유다."""
+        res = TestClient(self._app()).get("/data")
+        assert "no-store" not in res.headers.get("cache-control", "")
 
 
 class TestCookie:

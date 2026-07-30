@@ -12,7 +12,9 @@ import {
   Copy as RestoreIcon,
   Sun,
   Moon,
+  LogOut,
 } from "lucide-react";
+import { fetchAuthEnabled, logout } from "../services/api";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
@@ -51,6 +53,12 @@ export function DesktopView(): React.ReactElement {
 
   // 네이티브 전용 UI(창 제어·펫 모드·앱 종료) 노출 여부. 브라우저에서는 전부 감춘다.
   const isElectron = isElectronRuntime();
+
+  // 인증이 꺼진 배포에서 로그아웃 버튼을 보여주면 누른 뒤 의미 없는 로그인 화면에 갇힌다.
+  const [authEnabled, setAuthEnabled] = useState(false);
+  useEffect(() => {
+    void fetchAuthEnabled().then(setAuthEnabled);
+  }, []);
 
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
 
@@ -302,6 +310,24 @@ export function DesktopView(): React.ReactElement {
             {theme === "dark" ? <Sun size={13} /> : <Moon size={13} />}
             {!isElectron && (theme === "dark" ? "라이트 모드" : "다크 모드")}
           </button>
+          {authEnabled && (
+            <button
+              onClick={() => void logout()}
+              title="로그아웃 — 세션을 끊고 로그인 화면으로"
+              style={{
+                background: "transparent",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                color: "var(--color-text-muted)",
+                cursor: "pointer",
+                padding: "8px 10px",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <LogOut size={13} />
+            </button>
+          )}
           {isElectron && (
             <button
               onClick={() => window.electronAPI?.quit()}

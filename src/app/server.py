@@ -144,11 +144,16 @@ class AppWebSocketServer:
         auth_routes가 request.app.state에서 비밀번호·salt를 읽으므로 여기서 함께 심는다.
         """
         from .web_auth import (
+            NoStoreHtmlMiddleware,
             WebAuthMiddleware,
             load_or_create_salt,
             resolve_password,
             validate_web_config,
         )
+
+        # CR-40: HTML 문서는 캐시하지 않는다. 인증 여부와 무관하게 항상 적용 —
+        # 캐시된 index.html이 미들웨어를 건너뛰면 로그아웃이 무력해진다.
+        self.app.add_middleware(NoStoreHtmlMiddleware)
 
         web_cfg = self.full_config.app.web
         password = resolve_password(web_cfg.auth_password)

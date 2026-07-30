@@ -17,6 +17,37 @@ export const API_BASE: string =
     : "";
 
 // ────────────────────────────────────────────────────────────
+// 인증 (M_21 / CR-38)
+// ────────────────────────────────────────────────────────────
+
+/** 인증이 켜져 있는지 — 로그아웃 버튼 노출 여부 판단용. 실패 시 false(버튼 숨김). */
+export async function fetchAuthEnabled(): Promise<boolean> {
+  try {
+    const res = await fetch(API_BASE + "/api/auth/status");
+    if (!res.ok) return false;
+    const body = (await res.json()) as { auth_enabled?: boolean };
+    return !!body.auth_enabled;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 로그아웃 — 세션 쿠키를 지우고 로그인 화면으로 보낸다.
+ *
+ * replace()를 쓰는 이유: assign()이면 뒤로가기로 로그아웃 이전 화면(캐시)이 보여
+ * 로그아웃된 것처럼 안 느껴진다. 서버 요청은 쿠키가 없어 어차피 302로 튕긴다.
+ */
+export async function logout(): Promise<void> {
+  try {
+    await fetch(API_BASE + "/api/auth/logout", { method: "POST" });
+  } catch {
+    // 네트워크 실패해도 로그인 화면으로는 보낸다 — 쿠키가 남아 있으면 다시 들어가진다.
+  }
+  window.location.replace("/login");
+}
+
+// ────────────────────────────────────────────────────────────
 // fetch 래퍼 — 사내 IP / localhost 전용
 // ────────────────────────────────────────────────────────────
 

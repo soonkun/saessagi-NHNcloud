@@ -70,3 +70,14 @@ async def logout() -> Response:
     response = JSONResponse({"ok": True})
     response.headers["set-cookie"] = build_clear_cookie_header()
     return response
+
+
+@router.get("/api/auth/status")
+async def auth_status(request: Request) -> Response:
+    """인증이 켜져 있는지 알려준다 — UI가 로그아웃 버튼 노출 여부를 판단하는 데 쓴다.
+
+    비밀번호나 세션 내용은 노출하지 않는다. 인증이 꺼진 배포에서 로그아웃 버튼을 보여주면
+    누른 뒤 아무 의미 없는 로그인 화면에 갇히므로, 이 정보가 UI에 필요하다.
+    """
+    enabled = bool(getattr(request.app.state, "web_auth_enabled", False))
+    return JSONResponse({"auth_enabled": enabled})

@@ -1814,3 +1814,40 @@ IntentGate: intent=chat conf=0.00 source=fallback_error inject_rag=True rag_sour
 **함께 설치**: Neo4j Community 5.26 + JRE 21을 `opt/`에 사용자 공간 설치하고
 `graphrag.enabled: true`로 전환. bolt 연결·쓰기·삭제까지 실측 확인.
 270건은 그래프 탭에서 수동 재인덱싱 필요(`auto_index: false` 유지).
+
+---
+
+## CR-40: 로그아웃 버튼 — 캐시된 index.html이 로그아웃을 무력화하던 문제 포함
+
+**상태**: APPROVED (사용자 채팅 요청 2026-07-29)
+
+**배경**: CR-38에서 로그인은 만들었는데 **로그아웃 수단이 없었다.** 세션이 12시간 유지되므로
+공용 PC에서 쓰면 다음 사람이 그대로 들어간다.
+
+**구현**:
+- `GET /api/auth/status` → `{"auth_enabled": bool}` 신설, `EXEMPT_PATHS`에 추가.
+  인증이 꺼진 배포에서 로그아웃 버튼을 보여주면 누른 뒤 의미 없는 로그인 화면에 갇히므로
+  UI가 이 정보를 알아야 한다. 비밀번호·세션 내용은 노출하지 않는다.
+- `web/src/services/api.ts`: `fetchAuthEnabled()`, `logout()`.
+  `location.replace()`를 쓴다 — `assign()`이면 뒤로가기로 로그아웃 이전 화면이 보인다.
+- `DesktopView` 좌하단(테마 토글 옆)에 로그아웃 버튼. `authEnabled`일 때만 표시.
+
+**발견한 버그 — 캐시가 로그아웃을 무력화**: 버튼을 붙이고 브라우저로 검증하니 쿠키는
+지워지는데 **주소를 다시 열면 앱 화면이 그대로 떴다.** 원인은 `StaticFiles`가
+`Cache-Control`을 주지 않고 ETag/Last-Modified만 주는 것 — 브라우저가 휴리스틱 캐시로
+**서버에 묻지 않고** index.html을 재사용해 인증 미들웨어가 실행되지 않았다.
+API는 401이라 실제로 동작하는 건 없지만, 사용자에게는 "로그아웃이 안 된" 것으로 보인다.
+
+`NoStoreHtmlMiddleware` 추가 — `text/html` 응답에만 `Cache-Control: no-store, must-revalidate`.
+해시가 붙은 asset(`index-ABC123.js`)은 그대로 캐시되게 둔다(해시를 붙인 이유가 그것이다).
+인증 on/off와 무관하게 항상 적용한다.
+
+**검증**:
+- 단위 `tests/app/test_auth_routes.py` 10건 신규 — 로그인 성공/실패, 평문 HTTP에 Secure 미부착,
+  인증 off 시 로그인 거부, **삭제용 Set-Cookie의 Path·속성이 발급 때와 일치**(다르면 브라우저가
+  원본을 안 지워 "로그아웃한 척"만 된다), status 응답에 비밀정보 없음.
+  `test_web_auth.py`에 no-store 3건 추가. 전체 **1081건 통과**.
+- 실 브라우저(puppeteer) 7단계: 로그인 → 쿠키 확인(HttpOnly) → 버튼 발견 → 클릭 →
+  `/login` 이동 → **쿠키 삭제 확인** → **재접속 시 로그인 화면**. 수정 전에는 마지막 단계가
+  실패했고(앱 화면이 캐시로 떴다), 수정 후 통과.
+- 헤더 실측: `/` → `no-store, must-revalidate` / `/assets/index-*.js` → 캐시 헤더 없음(캐시 가능).

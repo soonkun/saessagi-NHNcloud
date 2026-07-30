@@ -32,7 +32,11 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 COOKIE_NAME = "saessagi_session"
 
 # 인증 없이 통과시킬 경로 — 로그인 자체에 필요한 것만.
-EXEMPT_PATHS = frozenset({"/login", "/api/auth/login", "/api/auth/logout"})
+# /api/auth/status는 "인증이 켜져 있나"만 알려준다(비밀정보 아님). UI가 로그아웃 버튼을
+# 보일지 판단하는 데 쓰며, 미인증 상태에서도 답해야 하므로 면제 대상이다.
+EXEMPT_PATHS = frozenset(
+    {"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status"}
+)
 
 # 실패 응답 지연(초). 비밀번호 1개짜리라 무차별 대입을 늦추는 정도만 한다.
 _FAILURE_DELAY_SEC = 0.5
@@ -182,6 +186,39 @@ def build_clear_cookie_header() -> str:
 # ────────────────────────────────────────────────────────────
 # 미들웨어
 # ────────────────────────────────────────────────────────────
+
+
+class NoStoreHtmlMiddleware:
+    """HTML 문서에 `Cache-Control: no-store`를 붙인다 (CR-40).
+
+    StaticFiles는 Cache-Control을 주지 않고 ETag/Last-Modified만 준다. 브라우저는 그러면
+    휴리스틱 캐시로 **서버에 묻지 않고** index.html을 재사용한다. 그 결과 로그아웃 후
+    주소를 다시 열면 인증 미들웨어가 실행되지 않아 앱 껍데기가 그대로 떠서
+    "로그아웃이 안 된 것처럼" 보인다(API는 401이라 실제로는 아무것도 안 되는 상태).
+
+    해시가 붙은 asset(index-ABC123.js)은 그대로 캐시되게 둔다 — 그게 해시를 붙인 이유다.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: MutableMapping[str, Any]) -> None:
+            if message["type"] == "http.response.start":
+                headers = message.setdefault("headers", [])
+                is_html = any(
+                    k == b"content-type" and b"text/html" in v.lower() for k, v in headers
+                )
+                if is_html:
+                    headers[:] = [(k, v) for k, v in headers if k != b"cache-control"]
+                    headers.append((b"cache-control", b"no-store, must-revalidate"))
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 class WebAuthMiddleware:
