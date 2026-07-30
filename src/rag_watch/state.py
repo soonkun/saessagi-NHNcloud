@@ -35,9 +35,17 @@ class WatchState:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._files: dict[str, dict[str, Any]] = {}
+        # CR-46: 양쪽(디스크·앱)에 모두 존재한다고 확인된 폴더 이름.
+        # 이게 없으면 "새로 생긴 폴더"와 "반대편에서 지워진 폴더"를 구분할 수 없어
+        # 어느 쪽을 지워도 반대편이 30초 뒤 되살리는 핑퐁이 발생한다 (E-68).
+        self._folders: set[str] = set()
         # 직전 스캔의 (크기, mtime) — 전송 중 파일을 걸러내는 안정화 확인용.
         # 디스크에 저장하지 않는다(재시작하면 한 주기 더 기다리면 되므로).
         self._seen: dict[str, tuple[int, float]] = {}
+        # CR-46: digest → 연속으로 "사라짐"으로 관측된 횟수. 파일을 다른 폴더로 옮기면
+        # 새 경로가 안정화되기까지 한 주기가 걸리는데, 그 사이 옛 경로가 이미 없어서
+        # 삭제로 오판된다 — 유예 주기를 두어 이동이 먼저 해소되게 한다 (E-69).
+        self._miss_counts: dict[str, int] = {}
         self._load()
 
     def _load(self) -> None:
@@ -46,15 +54,24 @@ class WatchState:
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             self._files = dict(raw.get("files") or {})
-            logger.info(f"rag_watch: 상태 로드 {len(self._files)}건 ({self._path})")
+            self._folders = set(raw.get("folders") or [])
+            logger.info(
+                f"rag_watch: 상태 로드 파일 {len(self._files)}건 / "
+                f"폴더 {len(self._folders)}개 ({self._path})"
+            )
         except Exception as exc:
             # 상태가 깨졌다고 기능을 멈추지 않는다 — 최악의 경우 재인제스트일 뿐이다.
             logger.warning(f"rag_watch: 상태 파일 손상, 새로 시작합니다: {exc!r}")
             self._files = {}
+            self._folders = set()
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"files": self._files}, ensure_ascii=False, indent=1)
+        payload = json.dumps(
+            {"files": self._files, "folders": sorted(self._folders)},
+            ensure_ascii=False,
+            indent=1,
+        )
         # 같은 디렉토리에 임시 파일 → rename (같은 파일시스템이어야 원자적)
         fd, tmp = tempfile.mkstemp(dir=str(self._path.parent), suffix=".tmp")
         try:
@@ -72,6 +89,10 @@ class WatchState:
 
     def known_digests(self) -> set[str]:
         return set(self._files)
+
+    def snapshot(self) -> dict[str, dict[str, Any]]:
+        """digest → 기록 사본 (순회 중 수정해도 안전하도록 복사해 준다)."""
+        return dict(self._files)
 
     def __len__(self) -> int:
         return len(self._files)
@@ -121,3 +142,30 @@ class WatchState:
         for p in list(self._seen):
             if p not in rel_paths:
                 del self._seen[p]
+
+    # ── 폴더 동기화 상태 (CR-46) ────────────────────────────────────────────
+
+    def known_folders(self) -> set[str]:
+        """양쪽에 모두 있다고 확인된 폴더 이름 집합."""
+        return set(self._folders)
+
+    def set_known_folders(self, names: set[str]) -> None:
+        self._folders = set(names)
+
+    # ── 삭제 유예 (CR-46) ───────────────────────────────────────────────────
+
+    def bump_miss(self, digest: str) -> int:
+        """이 digest가 연속 몇 번째로 '사라짐'으로 보이는지 세어 반환한다."""
+        n = self._miss_counts.get(digest, 0) + 1
+        self._miss_counts[digest] = n
+        return n
+
+    def clear_miss(self, digest: str) -> None:
+        """다시 발견되면 카운터를 리셋한다 (이동이 해소된 경우)."""
+        self._miss_counts.pop(digest, None)
+
+    def clear_all_misses(self, keep: set[str]) -> None:
+        """살아있는 digest들의 카운터를 정리한다."""
+        for d in list(self._miss_counts):
+            if d not in keep:
+                del self._miss_counts[d]

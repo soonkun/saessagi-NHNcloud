@@ -84,14 +84,31 @@ def build_plan(
     *,
     app_folder_names: set[str],
     max_per_cycle: int,
+    delete_grace_cycles: int = 2,
 ) -> ScanPlan:
     """한 주기 실행 계획을 세운다."""
     plan = ScanPlan()
     candidates, disk_folders = collect_candidates(root)
 
-    # 폴더 양방향 맞춤
-    plan.folders_to_create_in_app = sorted(disk_folders - app_folder_names)
-    plan.folders_to_create_on_disk = sorted(app_folder_names - disk_folders)
+    # ── 폴더 양방향 맞춤 (CR-46) ────────────────────────────────────────────
+    #
+    # 이전 구현은 "한쪽에 있고 반대쪽에 없으면 만든다"였다. 그런데 그 조건은
+    #   (a) 방금 새로 생긴 폴더
+    #   (b) 반대쪽에서 사용자가 지운 폴더
+    # 두 경우에 똑같이 성립한다. 그래서 어느 쪽을 지워도 다음 스캔이 반대쪽을 근거로
+    # 되살렸고, UI에서 지우면 디스크가, 디스크에서 지우면 UI가 부활시키는 핑퐁이 됐다 (E-68).
+    #
+    # known(= 직전에 양쪽 모두에 있다고 확인된 집합)을 기억하면 둘을 구분할 수 있다.
+    known_folders = state.known_folders()
+
+    plan.folders_to_create_in_app = sorted(disk_folders - app_folder_names - known_folders)
+    plan.folders_to_create_on_disk = sorted(app_folder_names - disk_folders - known_folders)
+    # known이었는데 한쪽에서 사라졌다 → 사용자가 그쪽에서 지운 것
+    plan.folders_deleted_on_disk = sorted((known_folders & app_folder_names) - disk_folders)
+    plan.folders_deleted_in_app = sorted((known_folders & disk_folders) - app_folder_names)
+    # 양쪽에 다 있으면 known으로 학습한다. 이 줄이 없으면 known이 한 번 비거나 어긋난 뒤
+    # 스스로 회복하지 못하고, 다음 삭제가 다시 부활로 나타난다.
+    plan.folders_confirmed = sorted(disk_folders & app_folder_names)
 
     seen_rel: set[str] = set()
     live_digests: set[str] = set()
@@ -115,17 +132,17 @@ def build_plan(
             continue
 
         live_digests.add(digest)
-        known = state.get(digest)
+        entry = state.get(digest)
 
-        if known is None:
+        if entry is None:
             if len(plan.to_ingest) >= max_per_cycle:
                 plan.deferred.append(cand)
             else:
                 plan.to_ingest.append(cand)
             continue
 
-        if known.get("folder_name") != cand.folder_name:
-            plan.to_move.append((cand, str(known.get("doc_id") or "")))
+        if entry.get("folder_name") != cand.folder_name:
+            plan.to_move.append((cand, str(entry.get("doc_id") or "")))
         else:
             plan.skipped += 1
 
@@ -135,11 +152,25 @@ def build_plan(
     # 계산하지 않으므로 live_digests에 없고, 그러면 **재시작 직후 모든 문서가 삭제 대상으로
     # 잡힌다**. delete_policy=unindex였다면 색인 전체가 날아간다.
     # 그래서 기록된 경로가 실제로 남아 있는지 stat으로 함께 확인한다.
-    plan.missing_digests = sorted(
-        d
-        for d in state.known_digests() - live_digests
-        if not _recorded_path_exists(root, state, d)
+    #
+    # CR-46: 여기에 유예를 하나 더 둔다. 파일을 다른 폴더로 옮기면
+    #   · 기록된 옛 경로는 이미 없고
+    #   · 새 경로는 첫 관측이라 "안정화 대기"로 해시를 구하지 않아 live_digests에도 없다
+    # → 그 순간 "삭제됨"으로 오판해 색인을 지웠고, 다음 주기에 새 파일로 재임베딩됐다.
+    # 실제로 270건 중 44건이 이렇게 삭제·재임베딩됐다 (E-69).
+    # 연속 delete_grace_cycles 회 이상 사라진 상태가 유지될 때만 삭제로 확정한다.
+    vanished = sorted(
+        d for d in state.known_digests() - live_digests if not _recorded_path_exists(root, state, d)
     )
+    for digest in live_digests:
+        state.clear_miss(digest)  # 다시 보였으면 유예 카운터 리셋
+    for digest in vanished:
+        if state.bump_miss(digest) >= delete_grace_cycles:
+            plan.missing_digests.append(digest)
+        else:
+            plan.grace_digests.append(digest)
+    state.clear_all_misses(set(vanished))
+
     state.drop_seen(seen_rel)
     return plan
 

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.auth_routes import router
-from app.web_auth import COOKIE_NAME, issue_token, verify_token
+from app.web_auth import COOKIE_NAME, verify_token
 
 PASSWORD = "sprout-2026"
 SALT = "route-test-salt"

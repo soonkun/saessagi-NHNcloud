@@ -136,6 +136,7 @@ class RagWatchService:
                 logger.warning(f"rag_watch: 감시 루트가 없습니다: {self._root}")
                 return ScanPlan()
 
+            known_before = self._state.known_folders()
             app_folders = await asyncio.to_thread(self._app_folder_names)
             plan = await asyncio.to_thread(
                 build_plan,
@@ -145,17 +146,26 @@ class RagWatchService:
                 max_per_cycle=self._max,
             )
 
-            await self._apply_folders(plan)
+            known_next = await self._apply_folders(plan, known_before)
             await self._apply_ingest(plan)
             await self._apply_moves(plan)
             await self._apply_deletions(plan)
 
-            if not plan.is_empty():
+            # CR-46: known은 **이번에 실제로 처리한 결과**로만 갱신한다.
+            # 주기 종료 시점에 디스크·앱을 새로 읽어 교집합으로 덮으면, 스캔이 오래 걸리는
+            # 동안(대량 재임베딩 등) 사용자가 UI에서 한 삭제까지 "이미 동기화된 상태"로
+            # 흡수해 버려 기억이 지워지고 다음 주기에 신규로 오인 → 부활한다.
+            self._state.set_known_folders(known_next)
+
+            if not plan.is_empty() or self._state.known_folders() != known_before:
                 await asyncio.to_thread(self._state.save)
+            if not plan.is_empty():
                 logger.info(
                     f"rag_watch: 인제스트 {len(plan.to_ingest)} / 이동 {len(plan.to_move)} / "
                     f"보류 {len(plan.unstable)} / 다음주기 {len(plan.deferred)} / "
-                    f"변화없음 {plan.skipped} (누적 {len(self._state)}건)"
+                    f"변화없음 {plan.skipped}"
+                    + (f" / 삭제유예 {len(plan.grace_digests)}" if plan.grace_digests else "")
+                    + f" (누적 {len(self._state)}건)"
                 )
 
             self._cycles += 1
@@ -168,10 +178,20 @@ class RagWatchService:
 
         return {str(f["name"]) for f in _load_folders()}
 
-    async def _apply_folders(self, plan: ScanPlan) -> None:
+    async def _apply_folders(self, plan: ScanPlan, known_before: set[str]) -> set[str]:
+        """폴더 계획을 실행하고, 다음 주기에 쓸 known 집합을 돌려준다.
+
+        known은 "양쪽에 있다고 확인된 폴더"다. 여기서 만든 것은 추가하고, 실제로 지운 것만
+        제거한다 — 지우려 했지만 보존한 경우(파일 남음·ignore 정책)는 그대로 유지해야
+        다음 주기에 신규로 오인되어 부활하지 않는다.
+        """
+        # 양쪽에 다 있는 것으로 관측된 폴더를 먼저 학습한다 (known의 자기 치유 경로).
+        known = set(known_before) | set(plan.folders_confirmed)
+
         for name in plan.folders_to_create_in_app:
             try:
                 await asyncio.to_thread(self._create_app_folder, name)
+                known.add(name)
                 logger.info(f"rag_watch: 앱 폴더 생성 '{name}' (디스크에서 발견)")
             except Exception as exc:
                 logger.warning(f"rag_watch: 앱 폴더 생성 실패 '{name}': {exc!r}")
@@ -182,9 +202,91 @@ class RagWatchService:
                 continue
             try:
                 (self._root / safe).mkdir(parents=True, exist_ok=True)
+                known.add(name)
                 logger.info(f"rag_watch: 디스크 폴더 생성 '{safe}' (UI에서 만든 폴더)")
             except Exception as exc:
                 logger.warning(f"rag_watch: 디스크 폴더 생성 실패 '{safe}': {exc!r}")
+
+        # ── 삭제 전파 (CR-46) ───────────────────────────────────────────────
+        # 디스크 디렉토리가 사라짐 → 앱 폴더도 지운다.
+        # 앱 폴더 삭제는 그 안의 청크를 전부 삭제하므로(delete_docs=True) 문서 삭제와
+        # 같은 위험도다. 따라서 delete_policy를 그대로 존중한다 — ignore면 지우지 않고,
+        # 대신 디스크 디렉토리를 복원해 상태를 일관되게 되돌린다(부활이지만 로그로 설명된다).
+        for name in plan.folders_deleted_on_disk:
+            if self._delete_policy != "unindex":
+                safe = sanitize_folder_name(name)
+                if safe is not None:
+                    try:
+                        (self._root / safe).mkdir(parents=True, exist_ok=True)
+                    except Exception:
+                        pass
+                logger.warning(
+                    f"rag_watch: 디스크 폴더 '{name}'가 사라졌지만 delete_policy=ignore이므로 "
+                    "앱 폴더와 문서를 보존하고 디렉토리를 복원했습니다. "
+                    "폴더를 정말 없애려면 UI에서 삭제하세요."
+                )
+                continue
+            try:
+                await asyncio.to_thread(self._delete_app_folder, name)
+                known.discard(name)
+                logger.info(f"rag_watch: 앱 폴더 삭제 '{name}' (디스크 디렉토리가 사라짐)")
+            except Exception as exc:
+                # known에 남겨 두면 다음 주기에 다시 시도한다 (신규로 오인해 부활시키지 않는다).
+                logger.warning(f"rag_watch: 앱 폴더 삭제 실패 '{name}': {exc!r}")
+
+        # UI에서 지워짐 → 디스크 디렉토리도 지운다. **비어 있을 때만.**
+        # 파일이 남아 있으면 그 파일들이 살 폴더가 필요하므로 앱 폴더를 되살리고 알린다.
+        for name in plan.folders_deleted_in_app:
+            safe = sanitize_folder_name(name)
+            if safe is None:
+                continue
+            d = self._root / safe
+            try:
+                remaining = [p for p in d.iterdir()] if d.is_dir() else []
+            except Exception:
+                remaining = []
+            if remaining:
+                try:
+                    await asyncio.to_thread(self._create_app_folder, name)
+                except Exception:
+                    pass
+                logger.warning(
+                    f"rag_watch: UI에서 폴더 '{name}'를 지웠지만 디스크에 파일 "
+                    f"{len(remaining)}개가 남아 있어 앱 폴더를 되살렸습니다. "
+                    f"완전히 없애려면 디렉토리({d})를 먼저 지우세요."
+                )
+                continue
+            try:
+                d.rmdir()
+                known.discard(name)
+                logger.info(f"rag_watch: 디스크 폴더 삭제 '{safe}' (UI에서 삭제됨, 비어 있었음)")
+            except Exception as exc:
+                logger.warning(f"rag_watch: 디스크 폴더 삭제 실패 '{safe}': {exc!r}")
+
+        return known
+
+    def _delete_app_folder(self, name: str) -> None:
+        """앱 폴더와 그 안의 문서를 제거한다 (라우트의 delete_folder와 동일 효과)."""
+        from app.rag_routes import _delete_folder_dir, _load_folders, _save_folders
+
+        folders = _load_folders()
+        target = next((f for f in folders if f["name"] == name), None)
+        if target is None:
+            return
+        folder_id = str(target["folder_id"])
+
+        rag = getattr(self._ctx, "rag_service", None)
+        store = getattr(rag, "store", None) or getattr(rag, "_store", None)
+        if store is not None:
+            store.delete_by_category(folder_id)
+        _save_folders([f for f in folders if f["folder_id"] != folder_id])
+        _delete_folder_dir(folder_id)
+        # 이 폴더에 속했던 파일 기록도 상태에서 지운다 — 남겨두면 파일이 다시 생겨도
+        # "이미 인제스트됨"으로 건너뛰어 유령이 된다.
+        for digest in [
+            d for d, v in self._state.snapshot().items() if v.get("folder_name") == name
+        ]:
+            self._state.forget(digest)
 
     def _create_app_folder(self, name: str) -> str:
         """rag_folders.json에 폴더를 추가하고 folder_id를 돌려준다."""
@@ -250,14 +352,27 @@ class RagWatchService:
                 continue
             try:
                 folder_id = await asyncio.to_thread(self._folder_id_for, cand.folder_name)
-                await asyncio.to_thread(self._move_doc, doc_id, folder_id)
+                moved = await asyncio.to_thread(self._move_doc, doc_id, folder_id)
                 digest = await asyncio.to_thread(file_digest, cand.path)
+
+                if moved <= 0:
+                    # CR-46: 갱신된 청크가 0건 = 그 doc_id가 색인에 없다. 이전에는 반환값을
+                    # 보지 않고 "이동 완료"로 기록해, 상태는 "색인됨"이라 주장하는데 실제
+                    # 문서는 없는 **유령 항목**이 생겼다. 유령이 되면 감시자가 영구히
+                    # 건너뛰어 그 파일은 다시 인제스트되지 않는다 (실측 225건, E-70).
+                    # 기록을 지워 다음 주기에 신규로 인제스트되게 한다.
+                    self._state.forget(digest)
+                    logger.warning(
+                        f"rag_watch: {cand.rel_path} 의 문서(doc_id={doc_id})가 색인에 없어 "
+                        "이동할 수 없습니다 — 기록을 지워 다시 인제스트합니다."
+                    )
+                    continue
+
                 self._state.update_location(
                     digest, rel_path=cand.rel_path, folder_name=cand.folder_name
                 )
                 logger.info(
-                    f"rag_watch: 폴더 이동 {cand.rel_path} → '{cand.folder_name}' "
-                    "(재임베딩 없음)"
+                    f"rag_watch: 폴더 이동 {cand.rel_path} → '{cand.folder_name}' (재임베딩 없음)"
                 )
             except Exception as exc:
                 logger.warning(f"rag_watch: 폴더 이동 실패 {cand.rel_path}: {exc!r}")
@@ -277,13 +392,17 @@ class RagWatchService:
             return False
         return (missing / tracked) > self._guard_ratio
 
-    def _move_doc(self, doc_id: str, folder_id: str | None) -> None:
-        """청크 category 갱신 — PATCH /documents/{doc_id}와 같은 효과."""
+    def _move_doc(self, doc_id: str, folder_id: str | None) -> int:
+        """청크 category 갱신 — PATCH /documents/{doc_id}와 같은 효과.
+
+        반환: 갱신된 청크 수. 0이면 그 doc_id가 색인에 없다는 뜻이므로 호출자가
+        상태를 정리해야 한다(유령 항목 방지 — CR-46).
+        """
         rag = getattr(self._ctx, "rag_service", None)
         store = getattr(rag, "store", None) or getattr(rag, "_store", None)
         if store is None:
             raise RuntimeError("vector store unavailable")
-        store.update_doc_category(doc_id, folder_id)
+        return int(store.update_doc_category(doc_id, folder_id) or 0)
 
     # ── 삭제 ────────────────────────────────────────────────────────────────
 

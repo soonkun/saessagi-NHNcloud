@@ -32,7 +32,12 @@ def write(path: Path, text: str = "내용") -> Path:
 
 def plan_twice(root: Path, state: WatchState, **kw):
     """안정화 확인 때문에 최초 발견은 보류된다 — 두 번 스캔해 실제 계획을 얻는다."""
-    build_plan(root, state, app_folder_names=kw.get("app_folder_names", set()), max_per_cycle=kw.get("max_per_cycle", 20))
+    build_plan(
+        root,
+        state,
+        app_folder_names=kw.get("app_folder_names", set()),
+        max_per_cycle=kw.get("max_per_cycle", 20),
+    )
     return build_plan(
         root,
         state,
@@ -163,12 +168,36 @@ class TestPlan:
         plan = plan_twice(root, state, app_folder_names={"f"})
         assert plan.to_ingest == [] and plan.skipped == 2
 
-    def test_p9_missing_file_reported(self, root: Path, state: WatchState) -> None:
-        state.record(
-            "deadbeef", rel_path="f/gone.md", doc_id="d9", folder_name="f", size=10
-        )
-        plan = build_plan(root, state, app_folder_names=set(), max_per_cycle=20)
-        assert plan.missing_digests == ["deadbeef"]
+    def test_p9_missing_file_reported_after_grace(self, root: Path, state: WatchState) -> None:
+        """CR-46: 삭제는 유예 주기를 넘겨야 확정된다 (이동 오판 방지)."""
+        state.record("deadbeef", rel_path="f/gone.md", doc_id="d9", folder_name="f", size=10)
+        first = build_plan(root, state, app_folder_names=set(), max_per_cycle=20)
+        assert first.missing_digests == [], "1주기째는 유예"
+        assert first.grace_digests == ["deadbeef"]
+
+        second = build_plan(root, state, app_folder_names=set(), max_per_cycle=20)
+        assert second.missing_digests == ["deadbeef"], "2주기째 확정"
+
+    def test_p9d_reappearing_file_resets_grace(self, root: Path, state: WatchState) -> None:
+        """유예 중에 파일이 (다른 폴더에서) 다시 보이면 삭제가 취소되어야 한다 —
+        폴더 이동으로 44건이 삭제·재임베딩됐던 실제 사고의 회귀 방지 (E-69)."""
+        p = write(root / "옛폴더" / "a.md")
+        digest = file_digest(p)
+        state.record(digest, rel_path="옛폴더/a.md", doc_id="d1", folder_name="옛폴더", size=6)
+
+        # 다른 폴더로 이동 (옛 경로는 사라지고 새 경로는 아직 안정화 전)
+        (root / "새폴더").mkdir()
+        p.rename(root / "새폴더" / "a.md")
+        (root / "옛폴더").rmdir()
+
+        first = build_plan(root, state, app_folder_names={"새폴더"}, max_per_cycle=20)
+        assert first.missing_digests == [], "이동 직후 삭제 확정되면 안 된다"
+
+        # 다음 주기: 새 경로가 안정화되어 해시가 잡히고 이동으로 처리된다
+        second = build_plan(root, state, app_folder_names={"새폴더"}, max_per_cycle=20)
+        assert second.missing_digests == [], "이동으로 해소됐으므로 삭제 없음"
+        assert len(second.to_move) == 1
+        assert second.to_move[0][1] == "d1"
 
     def test_p9b_unstable_file_not_reported_missing(self, root: Path, state: WatchState) -> None:
         """회귀 방지: 안정화 대기 중인 파일을 '사라짐'으로 보면 재시작 때마다
@@ -188,12 +217,13 @@ class TestPlan:
         assert first.missing_digests == [], "파일이 디스크에 있으므로 사라진 게 아니다"
 
     def test_p9c_still_detects_real_deletion(self, root: Path, state: WatchState) -> None:
-        """경로 확인을 넣었어도 실제 삭제는 여전히 잡아야 한다."""
+        """경로 확인·유예를 넣었어도 실제 삭제는 (유예 후) 여전히 잡아야 한다."""
         p = write(root / "f" / "a.md")
         digest = file_digest(p)
         state.record(digest, rel_path="f/a.md", doc_id="d1", folder_name="f", size=6)
         p.unlink()
 
+        build_plan(root, state, app_folder_names={"f"}, max_per_cycle=20)  # 유예 1
         plan = build_plan(root, state, app_folder_names={"f"}, max_per_cycle=20)
         assert plan.missing_digests == [digest]
 

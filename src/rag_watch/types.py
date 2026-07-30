@@ -65,8 +65,26 @@ class ScanPlan:
     folders_to_create_in_app: list[str] = field(default_factory=list)
     folders_to_create_on_disk: list[str] = field(default_factory=list)
 
+    # CR-46: 폴더 삭제 전파. known 상태가 있어야 "신규"와 "반대편에서 삭제됨"을 구분할 수 있다.
+    folders_deleted_on_disk: list[str] = field(default_factory=list)
+    """디스크 디렉토리가 사라진 폴더 — 앱에서도 지울 후보 (문서까지 삭제되므로 정책 확인 필요)."""
+
+    folders_deleted_in_app: list[str] = field(default_factory=list)
+    """UI에서 지워진 폴더 — 디스크 디렉토리를 지울 후보 (비어 있을 때만)."""
+
+    folders_confirmed: list[str] = field(default_factory=list)
+    """이번 스캔에서 디스크·앱 양쪽에 모두 존재하는 것이 확인된 폴더.
+
+    known 집합의 **유일한 학습 경로**다. 이게 없으면 "이미 양쪽에 있는 폴더"는 어떤 분기에도
+    걸리지 않아 known에 등록되지 못하고, 그 상태에서 한쪽을 지우면 신규 폴더로 오인되어
+    반대편이 되살린다 (E-68). 계획이 비었는지 판단할 때는 세지 않는다 — 관측 결과일 뿐이다.
+    """
+
     missing_digests: list[str] = field(default_factory=list)
     """상태에는 있는데 디스크에서 사라진 파일의 해시 — delete_policy가 처리한다."""
+
+    grace_digests: list[str] = field(default_factory=list)
+    """사라진 것으로 보이나 유예 중인 해시 (이동일 수 있어 이번엔 삭제하지 않는다)."""
 
     def is_empty(self) -> bool:
         return not (
@@ -74,5 +92,7 @@ class ScanPlan:
             or self.to_move
             or self.folders_to_create_in_app
             or self.folders_to_create_on_disk
+            or self.folders_deleted_on_disk
+            or self.folders_deleted_in_app
             or self.missing_digests
         )
