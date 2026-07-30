@@ -15,6 +15,17 @@ import websockets
 _ROOT = Path(__file__).resolve().parent.parent
 
 
+def _conf_port(default: int = 12393) -> int:
+    """conf.yaml의 app.web.port를 읽는다 — 포트를 바꿀 때마다 스크립트를 고치지 않도록."""
+    try:
+        import yaml
+
+        cfg = yaml.safe_load((_ROOT / "conf.yaml").read_text(encoding="utf-8")) or {}
+        return int(((cfg.get("app") or {}).get("web") or {}).get("port") or default)
+    except Exception:
+        return default
+
+
 def _session_cookie(port: int) -> str | None:
     """conf.yaml의 비밀번호로 로그인해 세션 쿠키를 얻는다. 인증 off면 None."""
     conf = _ROOT / "conf.yaml"
@@ -48,7 +59,8 @@ def _session_cookie(port: int) -> str | None:
         return None
 
 
-async def test_text_chat(message: str = "안녕하세요!", port: int = 12393) -> None:
+async def test_text_chat(message: str = "안녕하세요!", port: int | None = None) -> None:
+    port = port or _conf_port()
     uri = f"ws://127.0.0.1:{port}/client-ws"
     print(f"[연결] {uri}")
 
@@ -121,7 +133,7 @@ async def test_text_chat(message: str = "안녕하세요!", port: int = 12393) -
 
 if __name__ == "__main__":
     args = sys.argv[1:]
-    port = 12393
+    port = _conf_port()
     if args and args[-1].isdigit():
         port = int(args.pop())
     msg = " ".join(args) if args else "안녕하세요!"

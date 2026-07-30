@@ -159,9 +159,14 @@ grep "model: gemma" conf.yaml
 app:
   web:
     host: 0.0.0.0
+    port: 80              # 80이면 주소에 포트를 안 붙여도 된다 (http://<서버IP>)
     auth_enabled: true
     auth_password: "원하는-비밀번호"
 ```
+
+> `port: 80`은 1024 미만이라 **바인딩에 root 권한이 필요**하다. root가 아니면
+> `Permission denied`로 기동이 실패하므로, 그 경우 12393 같은 상위 포트를 쓰거나
+> 앞단에 리버스 프록시를 둔다.
 
 **인증을 켜지 않으면 백엔드가 기동을 거부한다.** 이 앱에는 로그인·권한 개념이 없어서
 열어두면 사내 문서·LLM이 통째로 노출되기 때문이다. 비밀번호를 conf.yaml에 남기고 싶지
