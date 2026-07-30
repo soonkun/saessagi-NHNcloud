@@ -11,6 +11,7 @@ import {
   FolderOpen,
   FolderPlus,
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
   List,
   Pencil,
@@ -46,6 +47,22 @@ const ALLOWED_MIME = [
 function isAllowed(file: File): boolean {
   const ext = "." + (file.name.split(".").pop() ?? "").toLowerCase();
   return ALLOWED_EXTS.includes(ext) || ALLOWED_MIME.includes(file.type);
+}
+
+/**
+ * CR-45: 청크 목록에 보여줄 한 줄 요약(헤드라인).
+ *
+ * 저장된 청크 텍스트는 전부 `[출처: 파일명, N페이지] `로 시작한다(검색 결과 표시용 메타).
+ * 이걸 그대로 미리보기에 쓰면 모든 행이 똑같은 60여 글자로 시작해 구분이 불가능하므로
+ * 접두어를 떼고 실제 본문 앞부분만 보여준다.
+ */
+export function chunkHeadline(text: string, maxLen = 90): string {
+  const body = (text ?? "")
+    .replace(/^\s*\[출처:[^\]]*\]\s*/, "") // 출처 메타 접두어 제거
+    .replace(/\s+/g, " ") // 개행·연속 공백을 한 칸으로 (한 줄 표시용)
+    .trim();
+  if (!body) return "(빈 청크)";
+  return body.length > maxLen ? body.slice(0, maxLen) + "…" : body;
 }
 
 type UploadStatus = "waiting" | "uploading" | "processing" | "done" | "error";
@@ -230,11 +247,15 @@ export function DocumentsView(): React.ReactElement {
   const [folderDropOpen, setFolderDropOpen] = useState(false);
   const dropRef = useRef<HTMLDivElement | null>(null);
 
-  // CR-28: 청크 뷰어
+  // CR-28: 청크 뷰어 / CR-45: 목록 → 내용 2단 구성
   const [chunkViewer, setChunkViewer] = useState<{
     docId: string;
     docName: string;
     chunks: DocumentChunkInfo[] | null; // null = 로딩 중
+    /** 문서의 실제 청크 총개수 (서버가 1000개 상한으로 잘라 보내므로 비교용) */
+    totalChunks: number;
+    /** null = 목록 화면, 숫자 = 그 인덱스 청크의 내용 화면 */
+    selected: number | null;
   } | null>(null);
 
   // CR-24: 문서 선택·이동
@@ -266,9 +287,9 @@ export function DocumentsView(): React.ReactElement {
   // dragenter/leave 중첩 해결용 카운터
   const dragCounterRef = useRef(0);
 
-  // CR-28: 청크 뷰어 열기
-  function openChunkViewer(docId: string, docName: string): void {
-    setChunkViewer({ docId, docName, chunks: null });
+  // CR-28: 청크 뷰어 열기 (CR-45: 목록 화면부터 시작)
+  function openChunkViewer(docId: string, docName: string, totalChunks: number): void {
+    setChunkViewer({ docId, docName, chunks: null, totalChunks, selected: null });
     void fetchDocumentChunks(docId)
       .then((r) => setChunkViewer((prev) => (prev?.docId === docId ? { ...prev, chunks: r.chunks } : prev)))
       .catch(() => setChunkViewer((prev) => (prev?.docId === docId ? { ...prev, chunks: [] } : prev)));
@@ -574,7 +595,18 @@ export function DocumentsView(): React.ReactElement {
               <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
                 {chunkViewer.chunks === null
                   ? "청크 불러오는 중…"
-                  : `청크 ${chunkViewer.chunks.length}개 · 합계 ${chunkViewer.chunks.reduce((s, c) => s + c.chars, 0).toLocaleString()}자`}
+                  : (() => {
+                      const shown = chunkViewer.chunks.length;
+                      const total = chunkViewer.totalChunks;
+                      const chars = chunkViewer.chunks.reduce((s, c) => s + c.chars, 0);
+                      // 서버가 1000개 상한으로 잘라 보낸다 — "1000개"라고만 쓰면
+                      // 실제 청크 수를 오해하게 되므로 잘렸을 때 명시한다.
+                      const countText =
+                        total > shown
+                          ? `청크 ${shown.toLocaleString()} / ${total.toLocaleString()}개 (앞 ${shown.toLocaleString()}개만 표시)`
+                          : `청크 ${shown.toLocaleString()}개`;
+                      return `${countText} · 표시분 합계 ${chars.toLocaleString()}자`;
+                    })()}
               </div>
             </div>
             <button
@@ -585,54 +617,178 @@ export function DocumentsView(): React.ReactElement {
               <X size={16} />
             </button>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: "10px 14px", display: "flex", flexDirection: "column", gap: 10 }}>
-            {chunkViewer.chunks !== null && chunkViewer.chunks.length === 0 && (
-              <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>청크를 불러오지 못했습니다.</div>
-            )}
-            {(chunkViewer.chunks ?? []).map((c, i) => (
-              <div
-                key={i}
-                style={{
-                  border: "1px solid var(--color-border)",
-                  borderRadius: 10,
-                  overflow: "hidden",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "6px 10px",
-                    background: "var(--color-sidebar, var(--color-panel))",
-                    borderBottom: "1px solid var(--color-border)",
-                    fontSize: "var(--fs-11)",
-                    color: "var(--color-text-muted)",
-                  }}
-                >
-                  <span style={{ fontWeight: 700, color: "var(--color-accent)" }}>#{i + 1}</span>
-                  <span>{c.chars.toLocaleString()}자</span>
-                  {c.page != null && <span>p.{c.page}</span>}
+
+          {/* CR-45: 목록 화면 — 청크가 많아도 각 행은 한 줄 헤드라인만 보여준다.
+              (이전엔 모든 청크 본문을 한 화면에 세로로 쌓았고, flex 자식의 기본
+              flex-shrink 때문에 개수가 많아지면 카드가 찌그러져 내용을 볼 수 없었다.) */}
+          {chunkViewer.selected === null ? (
+            <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "10px 14px" }}>
+              {chunkViewer.chunks !== null && chunkViewer.chunks.length === 0 && (
+                <div style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>청크를 불러오지 못했습니다.</div>
+              )}
+              {chunkViewer.chunks !== null && chunkViewer.chunks.length > 0 && (
+                <div style={{ border: "1px solid var(--color-border)", borderRadius: 10, overflow: "hidden" }}>
+                  {chunkViewer.chunks.map((c, i) => (
+                    <button
+                      key={i}
+                      onClick={() => setChunkViewer((prev) => (prev ? { ...prev, selected: i } : prev))}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        width: "100%",
+                        flexShrink: 0,
+                        background: "transparent",
+                        border: "none",
+                        borderTop: i === 0 ? "none" : "1px solid var(--color-border)",
+                        padding: "9px 12px",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        color: "var(--color-text)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: "var(--color-accent)",
+                          fontSize: "var(--fs-11)",
+                          minWidth: 46,
+                          flexShrink: 0,
+                        }}
+                      >
+                        #{i + 1}
+                      </span>
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          fontSize: "var(--fs-12)",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {chunkHeadline(c.text)}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: "var(--fs-11)",
+                          color: "var(--color-text-muted)",
+                          flexShrink: 0,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {c.chars.toLocaleString()}자{c.page != null ? ` · p.${c.page}` : ""}
+                      </span>
+                      <ChevronRight size={14} style={{ color: "var(--color-text-muted)", flexShrink: 0 }} />
+                    </button>
+                  ))}
                 </div>
-                <pre
-                  style={{
-                    margin: 0,
-                    padding: "10px 12px",
-                    fontSize: "var(--fs-12)",
-                    lineHeight: 1.6,
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-word",
-                    fontFamily: "inherit",
-                    color: "var(--color-text)",
-                    maxHeight: 400,
-                    overflowY: "auto",
-                  }}
-                >
-                  {c.text}
-                </pre>
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          ) : (
+            /* CR-45: 내용 화면 — 선택한 청크 하나가 남는 공간을 다 쓴다 */
+            (() => {
+              const list = chunkViewer.chunks ?? [];
+              const idx = chunkViewer.selected;
+              const c = list[idx];
+              if (!c) return <div style={{ flex: 1 }} />;
+              const go = (next: number): void =>
+                setChunkViewer((prev) => (prev ? { ...prev, selected: next } : prev));
+              return (
+                <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 14px",
+                      borderBottom: "1px solid var(--color-border)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <button
+                      onClick={() => setChunkViewer((prev) => (prev ? { ...prev, selected: null } : prev))}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--color-text-muted)",
+                        cursor: "pointer",
+                        fontSize: "var(--fs-12)",
+                        padding: "2px 0",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <ChevronLeft size={14} /> 청크 목록
+                    </button>
+                    <span style={{ fontWeight: 700, color: "var(--color-accent)", fontSize: "var(--fs-12)" }}>
+                      #{idx + 1}
+                    </span>
+                    <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", flex: 1, minWidth: 0 }}>
+                      {c.chars.toLocaleString()}자{c.page != null ? ` · p.${c.page}` : ""}
+                    </span>
+                    {/* 청킹 품질을 확인하려면 연속으로 훑어보게 되므로 이동 버튼을 둔다 */}
+                    <button
+                      onClick={() => go(idx - 1)}
+                      disabled={idx <= 0}
+                      title="이전 청크"
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--color-border)",
+                        borderRadius: 6,
+                        color: "var(--color-text)",
+                        cursor: idx <= 0 ? "not-allowed" : "pointer",
+                        opacity: idx <= 0 ? 0.4 : 1,
+                        display: "flex",
+                        padding: 3,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+                    <button
+                      onClick={() => go(idx + 1)}
+                      disabled={idx >= list.length - 1}
+                      title="다음 청크"
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--color-border)",
+                        borderRadius: 6,
+                        color: "var(--color-text)",
+                        cursor: idx >= list.length - 1 ? "not-allowed" : "pointer",
+                        opacity: idx >= list.length - 1 ? 0.4 : 1,
+                        display: "flex",
+                        padding: 3,
+                        flexShrink: 0,
+                      }}
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                  <pre
+                    style={{
+                      flex: 1,
+                      minHeight: 0,
+                      overflowY: "auto",
+                      margin: 0,
+                      padding: "12px 14px",
+                      fontSize: "var(--fs-12)",
+                      lineHeight: 1.7,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      fontFamily: "inherit",
+                      color: "var(--color-text)",
+                    }}
+                  >
+                    {c.text}
+                  </pre>
+                </div>
+              );
+            })()
+          )}
         </div>
       )}
 
@@ -1037,7 +1193,7 @@ export function DocumentsView(): React.ReactElement {
                           onDelete={handleDeleteDoc}
                           selected={selectedIds.has(doc.id)}
                           onToggleSelect={() => toggleSelect(doc.id)}
-                          onViewChunks={() => openChunkViewer(doc.id, doc.filename)}
+                          onViewChunks={() => openChunkViewer(doc.id, doc.filename, doc.chunk_count)}
                         />
                       ))}
                     </>
@@ -1097,7 +1253,7 @@ export function DocumentsView(): React.ReactElement {
                     onDelete={handleDeleteDoc}
                     selected={selectedIds.has(doc.id)}
                     onToggleSelect={() => toggleSelect(doc.id)}
-                          onViewChunks={() => openChunkViewer(doc.id, doc.filename)}
+                          onViewChunks={() => openChunkViewer(doc.id, doc.filename, doc.chunk_count)}
                   />
                 ))}
               </div>
