@@ -32,11 +32,15 @@ class RagWatchService:
         service_context: Any,
         max_per_cycle: int = 20,
         delete_policy: str = "ignore",
+        unindex_guard_ratio: float = 0.25,
+        unindex_guard_min: int = 5,
     ) -> None:
         self._root = root
         self._ctx = service_context
         self._max = max_per_cycle
         self._delete_policy = delete_policy
+        self._guard_ratio = unindex_guard_ratio
+        self._guard_min = unindex_guard_min
         self._state = WatchState(state_path)
         self._lock = asyncio.Lock()
         self._cycles = 0
@@ -44,6 +48,80 @@ class RagWatchService:
     @property
     def state(self) -> WatchState:
         return self._state
+
+    # ── 최초 시딩 ───────────────────────────────────────────────────────────
+
+    async def seed_from_existing(self) -> int:
+        """이미 인제스트된 문서를 상태에 등록한다 (첫 스캔 전에 1회).
+
+        이게 없으면 감시를 처음 켤 때 **이미 색인된 파일을 전부 다시 임베딩한다.**
+        270건이면 색인이 두 배로 불고 검색 결과에 중복이 뜬다.
+
+        매칭 기준은 (파일명, 폴더명). 사람이 스크립트를 돌리는 대신 앱이 자동으로 하므로
+        "감시를 켰는데 시딩을 잊는" 사고가 생기지 않는다.
+
+        이미 시딩된 상태(기록이 있음)면 아무것도 하지 않는다 — 재시작마다 반복할 필요가 없다.
+        """
+        if len(self._state) > 0:
+            return 0
+        if not self._root.is_dir():
+            return 0
+
+        try:
+            seeded = await asyncio.to_thread(self._seed_sync)
+        except Exception as exc:
+            # 시딩 실패는 기능을 막지 않는다. 다만 중복 인제스트 위험을 크게 알린다.
+            logger.error(
+                f"rag_watch: 최초 시딩 실패 — 이미 색인된 파일이 재임베딩될 수 있습니다: {exc!r}"
+            )
+            return 0
+
+        if seeded:
+            await asyncio.to_thread(self._state.save)
+            logger.info(
+                f"rag_watch: 최초 시딩 {seeded}건 — 이미 색인된 파일은 재임베딩하지 않습니다"
+            )
+        return seeded
+
+    def _seed_sync(self) -> int:
+        # 문서 목록은 라우트가 쓰는 헬퍼를 그대로 쓴다 — 스토어에 list_documents가 없고,
+        # 청크에서 문서 단위로 접는 로직이 이 헬퍼에만 있다.
+        from app.rag_routes import _list_documents_from_store, _load_folders
+
+        from .scanner import collect_candidates
+
+        rag = getattr(self._ctx, "rag_service", None)
+        store = getattr(rag, "store", None) or getattr(rag, "_store", None)
+        if store is None:
+            raise RuntimeError("vector store unavailable")
+
+        # folder_id → 폴더 이름
+        id_to_name = {str(f["folder_id"]): str(f["name"]) for f in _load_folders()}
+
+        # (파일명, 폴더명) → doc_id
+        index: dict[tuple[str, str | None], str] = {}
+        for info in _list_documents_from_store(store):
+            fid = getattr(info, "folder_id", None)
+            index[(info.filename, id_to_name.get(str(fid)) if fid else None)] = info.doc_id
+
+        candidates, _ = collect_candidates(self._root)
+        seeded = 0
+        for cand in candidates:
+            doc_id = index.get((cand.path.name, cand.folder_name))
+            if doc_id is None:
+                continue
+            digest = file_digest(cand.path)
+            if self._state.get(digest) is not None:
+                continue
+            self._state.record(
+                digest,
+                rel_path=cand.rel_path,
+                doc_id=doc_id,
+                folder_name=cand.folder_name,
+                size=cand.size,
+            )
+            seeded += 1
+        return seeded
 
     # ── 한 주기 ─────────────────────────────────────────────────────────────
 
@@ -184,6 +262,21 @@ class RagWatchService:
             except Exception as exc:
                 logger.warning(f"rag_watch: 폴더 이동 실패 {cand.rel_path}: {exc!r}")
 
+    def _exceeds_guard(self, missing: int) -> bool:
+        """한 주기 삭제량이 가드를 넘는가.
+
+        비율만 쓰면 문서가 4건일 때 1건 삭제도 25%를 넘어 막힌다. 그래서 절대 개수
+        하한(unindex_guard_min)을 함께 둔다.
+        """
+        if self._guard_ratio <= 0:
+            return False
+        if missing <= self._guard_min:
+            return False
+        tracked = len(self._state)
+        if tracked == 0:
+            return False
+        return (missing / tracked) > self._guard_ratio
+
     def _move_doc(self, doc_id: str, folder_id: str | None) -> None:
         """청크 category 갱신 — PATCH /documents/{doc_id}와 같은 효과."""
         rag = getattr(self._ctx, "rag_service", None)
@@ -204,6 +297,19 @@ class RagWatchService:
             logger.info(
                 f"rag_watch: 사라진 파일 {len(plan.missing_digests)}건 — "
                 "delete_policy=ignore이므로 색인은 유지합니다"
+            )
+            return
+
+        # 대량 삭제 가드 — 마운트 실패·권한 오류로 폴더가 비어 보이면 색인 전체가 날아간다.
+        # "파일이 없다"와 "폴더를 읽을 수 없다"를 구분할 방법이 없으므로, 한 주기에
+        # 사라진 양이 비정상적으로 많으면 삭제하지 않고 사람이 판단하게 한다.
+        if self._exceeds_guard(len(plan.missing_digests)):
+            logger.error(
+                f"rag_watch: 사라진 파일이 {len(plan.missing_digests)}건 "
+                f"(추적 {len(self._state)}건 중)으로 비정상적으로 많아 삭제를 중단했습니다. "
+                f"감시 루트({self._root})가 정상 마운트됐는지 확인하세요. "
+                "의도한 대량 삭제라면 문서 탭에서 직접 삭제하거나 "
+                "app.rag_watch.unindex_guard_ratio를 조정하세요."
             )
             return
 

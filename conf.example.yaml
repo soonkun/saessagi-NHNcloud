@@ -203,17 +203,19 @@ app:
     timeout_seconds: 8.0
   # M_22 (CR-41) RAG 폴더 감시 — 이 디렉토리에 파일을 넣으면 자동 임베딩된다.
   # 서브디렉토리 이름 = 문서 탭 폴더 이름(양방향 동기화).
-  # 처음 켤 때, 이미 인제스트된 파일이 root 안에 있으면 반드시
-  #   .venv/bin/python scripts/rag_watch_seed.py
-  # 를 먼저 실행할 것 — 안 하면 전부 중복 임베딩된다.
+  # 이미 색인된 파일이 root 안에 있어도 괜찮다 — 백엔드가 첫 스캔 전에 자동으로 시딩해
+  # 재임베딩을 막는다(사람이 스크립트를 돌릴 필요 없음).
   # delete_policy: ignore(기본) — 파일이 사라져도 색인 유지. 파일시스템 사고로 문서가
-  # 조용히 사라지는 것이 잘못 남는 것보다 위험하다. unindex면 색인도 제거.
+  # 조용히 사라지는 것이 잘못 남는 것보다 위험하다. unindex면 색인도 제거하며,
+  # 이때 unindex_guard_*가 대량 삭제를 막는다(마운트 실패로 폴더가 비어 보일 때 방어).
   rag_watch:
     enabled: false
     root: ""
     interval_seconds: 30
     delete_policy: ignore
     max_per_cycle: 20
+    unindex_guard_ratio: 0.25   # 한 주기 삭제가 추적 문서의 이 비율을 넘으면 중단
+    unindex_guard_min: 5        # 이 개수 이하는 비율과 무관하게 통과
   # M_20 (CR-39) 딥 리서치 전용 LLM. 장문 추론이라 큰 모델이 유리하다.
   # keep_alive는 대형 모델 로딩(수십 GB면 1~2분)을 매번 반복하지 않도록 길게 잡는다.
   deep_research:

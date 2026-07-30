@@ -248,6 +248,26 @@ class RagWatchConfig(BaseModel):
             "채팅·TTS가 굶지 않도록 나눠 처리한다."
         ),
     )
+    unindex_guard_ratio: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "delete_policy=unindex 안전장치. 한 주기에 사라진 파일이 추적 중 문서의 "
+            "이 비율을 넘으면 삭제를 **중단하고 경고만 남긴다**. "
+            "마운트 실패·권한 오류로 폴더가 비어 보일 때 색인 전체가 날아가는 것을 막는다. "
+            "정말 대량 삭제가 의도된 경우엔 값을 1.0으로 올리거나 UI에서 직접 삭제한다. "
+            "0이면 가드 없음(권장하지 않음)."
+        ),
+    )
+    unindex_guard_min: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "이 개수 이하의 삭제는 비율과 무관하게 통과시킨다. "
+            "문서가 몇 건뿐일 때 비율 가드가 정상 삭제까지 막는 것을 방지."
+        ),
+    )
 
 
 class DeepResearchConfig(BaseModel):

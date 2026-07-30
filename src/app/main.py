@@ -175,12 +175,22 @@ async def _start_rag_watch(ctx: Any, app_config: Any) -> "asyncio.Task[None] | N
         service_context=ctx,
         max_per_cycle=cfg.max_per_cycle,
         delete_policy=cfg.delete_policy.value,
+        unindex_guard_ratio=cfg.unindex_guard_ratio,
+        unindex_guard_min=cfg.unindex_guard_min,
     )
     ctx.rag_watch_service = service
 
     async def _loop() -> None:
         # 기동 직후엔 임베더·벡터스토어가 아직 덜 준비됐을 수 있어 한 주기 쉬고 시작한다.
         await asyncio.sleep(min(cfg.interval_seconds, 15))
+
+        # 첫 스캔 전에 반드시 시딩한다 (CR-41). 이미 색인된 파일이 감시 폴더에 있으면
+        # 시딩 없이는 전부 재임베딩된다. 상태가 비어 있을 때만 동작하므로 재시작에는 무해하다.
+        try:
+            await service.seed_from_existing()
+        except Exception as exc:
+            logger.error(f"rag_watch: 시딩 중 예외 (감시는 계속): {exc!r}")
+
         while True:
             try:
                 await service.run_once()
