@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useIsCompact } from "../hooks/useMediaQuery";
 import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
@@ -275,24 +276,56 @@ function Badge({
 
 type SettingsSection =
   | "theme"
+  | "fontsize"
   | "llm"
-  | "models"
+  | "vision"
+  | "graph"
   | "intent"
   | "prompts"
   | "voice"
   | "connection"
   | "about";
 
-const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
-  { id: "theme", label: "화면 (테마·글씨 크기)" },
-  { id: "llm", label: "LLM" },
-  { id: "models", label: "보조 모델 (비전·그래프)" },
-  { id: "intent", label: "의도 분류기" },
-  { id: "prompts", label: "지침 관리" },
-  { id: "voice", label: "음성" },
-  { id: "connection", label: "연결" },
-  { id: "about", label: "정보" },
+/**
+ * 설정 항목을 큰 묶음으로 나눈다 (CR-49, 사용자 요청).
+ *
+ * 예전에는 "LLM", "보조 모델 (비전·그래프)"처럼 한 화면에 여러 모델 설정이 섞여 있어
+ * 무엇을 고르는 화면인지 알기 어려웠다. 묶음 이름으로 먼저 좁히고, 그 안에서 모델
+ * 하나씩 고르게 한다 — 특히 좁은 화면에서는 한 화면에 한 가지만 보이는 편이 낫다.
+ */
+const SETTINGS_GROUPS: {
+  label: string;
+  items: { id: SettingsSection; label: string }[];
+}[] = [
+  {
+    label: "화면 설정",
+    items: [
+      { id: "theme", label: "테마" },
+      { id: "fontsize", label: "글씨 크기" },
+    ],
+  },
+  {
+    label: "LLM 설정",
+    items: [
+      { id: "llm", label: "대화 모델" },
+      { id: "vision", label: "비전 모델" },
+      { id: "graph", label: "지식그래프 추출 모델" },
+      { id: "intent", label: "의도 분류기" },
+    ],
+  },
+  {
+    label: "기타",
+    items: [
+      { id: "prompts", label: "지침 관리" },
+      { id: "voice", label: "음성" },
+      { id: "connection", label: "연결" },
+      { id: "about", label: "정보" },
+    ],
+  },
 ];
+
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] =
+  SETTINGS_GROUPS.flatMap((g) => g.items);
 
 // ── OpenAI 모델 선택 UI (LLM·의도분류기 공용) ────────────────────────────
 
@@ -434,6 +467,11 @@ export function SettingsView({
   // 데스크톱 마스터-디테일: 현재 선택된 카테고리
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("theme");
+
+  // 좁은 화면에서는 목록과 내용을 나란히 두면 내용 칸이 100px대로 눌려 글자가 세로로
+  // 쌓인다("메 인 모 델 과 동 일"). 목록 → 항목 → 뒤로 방식으로 한 화면에 하나만 보여준다.
+  const isCompact = useIsCompact();
+  const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
   // 비전 모델·그래프 추출 LLM 초기 로드
   useEffect(() => {
@@ -707,7 +745,14 @@ export function SettingsView({
           시에도 유지됩니다.
         </p>
 
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: "20px 0 12px" }}>
+      </>
+    );
+  }
+
+  function renderFontSize(): React.ReactElement {
+    return (
+      <>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
           글씨 크기
         </h3>
         {/* CR-43: 좁은 화면에서 버튼이 화면 밖으로 나가지 않도록 줄바꿈 허용 */}
@@ -880,7 +925,7 @@ export function SettingsView({
     );
   }
 
-  function renderModels(): React.ReactElement {
+  function renderVisionModel(): React.ReactElement {
     return (
       <>
         <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
@@ -934,7 +979,14 @@ export function SettingsView({
           {visionSaving ? "적용 중..." : visionSaved ? "적용됨 ✓" : "비전 모델 적용"}
         </button>
 
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: "24px 0 8px" }}>
+      </>
+    );
+  }
+
+  function renderGraphModel(): React.ReactElement {
+    return (
+      <>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
           지식그래프 추출 LLM (문서 등록 시)
         </h3>
         <p
@@ -1710,8 +1762,10 @@ export function SettingsView({
   if (desktop) {
     const sectionContentMap: Record<SettingsSection, React.ReactElement> = {
       theme: renderTheme(),
+      fontsize: renderFontSize(),
       llm: renderLlm(),
-      models: renderModels(),
+      vision: renderVisionModel(),
+      graph: renderGraphModel(),
       intent: renderIntent(),
       prompts: (
         <>
@@ -1725,6 +1779,118 @@ export function SettingsView({
       connection: renderConnection(),
       about: renderAbout(),
     };
+
+    // ── 좁은 화면: 목록 → 항목 → 뒤로 (CR-49) ───────────────────────────
+    if (isCompact) {
+      if (mobileDetailOpen) {
+        const label =
+          SETTINGS_SECTIONS.find((x) => x.id === activeSection)?.label ?? "설정";
+        return (
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              onClick={() => {
+                setMobileDetailOpen(false);
+                setSelectedPromptKey(null);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flexShrink: 0,
+                // 손가락으로 누르는 버튼 — 44px 이상 확보
+                minHeight: 44,
+                padding: "10px 14px",
+                background: "transparent",
+                border: "none",
+                borderBottom: "1px solid var(--color-border)",
+                color: "var(--color-text)",
+                fontSize: "var(--fs-14)",
+                fontWeight: 600,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <ChevronLeft size={18} style={{ flexShrink: 0 }} />
+              {label}
+            </button>
+            <div style={{ flex: 1, overflowY: "auto", padding: "18px 16px 32px" }}>
+              {sectionContentMap[activeSection]}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div style={{ height: "100%", overflowY: "auto", padding: "12px 12px 32px" }}>
+          {SETTINGS_GROUPS.map((group) => (
+            <div key={group.label} style={{ marginBottom: 18 }}>
+              <div
+                style={{
+                  fontSize: "var(--fs-11)",
+                  fontWeight: 700,
+                  color: "var(--color-text-muted)",
+                  padding: "0 4px 8px",
+                  letterSpacing: "0.06em",
+                }}
+              >
+                {group.label}
+              </div>
+              <div
+                style={{
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 12,
+                  overflow: "hidden",
+                  background: "var(--color-panel)",
+                }}
+              >
+                {group.items.map(({ id, label }, i) => (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      setActiveSection(id);
+                      setSelectedPromptKey(null);
+                      setMobileDetailOpen(true);
+                    }}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      minHeight: 48,
+                      padding: "12px 14px",
+                      background: "transparent",
+                      border: "none",
+                      borderTop:
+                        i === 0 ? "none" : "1px solid var(--color-border)",
+                      color: "var(--color-text)",
+                      fontSize: "var(--fs-14)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    {/* 줄바꿈은 허용하되 글자 단위로 쪼개지지 않게 한다 —
+                        좁은 칸에서 "메 인 모 델 과 동 일"처럼 세로로 쌓이던 문제 */}
+                    <span style={{ wordBreak: "keep-all" }}>{label}</span>
+                    <ChevronRight
+                      size={16}
+                      style={{ flexShrink: 0, color: "var(--color-text-muted)" }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
 
     return (
       <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
@@ -1750,7 +1916,21 @@ export function SettingsView({
           >
             설정
           </div>
-          {SETTINGS_SECTIONS.map(({ id, label }) => (
+          {SETTINGS_GROUPS.flatMap((group, gi) => [
+            // 묶음 제목 — 데스크톱에서도 같은 분류를 쓴다(화면마다 구조가 다르면 헷갈린다)
+            <div
+              key={`g-${group.label}`}
+              style={{
+                fontSize: "var(--fs-11)",
+                fontWeight: 700,
+                color: "var(--color-text-muted)",
+                padding: gi === 0 ? "0 12px 6px" : "14px 12px 6px",
+                letterSpacing: "0.06em",
+              }}
+            >
+              {group.label}
+            </div>,
+            ...group.items.map(({ id, label }) => (
             <button
               key={id}
               onClick={() => {
@@ -1784,7 +1964,8 @@ export function SettingsView({
             >
               {label}
             </button>
-          ))}
+            )),
+          ])}
         </nav>
 
         {/* 우측: 선택된 섹션 편집 영역 */}
@@ -1815,9 +1996,13 @@ export function SettingsView({
 
       <section style={petCardStyle}>{renderTheme()}</section>
 
+      <section style={petCardStyle}>{renderFontSize()}</section>
+
       <section style={petCardStyle}>{renderLlm()}</section>
 
-      <section style={petCardStyle}>{renderModels()}</section>
+      <section style={petCardStyle}>{renderVisionModel()}</section>
+
+      <section style={petCardStyle}>{renderGraphModel()}</section>
 
       <section style={petCardStyle}>{renderIntent()}</section>
 
