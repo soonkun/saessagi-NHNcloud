@@ -110,10 +110,33 @@ export function DesktopView(): React.ReactElement {
           WebkitAppRegion: "drag",
         }}
       >
-        {/* 왼쪽 여백 (macOS traffic light 회피).
-            좁은 화면의 메뉴 버튼은 이 줄이 아니라 **아래 전용 줄**에 있다 — 모바일
-            브라우저가 맨 윗줄을 가려 버리면 메뉴에 아예 접근할 수 없기 때문이다. */}
-        <div style={{ width: 70, flexShrink: 0 }} />
+        {/* 왼쪽: 좁은 화면에서는 메뉴 버튼, 넓으면 여백 (macOS traffic light 회피) */}
+        {isNarrow ? (
+          <button
+            onClick={() => setDrawerOpen((o) => !o)}
+            title={drawerOpen ? "메뉴 닫기" : "메뉴 열기"}
+            aria-label="메뉴"
+            style={{
+              width: 44,
+              height: 32,
+              marginLeft: 4,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              border: "none",
+              color: "var(--color-text)",
+              cursor: "pointer",
+              // @ts-ignore — 드래그 영역 안의 버튼은 클릭 가능해야 한다
+              WebkitAppRegion: "no-drag",
+            }}
+          >
+            {drawerOpen ? <XIcon size={18} /> : <Menu size={18} />}
+          </button>
+        ) : (
+          <div style={{ width: 70, flexShrink: 0 }} />
+        )}
         {/* 중앙: 새싹이 + 사용 중인 LLM — 드래그 영역 안에 표시만 */}
         <div
           style={{
@@ -182,57 +205,6 @@ export function DesktopView(): React.ReactElement {
           </div>
         )}
       </header>
-
-      {/* 좁은 화면 전용 메뉴 줄 (CR-48).
-          예전에는 햄버거가 맨 위 타이틀 바에 있었는데, iOS Safari가 주소창 때문에
-          그 줄을 화면 밖으로 밀어내면 메뉴를 **아예 열 수 없었다**. 한 줄 내려 두면
-          맨 윗줄이 잘려도 메뉴는 남는다. 지금 보고 있는 탭 이름도 함께 보여준다. */}
-      {isNarrow && (
-        <div
-          style={{
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "4px 6px",
-            background: "var(--color-sidebar)",
-            borderBottom: "1px solid var(--color-border)",
-          }}
-        >
-          <button
-            onClick={() => setDrawerOpen((o) => !o)}
-            title={drawerOpen ? "메뉴 닫기" : "메뉴 열기"}
-            aria-label="메뉴"
-            style={{
-              // 손가락으로 누르는 버튼이므로 44px 이상 확보한다.
-              width: 44,
-              height: 40,
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "none",
-              color: "var(--color-text)",
-              cursor: "pointer",
-            }}
-          >
-            {drawerOpen ? <XIcon size={20} /> : <Menu size={20} />}
-          </button>
-          <span
-            style={{
-              fontSize: "var(--fs-14)",
-              fontWeight: 600,
-              color: "var(--color-text)",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {SIDEBAR_TABS.find((t) => t.id === chatTab)?.label ?? ""}
-          </span>
-        </div>
-      )}
 
       {/* 본문: 사이드바 + 메인 영역 */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
