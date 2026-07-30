@@ -147,7 +147,17 @@ export function ChatContent({
   }, [messages, agentStatus]);
 
   useEffect(() => {
-    setTimeout(() => inputRef.current?.focus(), 50);
+    // 터치 기기에서는 자동 포커스하지 않는다.
+    // iOS Safari는 포커스된 입력창을 보이게 하려고 페이지를 아래로 밀어 올리는데,
+    // body가 overflow:hidden이라 되돌릴 수가 없다 — 화면 맨 위(타이틀 바·상태줄)가
+    // 잘린 채 고정되어 햄버거 메뉴와 새 대화 버튼에 아예 손이 닿지 않았다.
+    // 게다가 열자마자 키보드가 올라와 화면 절반을 덮는다.
+    const isTouch =
+      typeof window !== "undefined" &&
+      (window.matchMedia?.("(pointer: coarse)").matches || "ontouchstart" in window);
+    if (isTouch) return;
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
   }, []);
 
   function handleSend(): void {
