@@ -679,7 +679,8 @@ export function SettingsView({
         <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: "20px 0 12px" }}>
           글씨 크기
         </h3>
-        <div style={{ display: "flex", gap: 8 }}>
+        {/* CR-43: 좁은 화면에서 버튼이 화면 밖으로 나가지 않도록 줄바꿈 허용 */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {UI_SCALE_OPTIONS.map(({ label, value }) => (
             <button
               key={value}

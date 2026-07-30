@@ -654,6 +654,7 @@ export default function GraphRagView(): React.ReactElement {
                   top: "calc(100% + 4px)",
                   right: 0,
                   width: 300,
+                  maxWidth: "calc(100vw - 32px)", // 태블릿에서 화면 밖으로 나가지 않게 (CR-43)
                   zIndex: 20,
                   background: isDark ? "rgba(22,24,28,0.97)" : "rgba(255,255,255,0.98)",
                   border: "1px solid var(--color-border)",
@@ -885,6 +886,8 @@ export default function GraphRagView(): React.ReactElement {
             onMouseDown={(e) => e.stopPropagation()}
             style={{
               width: 380,
+              maxWidth: "calc(100vw - 32px)", // CR-43
+              boxSizing: "border-box",
               background: "var(--color-panel, var(--color-bg))",
               border: "1px solid var(--color-border)",
               borderRadius: 12,
@@ -1367,6 +1370,7 @@ export default function GraphRagView(): React.ReactElement {
               left: 10,
               top: 10,
               width: 250,
+              maxWidth: "calc(50vw - 20px)", // 좁은 화면에서 그래프를 가리지 않게 (CR-43)
               maxHeight: "calc(100% - 60px)",
               overflowY: "auto",
               background: isDark ? "rgba(22,24,28,0.94)" : "rgba(255,255,255,0.96)",

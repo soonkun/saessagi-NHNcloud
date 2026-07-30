@@ -13,8 +13,10 @@ import {
   Sun,
   Moon,
   LogOut,
+  Menu,
 } from "lucide-react";
 import { fetchAuthEnabled, logout } from "../services/api";
+import { useIsNarrow } from "../hooks/useMediaQuery";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
@@ -53,6 +55,15 @@ export function DesktopView(): React.ReactElement {
 
   // 네이티브 전용 UI(창 제어·펫 모드·앱 종료) 노출 여부. 브라우저에서는 전부 감춘다.
   const isElectron = isElectronRuntime();
+
+  // CR-43: 좁은 화면(태블릿·분할창)에서는 사이드바를 서랍으로 접어 본문 폭을 확보한다.
+  const isNarrow = useIsNarrow();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // 넓어지면 서랍 상태를 초기화한다 — 안 하면 다시 좁아질 때 열린 채로 뜬다.
+  useEffect(() => {
+    if (!isNarrow) setDrawerOpen(false);
+  }, [isNarrow]);
 
   // 인증이 꺼진 배포에서 로그아웃 버튼을 보여주면 누른 뒤 의미 없는 로그인 화면에 갇힌다.
   const [authEnabled, setAuthEnabled] = useState(false);
@@ -108,8 +119,33 @@ export function DesktopView(): React.ReactElement {
           WebkitAppRegion: "drag",
         }}
       >
-        {/* 왼쪽: 빈 공간 (macOS native traffic light 영역 회피용 패딩) */}
-        <div style={{ width: 70, flexShrink: 0 }} />
+        {/* 왼쪽: 좁은 화면에서는 메뉴 버튼, 넓으면 여백 (macOS traffic light 회피) */}
+        {isNarrow ? (
+          <button
+            onClick={() => setDrawerOpen((o) => !o)}
+            title={drawerOpen ? "메뉴 닫기" : "메뉴 열기"}
+            aria-label="메뉴"
+            style={{
+              width: 44,
+              height: 32,
+              marginLeft: 4,
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              border: "none",
+              color: "var(--color-text)",
+              cursor: "pointer",
+              // @ts-ignore — 드래그 영역 안의 버튼은 클릭 가능해야 한다
+              WebkitAppRegion: "no-drag",
+            }}
+          >
+            {drawerOpen ? <XIcon size={18} /> : <Menu size={18} />}
+          </button>
+        ) : (
+          <div style={{ width: 70, flexShrink: 0 }} />
+        )}
         {/* 중앙: 새싹이 + 사용 중인 LLM — 드래그 영역 안에 표시만 */}
         <div
           style={{
@@ -180,8 +216,21 @@ export function DesktopView(): React.ReactElement {
       </header>
 
       {/* 본문: 사이드바 + 메인 영역 */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-      {/* 좌측 사이드바 */}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
+      {/* 좁은 화면에서 서랍이 열렸을 때의 배경 — 바깥을 누르면 닫힌다 */}
+      {isNarrow && drawerOpen && (
+        <div
+          onClick={() => setDrawerOpen(false)}
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 40,
+          }}
+        />
+      )}
+      {/* 좌측 사이드바 — 좁은 화면에서는 겹쳐 뜨는 서랍이 된다.
+          240px 고정이던 탓에 600px 태블릿에서 본문이 360px만 남았다 (CR-43). */}
       <aside
         style={{
           width: 240,
@@ -191,6 +240,18 @@ export function DesktopView(): React.ReactElement {
           display: "flex",
           flexDirection: "column",
           minHeight: 0,
+          ...(isNarrow
+            ? {
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: 0,
+                zIndex: 41,
+                transform: drawerOpen ? "translateX(0)" : "translateX(-100%)",
+                transition: "transform 0.2s ease",
+                boxShadow: drawerOpen ? "2px 0 12px rgba(0,0,0,0.25)" : "none",
+              }
+            : {}),
         }}
       >
         {/* 탭 메뉴 */}
@@ -204,6 +265,7 @@ export function DesktopView(): React.ReactElement {
                   send({ type: "create-new-history" });
                 }
                 setChatTab(id);
+                setDrawerOpen(false); // 좁은 화면: 선택하면 서랍을 닫아 본문을 보여준다
               }}
               style={{
                 width: "100%",

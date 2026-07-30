@@ -434,10 +434,13 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
 
   return (
     <div style={{ display: "flex", height: "100%", overflow: "hidden" }}>
-      {/* 좌측: 노트 목록 */}
+      {/* 좌측: 노트 목록 — 좁은 화면에서는 폭을 줄여 본문(에디터)을 확보한다 (CR-43) */}
       <div
         style={{
           width: 240,
+          maxWidth: "38vw",
+          minWidth: 150,
+          flexShrink: 0,
           borderRight: "1px solid var(--color-border)",
           display: "flex",
           flexDirection: "column",

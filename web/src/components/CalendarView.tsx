@@ -7,6 +7,7 @@ import {
   deleteCalendarEvent,
 } from "../services/api";
 import type { CalendarEvent } from "../types";
+import { useIsCompact } from "../hooks/useMediaQuery";
 
 // ────────────────────────────────────────────────────────────
 // 유틸
@@ -94,6 +95,7 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
         borderRadius: 10,
         padding: 12,
         width: 240,
+        maxWidth: "calc(100vw - 24px)",
         boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
         pointerEvents: "auto",
       }}
@@ -106,7 +108,7 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
       </div>
 
       {/* 요일 헤더 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", marginBottom: 4 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", marginBottom: 4 }}>
         {WEEK_DAYS_SHORT.map((d, i) => (
           <div key={d} style={{ textAlign: "center", fontSize: "var(--fs-11)", fontWeight: 600, padding: "2px 0",
             color: i === 0 ? "#e05050" : i === 6 ? "#5080e0" : "var(--color-text-muted)" }}>{d}</div>
@@ -114,7 +116,7 @@ function DatePicker({ value, onChange }: { value: string; onChange: (v: string) 
       </div>
 
       {/* 날짜 그리드 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(0, 1fr))", gap: 2 }}>
         {Array.from({ length: firstDay }, (_, i) => <div key={`e-${i}`} />)}
         {Array.from({ length: totalDays }, (_, i) => {
           const day = i + 1;
@@ -252,6 +254,7 @@ function AddEventModal({
           borderRadius: 12,
           padding: 24,
           width: 360,
+          maxWidth: "calc(100vw - 32px)", // 휴대폰 폭(390)에서 모달이 잘리지 않게
           display: "flex",
           flexDirection: "column",
           gap: 12,
@@ -381,8 +384,9 @@ const saveBtnStyle: React.CSSProperties = {
 // ────────────────────────────────────────────────────────────
 
 export function CalendarView(): React.ReactElement {
-  // CR-38: 펫 모드(좁은 플로팅 패널) 제거로 항상 데스크탑 레이아웃이다.
-  const isDesktop = true;
+  // CR-43: 좁은 화면(태블릿)에서는 조밀한 레이아웃을 쓴다.
+  // (CR-38에서 펫 모드가 사라져 항상 true였는데, 태블릿에서 일정 상세가 넘쳤다.)
+  const isDesktop = !useIsCompact();
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
   const [month, setMonth] = useState(today.getMonth());
@@ -486,7 +490,7 @@ export function CalendarView(): React.ReactElement {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(7, 1fr)",
+            gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
             gap: 2,
             marginBottom: 4,
           }}
@@ -511,7 +515,7 @@ export function CalendarView(): React.ReactElement {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(7, 1fr)",
+            gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
             gap: isDesktop ? 6 : 2,
           }}
         >
@@ -662,6 +666,7 @@ export function CalendarView(): React.ReactElement {
       <div
         style={{
           width: isDesktop ? 340 : 280,
+          maxWidth: "45vw", // 좁은 화면에서 상세 패널이 달력을 밀어내지 않도록
           borderLeft: "1px solid var(--color-border)",
           padding: isDesktop ? 24 : 20,
           overflowY: "auto",
