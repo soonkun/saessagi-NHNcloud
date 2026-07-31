@@ -93,17 +93,15 @@ async def set_model(body: SetModelRequest, request: Request) -> dict[str, str]:
     if not new_model:
         raise HTTPException(status_code=422, detail="model 이름이 비어 있습니다.")
 
-    # 1. conf.yaml 업데이트
+    # 1. conf.yaml 업데이트 — 대화 모델 키 **두 곳만** 정확히 바꾼다.
     conf = _conf_path()
     try:
-        text = conf.read_text(encoding="utf-8")
-        # character_config.agent_config.llm_configs.ollama_llm.model
-        text = re.sub(
-            r"([ \t]+model:\s*)['\"]?[^'\"\n]+['\"]?",
-            lambda m_: m_.group(1) + f'"{new_model}"',
-            text,
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
+        _set_ollama_model_keys(raw, new_model)
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
         )
-        conf.write_text(encoding="utf-8", data=text)
         logger.info(f"conf.yaml model 업데이트 완료: {new_model}")
     except Exception as exc:
         logger.warning(f"conf.yaml 업데이트 실패: {exc}")
@@ -225,7 +223,8 @@ async def set_llm_provider(body: SetLlmProviderRequest, request: Request) -> dic
         }
     else:
         if body.ollama_model:
-            app_section.setdefault("ollama", {})["model"] = body.ollama_model
+            # app.ollama.model과 llm_configs.ollama_llm.model을 함께 맞춘다 (E-81)
+            _set_ollama_model_keys(raw, body.ollama_model)
         _set_upstream_llm_provider(raw, "ollama_llm")
 
     try:
@@ -895,6 +894,26 @@ async def set_prompt(body: SetPromptRequest, request: Request) -> dict[str, Any]
     app_cfg = ctx.app_config if ctx else None
     conf = _conf_path()
     return await _save_prompt(body.key, body.prompt, conf, ctx, app_cfg)
+
+
+def _set_ollama_model_keys(raw: dict[str, Any], model: str) -> None:
+    """대화용 Ollama 모델을 conf.yaml의 **두 곳 모두**에 기록한다 (E-81).
+
+    한 곳만 고치면 두 값이 어긋나 어느 모델이 실제로 쓰이는지 알 수 없게 된다.
+    실제로 설정 화면의 "LLM 적용"이 `app.ollama.model`만 갱신해,
+    `agent_config...ollama_llm.model`이 옛 모델로 남은 채 모델 교체 시험이 진행됐다.
+    (CLAUDE.md 사고 2가 "두 곳을 같이 봐야 한다"고 경고한 바로 그 지점이다.)
+
+    정규식으로 `model:` 줄을 일괄 치환하면 **OpenAI 설정의 model까지 덮어쓴다** —
+    실측 4줄 중 2줄이 OpenAI 것이었다. 그래서 키 경로를 지정해 정확히 두 곳만 바꾼다.
+    """
+    raw.setdefault("app", {}).setdefault("ollama", {})["model"] = model
+    llm_configs = (
+        raw.setdefault("character_config", {})
+        .setdefault("agent_config", {})
+        .setdefault("llm_configs", {})
+    )
+    llm_configs.setdefault("ollama_llm", {})["model"] = model
 
 
 def _set_upstream_llm_provider(raw: dict[str, Any], provider: str) -> None:
