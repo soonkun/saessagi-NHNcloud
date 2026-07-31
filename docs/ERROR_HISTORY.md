@@ -1310,3 +1310,33 @@ ctranslate2 같은 다른 라이브러리는 CUDA 12를 요구할 수 있다. "G
 있지 않은지 계산된 스타일(`getComputedStyle`)로 확인하는 것이 추측보다 빠르다.
 그리고 **모바일 뷰포트는 단위로 맞추지 말고 재서 맞출 것** — `vh/dvh/svh`는 브라우저마다
 해석이 다르지만 `visualViewport`는 실제 값이다.
+
+---
+
+## E-77: 문서 임베딩 중 캐릭터가 사라짐 — 업로드 영상이 403/404 (2026-07-31)
+
+**날짜**: 2026-07-31
+**증상**: 사용자 제보 "문서 임베딩할 때 새싹이가 사라졌다가 다시보여. 문서 임베딩을 상징하는
+동영상이 실행되기로 했었는데."
+**원인**: 두 가지가 겹쳤다.
+1. `/avatars`는 `assets/character/saessagi/`를 서빙하는데 그 디렉토리에 **`uploading.png`도
+   `uploading.webm`도 없었다.** 두 파일은 `web/public/avatars/`에만 있었다(프론트 정적 자산).
+   `/avatars` 마운트가 SPA 정적 서빙보다 우선이라 `/avatars/uploading.png`는 404가 됐다.
+2. upstream `AvatarStaticFiles`가 이미지 확장자만 통과시키고 나머지를 **403**으로 막는다.
+   그래서 파일을 옮겨도 `.webm`은 여전히 막혔다.
+결과적으로 업로드 중 `emotion="uploading"`이 되면 `<video>`가 아무것도 그리지 못했고,
+`<img>`에만 있던 폴백(`onError` → neutral)은 영상 경로에 없어서 **캐릭터가 통째로 사라진
+것처럼** 보였다. 업로드가 끝나 neutral로 돌아오면 다시 나타났다 — 제보 그대로다.
+**수정**:
+1. `uploading.png`·`uploading.webm`을 `assets/character/saessagi/`로 복사.
+2. `_SaessagiAvatarFiles`(서브클래스)로 `.webm`·`.mp4` 허용. upstream 파일은 건드리지 않았다.
+3. `<video>`에도 `onError` 폴백 추가 — 영상을 못 읽으면 같은 감정의 정지 그림으로 물러선다.
+   자산이 또 없어지더라도 캐릭터가 사라지는 일은 없다.
+**검증**: `/avatars/uploading.webm` 403 → **200(4.4MB)**, `uploading.png` 404 → **200**.
+실 브라우저에서 문서를 업로드해 아바타 전이를 추적:
+`neutral.png → uploading.webm(재생됨) → uploading.png → neutral.png`,
+**한 번도 안 보이거나 빈 상태가 되지 않음**, 자산 요청 실패 0건.
+**교훈**: **같은 경로를 두 곳에서 서빙하면 우선순위가 조용히 결과를 바꾼다.** 프론트 자산과
+백엔드 마운트가 같은 URL 접두사를 쓰면, 빌드에 있는 파일이 404가 날 수 있다.
+그리고 **폴백은 모든 렌더 경로에 걸어야 한다** — `<img>`에만 있고 `<video>`에는 없었던 탓에
+자산 하나가 빠진 것이 "캐릭터가 사라진다"는 큰 증상으로 나타났다.

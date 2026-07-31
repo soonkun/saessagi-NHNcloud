@@ -21,6 +21,24 @@ from .service_context import AppServiceContext
 from .ws_route import init_app_ws_route
 
 
+class _SaessagiAvatarFiles(AvatarStaticFiles):
+    """아바타 정적 파일 — 영상(webm)도 허용한다 (E-77).
+
+    upstream AvatarStaticFiles는 이미지 확장자만 통과시키고 나머지를 403으로 막는다.
+    그런데 문서 임베딩 중에 재생할 `uploading.webm`이 그 필터에 걸려, 화면에서
+    캐릭터가 통째로 사라졌다(영상 요소가 아무것도 그리지 못한 채 남았다).
+    upstream 파일은 수정하지 않고 여기서 확장자만 넓힌다.
+    """
+
+    _EXTRA_EXTENSIONS = (".webm", ".mp4")
+
+    async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
+        if path.lower().endswith(self._EXTRA_EXTENSIONS):
+            # CORSStaticFiles(부모의 부모)의 처리로 바로 넘긴다 — 확장자 검사만 건너뛴다.
+            return await CORSStaticFiles.get_response(self, path, scope)
+        return await super().get_response(path, scope)
+
+
 class AppWebSocketServer:
     """본 프로젝트 FastAPI 서버 (컴포지션 패턴).
 
@@ -108,7 +126,7 @@ class AppWebSocketServer:
         if os.path.exists(saessagi_avatar_dir):
             self.app.mount(
                 "/avatars",
-                AvatarStaticFiles(directory=saessagi_avatar_dir),
+                _SaessagiAvatarFiles(directory=saessagi_avatar_dir),
                 name="avatars",
             )
         else:
@@ -125,9 +143,7 @@ class AppWebSocketServer:
             logger.info(f"프론트엔드: web/dist 사용: {frontend_dir}")
         else:
             frontend_dir = "web/dist"
-            logger.warning(
-                "web/dist 빌드가 없습니다. 'cd web && npm run build'를 먼저 실행하세요."
-            )
+            logger.warning("web/dist 빌드가 없습니다. 'cd web && npm run build'를 먼저 실행하세요.")
 
         if os.path.exists(frontend_dir):
             self.app.mount(
@@ -162,9 +178,7 @@ class AppWebSocketServer:
         validate_web_config(web_cfg.host, web_cfg.auth_enabled, password)
 
         salt = (
-            load_or_create_salt(self.full_config.app.paths.data_dir)
-            if web_cfg.auth_enabled
-            else ""
+            load_or_create_salt(self.full_config.app.paths.data_dir) if web_cfg.auth_enabled else ""
         )
 
         # run()이 uvicorn 바인딩에 사용 (CLI 인자가 있으면 그쪽이 우선)

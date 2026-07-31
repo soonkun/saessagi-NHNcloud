@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useIsCompact } from "../hooks/useMediaQuery";
+import { modelOptionLabel } from "../modelOrigin";
 import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
@@ -211,10 +212,11 @@ const SAMPLE_TEXT = "안녕하세요! 저는 새싹이예요. 오늘도 잘 부�
 
 // GPT 모델 4종 — value는 OpenAI alias (항상 최신 안정 버전으로 라우팅됨).
 const OPENAI_MODELS: { value: string; label: string }[] = [
-  { value: "gpt-5", label: "GPT-5 (alias · 최신 안정·멀티모달)" },
-  { value: "gpt-5-mini", label: "GPT-5 mini (alias · 가볍고 빠름)" },
-  { value: "gpt-4o", label: "GPT-4o (alias · 안정·멀티모달)" },
-  { value: "gpt-4o-mini", label: "GPT-4o mini (alias · 가볍고 빠름)" },
+  // CR-50: 앞에 국기·회사를 붙인다. Ollama 목록과 표기를 맞춰 어디 모델인지 한눈에 보이게.
+  { value: "gpt-5", label: "🇺🇸 OpenAI · GPT-5 (alias · 최신 안정·멀티모달)" },
+  { value: "gpt-5-mini", label: "🇺🇸 OpenAI · GPT-5 mini (alias · 가볍고 빠름)" },
+  { value: "gpt-4o", label: "🇺🇸 OpenAI · GPT-4o (alias · 안정·멀티모달)" },
+  { value: "gpt-4o-mini", label: "🇺🇸 OpenAI · GPT-4o mini (alias · 가볍고 빠름)" },
 ];
 const CUSTOM_MODEL_VALUE = "__custom__";
 
@@ -837,7 +839,7 @@ export function SettingsView({
               ) : (
                 ollamaModels.map((m) => (
                   <option key={m} value={m}>
-                    {m}
+                    {modelOptionLabel(m)}
                   </option>
                 ))
               )}
@@ -954,7 +956,7 @@ export function SettingsView({
           <option value="">— 사용 안 함 (메인 모델이 직접 처리) —</option>
           {ollamaModels.map((m) => (
             <option key={m} value={m}>
-              {m}
+              {modelOptionLabel(m)}
             </option>
           ))}
         </select>
@@ -1103,7 +1105,7 @@ export function SettingsView({
               ) : (
                 ollamaModels.map((m) => (
                   <option key={m} value={m}>
-                    {m}
+                    {modelOptionLabel(m)}
                   </option>
                 ))
               )}
@@ -1247,7 +1249,7 @@ export function SettingsView({
                   ) : (
                     ollamaModels.map((m) => (
                       <option key={m} value={m}>
-                        {m}
+                        {modelOptionLabel(m)}
                       </option>
                     ))
                   )}

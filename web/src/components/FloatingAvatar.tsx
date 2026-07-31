@@ -102,6 +102,8 @@ export function FloatingAvatar(): React.ReactElement | null {
   }, [isCompact]);
 
   const [drag, setDrag] = React.useState<DragState>({ kind: "none" });
+  // 영상 재생에 실패했는가 — 실패하면 같은 감정의 정지 그림으로 대체한다.
+  const [videoFailed, setVideoFailed] = React.useState(false);
   // 감정이 바뀌면 이전 그림을 잠깐 겹쳐 두고 새 그림을 페이드인한다(뚝 끊기지 않게).
   const [prevEmotion, setPrevEmotion] = React.useState<Emotion | null>(null);
   const lastEmotion = React.useRef<Emotion>(emotion);
@@ -110,6 +112,7 @@ export function FloatingAvatar(): React.ReactElement | null {
     if (lastEmotion.current === emotion) return;
     setPrevEmotion(lastEmotion.current);
     lastEmotion.current = emotion;
+    setVideoFailed(false); // 감정이 바뀌면 다시 영상부터 시도한다
     const t = window.setTimeout(() => setPrevEmotion(null), 250);
     return () => window.clearTimeout(t);
   }, [emotion]);
@@ -245,7 +248,7 @@ export function FloatingAvatar(): React.ReactElement | null {
           />
         )}
 
-        {isVideo ? (
+        {isVideo && !videoFailed ? (
           <video
             key={emotion}
             src={avatarSrcFor(emotion, "webm")}
@@ -254,6 +257,10 @@ export function FloatingAvatar(): React.ReactElement | null {
             loop
             muted
             playsInline
+            // 영상을 못 읽으면 같은 감정의 정지 그림으로 물러선다. 이 안전장치가 없으면
+            // 캐릭터가 통째로 사라진 것처럼 보인다 — 실제로 서버가 webm을 403으로
+            // 막고 png도 없어서 그렇게 됐다 (E-77).
+            onError={() => setVideoFailed(true)}
             style={layerStyle}
           />
         ) : (
