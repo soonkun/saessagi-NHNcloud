@@ -2,7 +2,13 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- interactive-widget=resizes-content: 키보드가 올라올 때 화면을 밀어 올리는 대신
+         레이아웃 크기를 줄인다. 없으면 모바일에서 입력할 때 본문이 위로 확 밀려 올라가고
+         아래에 빈(흰) 영역이 남는다 (E-82). -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content"
+    />
     <title>새싹이 AI 비서</title>
     <!-- CR-38: 브라우저 탭 아이콘. 백엔드가 /avatars에 캐릭터 스프라이트를 서빙한다.
          (Electron 시절엔 불필요했고, 없으면 favicon.ico 404가 콘솔에 남는다) -->
