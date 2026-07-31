@@ -58,7 +58,7 @@ class AppWebSocketServer:
         lifespan: Any | None = None,
     ) -> None:
         # FastAPI 앱을 내부 속성으로 보유 (upstream WebSocketServer.app 패턴과 동일)
-        self.app: FastAPI = FastAPI(title="새싹이 AI 비서", lifespan=lifespan, root_path="/sQRXE2adVt")
+        self.app: FastAPI = FastAPI(title="새싹이 AI 비서", lifespan=lifespan)
         self.full_config: FullConfig = config
         self.config = config.upstream  # upstream 호환용 — Config 객체
         self.default_context_cache = default_context_cache
