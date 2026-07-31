@@ -106,6 +106,17 @@ body {
   height: var(--app-height, 100%);
 }
 
+/* iOS에서 문서 스크롤을 실제로 막는다 (E-84).
+   `overflow: hidden`만으로는 부족하다 — iOS는 포커스된 입력을 보이게 하려고 문서를
+   스크롤해 버리고, 그러면 한 화면 고정 레이아웃인 우리 앱이 위로 밀려 입력바만 화면
+   맨 위에 남고 아래는 앱 밖(흰 배경)이 드러난다. body를 고정하면 스크롤할 것 자체가 없다. */
+body {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
 #root {
   width: 100%;
   height: 100%;

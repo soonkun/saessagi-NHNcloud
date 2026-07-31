@@ -36,6 +36,16 @@ export function useAppHeight(): void {
       // 밀린 만큼 앱을 같이 내려 항상 보이는 영역에 맞춘다.
       const vv = window.visualViewport;
       root.style.setProperty(APP_OFFSET_VAR, `${Math.round(vv?.offsetTop ?? 0)}px`);
+
+      // 문서 스크롤을 되돌린다 (E-84).
+      //
+      // iOS는 포커스된 입력을 보이게 하려고 **문서 자체를 스크롤**한다. `overflow:hidden`도
+      // 이걸 막지 못한다(iOS의 오래된 예외 동작). 우리 화면은 한 화면에 고정된 레이아웃이라
+      // 문서 스크롤이 필요 없는데, 브라우저가 앱 바닥까지 밀어버리면 입력바만 맨 위에 남고
+      // 그 아래는 앱 밖(흰 배경)이 보인다 — 실제로 그 화면이 제보됐다.
+      if (window.scrollY !== 0 || window.scrollX !== 0) {
+        window.scrollTo(0, 0);
+      }
     };
     apply();
 
