@@ -211,7 +211,10 @@ class IntentGateConfig(BaseModel):
     ollama_model: str = Field(default="gemma4:e4b")
     openai_model: str = Field(default="gpt-4o-mini")
     confidence_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
-    timeout_seconds: float = Field(default=8.0, ge=1.0, le=60.0)
+    # 8초는 추론(thinking) 없는 소형 모델 기준이었다. 요즘 소형 모델은 분류 전에 추론
+    # 토큰을 쓰고(실측 3~6초), 대형 대화 모델과 GPU를 나눠 쓰면 적재 대기까지 붙어
+    # 12초로도 초과했다. 초과하면 분류가 통째로 사라져 RAG 라우팅이 없어지므로 넉넉히 준다.
+    timeout_seconds: float = Field(default=30.0, ge=1.0, le=120.0)
 
 
 class RagWatchDeletePolicy(str, Enum):

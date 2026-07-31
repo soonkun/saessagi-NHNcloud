@@ -225,6 +225,11 @@ def decide_with_confidence(
 
     intent = result.intent
 
+    # followup — 분류기가 "직전 답변을 다듬어 달라"고 판단한 경우 (CR-51).
+    # 재검색 없이 대화 맥락만으로 답한다.
+    if intent == "followup":
+        return followup_decision()
+
     # doc_query / work_query
     if intent in ("doc_query", "work_query"):
         if result.confidence < confidence_threshold:

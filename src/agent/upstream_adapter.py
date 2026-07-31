@@ -221,6 +221,8 @@ def _make_adapter_class() -> type:
             self._last_routing: Any = None  # RoutingDecision | None
             # E-45: 직전 분류의 intent 라벨 (RoutingDecision에는 없음)
             self._last_intent: str | None = None
+            # CR-51: 직전 턴 요약 — 분류기가 followup을 판단하려면 참조 대상이 필요하다.
+            self._last_exchange: str | None = None
 
         @staticmethod
         def _should_trigger_rag(text: str) -> bool:
@@ -529,36 +531,19 @@ def _make_adapter_class() -> type:
             # 진행 상태 1: 의도 분류는 LLM 1회 호출(~1초)이라 먼저 알린다
             yield _status_event("질문을 살펴보고 있어요…", "thinking")
 
-            # ── CR-23: 후속 질문 감지 — 직전 답변 참조 요청은 분류·재검색 없이
-            # 대화 맥락(메모리)으로 처리 ("그럼 요약해줘"가 doc_query로 빠져 무관한
-            # 청크가 주입되고 딴소리하던 문제)
-            _followup_handled = False
-            if (
-                self._last_intent is not None  # 이전 턴이 있어야 후속이 성립
-                and not has_attachment
-                and user_text_for_classify.strip()
-            ):
-                from intent_gate.routing import followup_decision, looks_like_followup
-
-                if looks_like_followup(user_text_for_classify):
-                    self._last_routing = followup_decision()
-                    self._last_intent = "followup"
-                    _followup_handled = True
-                    logger.info(
-                        "IntentGate 후속 질문 감지 — 분류·RAG 재검색 생략, 대화 맥락으로 처리 (query=%r)",
-                        user_text_for_classify[:50],
-                    )
-
-            if (
-                not _followup_handled
-                and self._intent_classifier is not None
-                and user_text_for_classify.strip()
-            ):
+            # CR-51: 후속 질문 판정은 **분류기(LLM)**가 한다. 예전에는 정규식이 분류
+            # 이전에 가로챘는데, "정리해줘"가 든 새 질문까지 후속으로 잡아 RAG를 통째로
+            # 건너뛰었다 (E-79). 문맥 판단은 규칙으로 흉내 낼 수 있는 일이 아니다.
+            if self._intent_classifier is not None and user_text_for_classify.strip():
                 try:
                     from intent_gate import decide_with_confidence
+                    from intent_gate.routing import followup_decision, looks_like_followup
+                    from intent_gate.types import IntentResult
 
                     _result = await self._intent_classifier.classify(
-                        user_text_for_classify, has_attachment=has_attachment
+                        user_text_for_classify,
+                        has_attachment=has_attachment,
+                        prev_context=self._last_exchange,
                     )
                     # confidence_threshold는 classifier에서 접근
                     _threshold = getattr(self._intent_classifier, "_confidence_threshold", 0.55)
@@ -598,6 +583,29 @@ def _make_adapter_class() -> type:
                             legacy_rag_triggered=_legacy,
                             prompt_overrides=_overrides,
                         )
+                    # 분류기가 못 붙은 턴(타임아웃·오류)의 안전망 (CR-51).
+                    # 이럴 때는 판단할 LLM이 없으므로 보수적 정규식으로라도 순수 재표현
+                    # 요청을 걸러 낸다 — 안 그러면 "짧게 정리해줘"가 엉뚱한 문서 검색을
+                    # 돌려 답이 딴 데로 샌다. **정상 분류된 턴에는 관여하지 않는다.**
+                    if (
+                        _result.source != "llm"
+                        and self._last_exchange
+                        and not has_attachment
+                        and looks_like_followup(user_text_for_classify)
+                    ):
+                        logger.info(
+                            "IntentGate 분류 실패(%s) — 정규식 안전망으로 후속 처리 (query=%r)",
+                            _result.source,
+                            user_text_for_classify[:50],
+                        )
+                        _decision = followup_decision()
+                        _result = IntentResult(
+                            intent="followup",
+                            confidence=0.0,
+                            reason="분류 실패 + 재표현 요청 → 후속 폴백",
+                            source=_result.source,
+                        )
+
                     self._last_routing = _decision
                     self._last_intent = _result.intent
                     logger.info(
@@ -727,6 +735,14 @@ def _make_adapter_class() -> type:
                 and self._last_routing is not None
                 and not self._last_routing.autonomous
             )
+
+            # CR-51: 다음 턴의 followup 판정에 쓸 직전 대화를 남긴다.
+            # 분류기는 이걸 봐야 "짧게 정리해줘"가 무엇을 가리키는지 알 수 있다.
+            # 프롬프트에 실려 매 턴 전송되므로 짧게 자른다.
+            if user_text_for_classify:
+                _prev_q = user_text_for_classify[:200]
+                _prev_a = _strip_llm_markers(full_text)[:400] if full_text else ""
+                self._last_exchange = f"사용자: {_prev_q}\n새싹이: {_prev_a}"
 
             if full_text:
                 # LLM이 낸 (깨졌을 수 있는) 마커 제거 후, 백엔드가 기록한

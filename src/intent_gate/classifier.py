@@ -14,6 +14,14 @@ from .types import ALL_INTENT_LABELS, CompleteJsonFn, IntentLabel, IntentResult
 
 logger = logging.getLogger(__name__)
 
+# 분류 응답 토큰 예산.
+# 출력 JSON 자체는 60토큰이면 충분하지만, 요즘 소형 모델(gemma4:e4b 등)은 추론(thinking)
+# 토큰을 먼저 쓴다. 예산이 빠듯하면 추론에서 다 소진해 **빈 응답**이 오고
+# (finish_reason=length), 분류가 조용히 fallback_error로 떨어져 RAG 라우팅이 사라진다.
+# 실측(gemma4:e4b): 64·512토큰 → 빈 응답, 1024토큰 → 정상. 헤드룸을 넉넉히 둔다
+# (E-41과 같은 함정). max_tokens는 상한일 뿐이라 모델이 일찍 끝나면 비용이 늘지 않는다.
+_CLASSIFY_MAX_TOKENS = 1024
+
 
 class IntentClassifier:
     """LLM 기반 의도 분류기.
@@ -56,6 +64,7 @@ class IntentClassifier:
         user_text: str,
         *,
         has_attachment: bool = False,
+        prev_context: str | None = None,
     ) -> IntentResult:
         """사용자 발화를 분류해 IntentResult를 반환한다.
 
@@ -64,6 +73,8 @@ class IntentClassifier:
         Args:
             user_text: 분류할 사용자 입력 텍스트.
             has_attachment: 메시지에 [첨부 자료: ...] 메타 존재 여부.
+            prev_context: 직전 대화 요약(사용자 질문 + 답변 앞부분). followup 판정에 쓴다.
+                없으면 모델에게 "직전 대화 없음"을 알려 followup을 고르지 않게 한다.
 
         Returns:
             IntentResult. source는 "llm", "fallback_error", "fallback_lowconf" 중 하나.
@@ -78,7 +89,14 @@ class IntentClassifier:
                 "\n[참고: 이 메시지에는 첨부 자료가 포함되어 있습니다 — note_save 가능성 고려]"
             )
 
-        user_prompt = f"{truncated}{attachment_hint}"
+        # 직전 대화를 함께 준다 — 이게 없으면 모델은 "짧게 정리해줘"가 무엇을 가리키는지
+        # 알 수 없어 followup 판정을 할 수 없다 (CR-51).
+        if prev_context:
+            context_block = f"[직전 대화]\n{prev_context[: self._max_input_chars]}\n\n[현재 발화]\n"
+        else:
+            context_block = "[직전 대화 없음 — followup 라벨을 고르지 마세요]\n\n[현재 발화]\n"
+
+        user_prompt = f"{context_block}{truncated}{attachment_hint}"
 
         # M_17: system_prompt_override가 있으면 그것을 사용, 없으면 기본값
         # INTENT_JSON_SCHEMA(6 enum)는 항상 코드가 강제로 전달 (편집 불가)
@@ -92,7 +110,7 @@ class IntentClassifier:
                     active_system_prompt,
                     user_prompt,
                     INTENT_JSON_SCHEMA,
-                    max_tokens=64,
+                    max_tokens=_CLASSIFY_MAX_TOKENS,
                     temperature=0.0,
                     timeout_seconds=self._timeout_seconds,
                 )

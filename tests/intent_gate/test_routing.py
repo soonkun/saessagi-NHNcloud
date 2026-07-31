@@ -304,3 +304,43 @@ class TestLooksLikeFollowup:
         assert d.inject_rag is False
         assert d.autonomous is False
         assert d.tool_hint and "후속" in d.tool_hint
+
+
+# ── CR-51: followup을 LLM이 판정 ─────────────────────────────────────────────
+
+
+class TestFollowupIntentRouting:
+    """분류기가 followup을 내면 재검색 없이 대화 맥락으로 처리해야 한다."""
+
+    def test_followup_intent_skips_rag(self) -> None:
+        from intent_gate.routing import decide_with_confidence
+        from intent_gate.types import IntentResult
+
+        dec = decide_with_confidence(
+            IntentResult(
+                intent="followup", confidence=0.95, reason="직전 답변 재표현", source="llm"
+            ),
+            confidence_threshold=0.55,
+        )
+        assert dec.inject_rag is False
+        assert dec.autonomous is False
+        assert dec.tool_hint is not None and "새로 검색하지" in dec.tool_hint
+
+    def test_followup_is_a_valid_label(self) -> None:
+        """스키마 enum에 없으면 모델이 그 라벨을 낼 수 없다."""
+        from intent_gate.prompts import INTENT_JSON_SCHEMA
+        from intent_gate.types import ALL_INTENT_LABELS
+
+        assert "followup" in ALL_INTENT_LABELS
+        enum = INTENT_JSON_SCHEMA["properties"]["intent"]["enum"]  # type: ignore[index]
+        assert "followup" in enum
+
+    def test_prompt_teaches_topic_not_keyword(self) -> None:
+        """E-79 재발 방지: 프롬프트가 '단어'가 아니라 '주제 유무'로 가르치는지.
+        few-shot에 반례("기후변화 대응방안을 정리해줘" → doc_query)가 있어야 한다."""
+        from intent_gate.prompts import SYSTEM_PROMPT, _build_few_shot_text
+
+        assert "주제가 문장 안에 있으면 followup이 아니다" in SYSTEM_PROMPT
+        shots = _build_few_shot_text()
+        assert "기후변화 대응방안을 정리해줘" in shots
+        assert "doc_query" in shots

@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 
-# ── IntentLabel — 닫힌 집합(6종) ─────────────────────────────────────────────
+# ── IntentLabel — 닫힌 집합(7종) ─────────────────────────────────────────────
+#
+# followup은 CR-51에서 추가됐다. 예전에는 정규식 휴리스틱(looks_like_followup)이
+# LLM 분류 **이전에** 가로채 처리했는데, "정리해줘"가 들어간 새 질문까지 후속으로 잡아
+# RAG를 통째로 건너뛰는 사고가 났다 (E-79). 문맥 판단은 LLM이 할 일이다.
 
 IntentLabel = Literal[
     "calendar_add",
@@ -15,6 +19,7 @@ IntentLabel = Literal[
     "doc_query",
     "note_save",
     "work_query",
+    "followup",
     "chat",
 ]
 
@@ -25,6 +30,7 @@ ALL_INTENT_LABELS: frozenset[str] = frozenset(
         "doc_query",
         "note_save",
         "work_query",
+        "followup",
         "chat",
     }
 )

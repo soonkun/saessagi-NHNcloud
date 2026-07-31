@@ -200,7 +200,7 @@ app:
     provider: same_as_chat   # same_as_chat | ollama | openai
     ollama_model: gemma4:e4b
     confidence_threshold: 0.55
-    timeout_seconds: 8.0
+    timeout_seconds: 30.0  # 추론형 소형 모델 + GPU 경합까지 감안 (실측 3~6초, 적재 대기 시 더)
   # M_22 (CR-41) RAG 폴더 감시 — 이 디렉토리에 파일을 넣으면 자동 임베딩된다.
   # 서브디렉토리 이름 = 문서 탭 폴더 이름(양방향 동기화).
   # 이미 색인된 파일이 root 안에 있어도 괜찮다 — 백엔드가 첫 스캔 전에 자동으로 시딩해
