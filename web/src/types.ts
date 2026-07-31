@@ -189,6 +189,11 @@ export interface HistoryInfo {
   uid: string;
   latest_message: HistoryMessage | null;
   timestamp: string | null;
+  /**
+   * CR-53: 목록에 표시할 제목 — **첫 사용자 질문**에서 만든다.
+   * 예전 클라이언트/이전 서버와 섞일 수 있어 선택 필드다(없으면 기존 표시로 물러선다).
+   */
+  title?: string;
 }
 
 export interface WsHistoryListMessage {

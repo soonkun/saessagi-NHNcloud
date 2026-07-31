@@ -56,9 +56,48 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
                 "start-continuous-capture": self._handle_start_continuous_capture,
                 "stop-continuous-capture": self._handle_stop_continuous_capture,
                 "set-dnd": self._handle_set_dnd,
+                # CR-53: 목록 제목을 첫 사용자 질문으로 만든다 (upstream은 마지막 답변을 쓴다)
+                "fetch-history-list": self._handle_history_list_with_titles,
             }
         )
         return handlers  # type: ignore[no-any-return]
+
+    async def _handle_history_list_with_titles(
+        self, websocket: Any, client_uid: str, data: Any
+    ) -> None:
+        """대화 목록을 돌려주되 **제목을 첫 사용자 질문으로** 붙인다 (CR-53).
+
+        upstream `_handle_history_list_request`는 마지막 메시지(대개 답변)만 실어 보내,
+        목록이 "자료를 찾아볼게요!…"처럼 전부 같은 안내 멘트로 보였다.
+        upstream 파일은 건드리지 않고 여기서 핸들러만 교체한다.
+        """
+        import json
+
+        from open_llm_vtuber.chat_history_manager import get_history, get_history_list
+
+        from .history_title import history_title
+
+        context = self.client_contexts[client_uid]
+        conf_uid = context.character_config.conf_uid
+        histories = get_history_list(conf_uid)
+
+        for h in histories:
+            try:
+                msgs = get_history(conf_uid, str(h.get("uid") or ""))
+                # HistoryMessage가 dataclass/객체일 수 있어 dict로 정규화한다.
+                norm = [
+                    m if isinstance(m, dict) else {"role": getattr(m, "role", ""),
+                                                   "content": getattr(m, "content", "")}
+                    for m in msgs
+                ]
+                h["title"] = history_title(norm)
+            except Exception as exc:  # 제목 하나 때문에 목록 전체가 실패하면 안 된다
+                logger.warning(f"대화 제목 생성 실패 (무시): uid={h.get('uid')} {exc!r}")
+                h["title"] = ""
+
+        await websocket.send_text(
+            json.dumps({"type": "history-list", "histories": histories}, ensure_ascii=False)
+        )
 
     async def _send_initial_messages(  # type: ignore[override]
         self,

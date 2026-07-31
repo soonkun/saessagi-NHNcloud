@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { Trash2 } from "lucide-react";
 import { useStore } from "../store";
+import type { HistoryInfo } from "../types";
 import { send } from "../services/websocket";
 
 function stripPreview(content: string | undefined | null): string {
@@ -13,6 +14,18 @@ function stripPreview(content: string | undefined | null): string {
       .trim()
       .slice(0, 48) || "(빈 대화)"
   );
+}
+
+/**
+ * 목록에 보일 한 줄 (CR-53).
+ *
+ * 서버가 준 제목(첫 사용자 질문)을 우선 쓴다. 예전에는 마지막 메시지(대개 답변)를 썼는데,
+ * 답변이 "자료를 찾아볼게요!"로 시작하다 보니 목록 전체가 같은 문구로 보여 구분이 안 됐다.
+ */
+function historyLabel(h: HistoryInfo): string {
+  const t = (h.title ?? "").trim();
+  if (t) return t.length > 48 ? t.slice(0, 48) : t;
+  return stripPreview(h.latest_message?.content); // 제목이 없는 예전 데이터 대비
 }
 
 export function HistoryList({ onSelect }: { onSelect?: () => void }): React.ReactElement {
@@ -59,7 +72,7 @@ export function HistoryList({ onSelect }: { onSelect?: () => void }): React.Reac
             <div
               key={h.uid}
               onClick={() => handleSwitch(h.uid)}
-              title={stripPreview(h.latest_message?.content)}
+              title={historyLabel(h)}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -83,7 +96,7 @@ export function HistoryList({ onSelect }: { onSelect?: () => void }): React.Reac
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {stripPreview(h.latest_message?.content)}
+                  {historyLabel(h)}
                 </div>
                 <div style={{ fontSize: "var(--fs-10)", color: "var(--color-text-muted)", marginTop: 1 }}>
                   {ts}
