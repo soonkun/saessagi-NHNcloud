@@ -8,17 +8,27 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { modelOrigin, modelOptionLabel } from "../modelOrigin";
+import {
+  modelOrigin,
+  modelOptionLabel,
+  modelParamSize,
+  sortModels,
+} from "../modelOrigin";
 
 describe("modelOrigin", () => {
   it("현재 설치된 모델들을 모두 알아본다", () => {
-    expect(modelOrigin("gemma4:31b")).toEqual({ flag: "🇺🇸", vendor: "Google" });
-    expect(modelOrigin("gemma4:26b")).toEqual({ flag: "🇺🇸", vendor: "Google" });
-    expect(modelOrigin("granite4.1:30b")).toEqual({ flag: "🇺🇸", vendor: "IBM" });
-    expect(modelOrigin("gpt-oss:120b")).toEqual({ flag: "🇺🇸", vendor: "OpenAI" });
+    expect(modelOrigin("gemma4:31b")).toEqual({
+      flag: "🇺🇸",
+      vendor: "Google",
+      country: "미국",
+    });
+    expect(modelOrigin("gemma4:26b").vendor).toBe("Google");
+    expect(modelOrigin("granite4.1:30b").vendor).toBe("IBM");
+    expect(modelOrigin("gpt-oss:120b").vendor).toBe("OpenAI");
     expect(modelOrigin("mistral-medium-3.5:128b")).toEqual({
       flag: "🇫🇷",
       vendor: "Mistral AI",
+      country: "프랑스",
     });
   });
 
@@ -40,8 +50,12 @@ describe("modelOrigin", () => {
   });
 
   it("모르는 모델은 빈 값 — 추측해서 잘못 붙이지 않는다", () => {
-    expect(modelOrigin("some-unknown-model:7b")).toEqual({ flag: "", vendor: "" });
-    expect(modelOrigin("")).toEqual({ flag: "", vendor: "" });
+    expect(modelOrigin("some-unknown-model:7b")).toEqual({
+      flag: "",
+      vendor: "",
+      country: "",
+    });
+    expect(modelOrigin("")).toEqual({ flag: "", vendor: "", country: "" });
   });
 });
 
@@ -58,5 +72,84 @@ describe("modelOptionLabel", () => {
     expect(modelOptionLabel("gemma4:31b", " (19GB)")).toBe(
       "🇺🇸 Google · gemma4:31b (19GB)",
     );
+  });
+});
+
+describe("modelParamSize", () => {
+  it("태그에서 파라미터 크기를 뽑는다", () => {
+    expect(modelParamSize("gemma4:26b")).toBe(26);
+    expect(modelParamSize("granite4.1:8b")).toBe(8);
+    expect(modelParamSize("gpt-oss:120b")).toBe(120);
+    expect(modelParamSize("mistral-medium-3.5:128b")).toBe(128);
+  });
+
+  it("소수점·나노 표기도 읽는다", () => {
+    expect(modelParamSize("qwen3:1.5b")).toBe(1.5);
+    expect(modelParamSize("gemma4:e4b")).toBe(4);
+    expect(modelParamSize("gemma4:e2b")).toBe(2);
+  });
+
+  it("MoE 표기는 전문가 하나 크기를 쓴다(표기만으로 총량을 알 수 없다)", () => {
+    expect(modelParamSize("llama4:16x17b")).toBe(17);
+  });
+
+  it("이름의 버전 숫자를 크기로 착각하지 않는다", () => {
+    // granite4.1의 4.1, mistral-medium-3.5의 3.5가 잡히면 정렬이 엉킨다
+    expect(modelParamSize("granite4.1:30b")).toBe(30);
+    expect(modelParamSize("mistral-medium-3.5:128b")).toBe(128);
+  });
+
+  it("크기가 없으면 null", () => {
+    expect(modelParamSize("granite4.1:latest")).toBeNull();
+    expect(modelParamSize("")).toBeNull();
+  });
+});
+
+describe("sortModels", () => {
+  it("국가 → 회사 → 크기(작은 것부터) 순으로 정렬한다", () => {
+    const got = sortModels([
+      "mistral-medium-3.5:128b",
+      "gemma4:26b",
+      "granite4.1:30b",
+      "gpt-oss:120b",
+      "gemma4:e4b",
+      "granite4.1:8b",
+      "gemma4:31b",
+    ]);
+    expect(got).toEqual([
+      // 미국 · Google (4 → 26 → 31)
+      "gemma4:e4b",
+      "gemma4:26b",
+      "gemma4:31b",
+      // 미국 · IBM (8 → 30)
+      "granite4.1:8b",
+      "granite4.1:30b",
+      // 미국 · OpenAI
+      "gpt-oss:120b",
+      // 프랑스 · Mistral AI
+      "mistral-medium-3.5:128b",
+    ]);
+  });
+
+  it("문자열 정렬로는 크기 순서가 뒤집힌다 — 숫자 비교가 실제로 필요하다", () => {
+    expect(sortModels(["granite4.1:30b", "granite4.1:8b"])).toEqual([
+      "granite4.1:8b",
+      "granite4.1:30b",
+    ]);
+    expect([...["granite4.1:30b", "granite4.1:8b"]].sort()).toEqual([
+      "granite4.1:30b",
+      "granite4.1:8b",
+    ]);
+  });
+
+  it("출처를 모르는 모델은 맨 뒤로 — 분류를 흐트러뜨리지 않게", () => {
+    const got = sortModels(["zzz-unknown:7b", "gemma4:26b", "qwen3.5:32b"]);
+    expect(got[got.length - 1]).toBe("zzz-unknown:7b");
+  });
+
+  it("원본 배열을 바꾸지 않는다", () => {
+    const src = ["granite4.1:30b", "gemma4:26b"];
+    sortModels(src);
+    expect(src).toEqual(["granite4.1:30b", "gemma4:26b"]);
   });
 });

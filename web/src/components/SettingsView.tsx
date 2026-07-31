@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useIsCompact } from "../hooks/useMediaQuery";
-import { modelOptionLabel } from "../modelOrigin";
+import { modelOptionLabel, sortModels } from "../modelOrigin";
 import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
@@ -621,7 +621,9 @@ export function SettingsView({
         model: provider === "openai" ? s.openai_model : s.ollama_model,
       });
     });
-    void fetchOllamaModels().then(setOllamaModels);
+    // 국가 → 회사 → 파라미터 크기 순으로 정렬해서 담는다. Ollama가 돌려주는 순서는
+    // 최근 수정순이라 새 모델을 받을 때마다 목록이 뒤섞인다 (CR-50 후속).
+    void fetchOllamaModels().then((ms) => setOllamaModels(sortModels(ms)));
   }, [setLlmInfo]);
 
   async function handleLlmSave(): Promise<void> {
