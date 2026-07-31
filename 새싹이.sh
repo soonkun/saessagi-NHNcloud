@@ -149,6 +149,15 @@ export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 # --fork를 붙여 항상 새 프로세스로 떼어낸다. 없으면 setsid가 그대로 exec해 버려
 # 런처를 띄운 셸의 프로세스 그룹에 남고, 그 셸이 끝날 때 함께 종료된다
 # (실제로 백엔드가 조용히 죽어 "사이트에 연결할 수 없음"이 됐다).
+# 이전 실행의 stderr를 보존한다 (E-86).
+# `>`로 덮어쓰면 백엔드가 왜 죽었는지 적힌 마지막 출력이 재시작과 동시에 사라진다.
+# 파이썬 로그(app-*.log)는 loguru가 append하지만, C 레벨 abort·OOM 메시지는 stderr에만
+# 남으므로 이 파일이 유일한 단서다. 실제로 원인 추적이 두 번 막혔다.
+if [ -s "$LOG_DIR/backend.log" ]; then
+    mv "$LOG_DIR/backend.log" "$LOG_DIR/backend.prev-$(date +%m%d-%H%M%S).log"
+    # 오래된 것은 정리 — 최근 10개만 남긴다.
+    ls -1t "$LOG_DIR"/backend.prev-*.log 2>/dev/null | tail -n +11 | xargs -r rm -f
+fi
 setsid --fork nohup "$PY" -m app.main >"$LOG_DIR/backend.log" 2>&1 </dev/null &
 
 BE_READY=0
