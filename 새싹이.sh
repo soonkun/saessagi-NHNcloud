@@ -146,18 +146,26 @@ export PYTHONPATH="$ROOT:$ROOT/src:$ROOT/vendor"
 # uv run이 아니라 venv 인터프리터를 직접 부른다 — uv run은 실행 전 환경을 uv.lock에
 # 맞춰 동기화하면서 락파일에 없는 melotts를 제거하고, TTS 초기화 실패가 LLM 대화까지
 # 죽인다 (E-65).
-setsid nohup "$PY" -m app.main >"$LOG_DIR/backend.log" 2>&1 </dev/null &
-echo $! > "$RUN_DIR/backend.pid"
+# --fork를 붙여 항상 새 프로세스로 떼어낸다. 없으면 setsid가 그대로 exec해 버려
+# 런처를 띄운 셸의 프로세스 그룹에 남고, 그 셸이 끝날 때 함께 종료된다
+# (실제로 백엔드가 조용히 죽어 "사이트에 연결할 수 없음"이 됐다).
+setsid --fork nohup "$PY" -m app.main >"$LOG_DIR/backend.log" 2>&1 </dev/null &
 
 BE_READY=0
 for _ in $(seq 1 180); do
     sleep 1
-    kill -0 "$(cat "$RUN_DIR/backend.pid")" 2>/dev/null || break
     if curl -sf -o /dev/null "http://127.0.0.1:$PORT/login" 2>/dev/null \
        || curl -sf -o /dev/null "http://127.0.0.1:$PORT/" 2>/dev/null; then
         BE_READY=1; break
     fi
 done
+
+# 실제로 포트를 잡고 있는 프로세스를 pidfile에 적는다.
+# `$!`는 setsid 래퍼의 PID라 실제 서버와 다를 수 있고, 그러면 끄기 스크립트가 엉뚱한
+# PID에 신호를 보내 백엔드가 안 꺼지거나 이미 죽은 것을 살아있다고 오판한다.
+BE_PID="$(ss -tlnp 2>/dev/null | awk -v p=":$PORT" '$4 ~ p {print $0}' \
+          | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+[ -n "$BE_PID" ] && echo "$BE_PID" > "$RUN_DIR/backend.pid"
 
 if [ "$BE_READY" -ne 1 ]; then
     echo "" >&2
@@ -165,7 +173,7 @@ if [ "$BE_READY" -ne 1 ]; then
     tail -n 30 "$LOG_DIR/backend.log" >&2
     exit 1
 fi
-ok "백엔드 준비 완료 (PID $(cat "$RUN_DIR/backend.pid"))"
+ok "백엔드 준비 완료 (PID ${BE_PID:-?})"
 
 if [ "$WATCH_ON" = "True" ] || [ "$WATCH_ON" = "true" ]; then
     # 자동 시딩은 백엔드가 첫 스캔 전에 알아서 한다 (CR-41) — 사람이 스크립트를 돌릴 필요 없음
