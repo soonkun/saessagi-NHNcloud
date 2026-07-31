@@ -225,10 +225,25 @@ def decide_with_confidence(
 
     intent = result.intent
 
-    # followup — 분류기가 "직전 답변을 다듬어 달라"고 판단한 경우 (CR-51).
-    # 재검색 없이 대화 맥락만으로 답한다.
+    # followup — 직전 답변을 다시 다듬는 요청 (CR-51).
+    #
+    # 검색 여부는 **라벨이 아니라 분류기 판단(needs_search)**을 따른다 (CR-52).
+    # 예전에는 followup이면 무조건 검색을 껐는데, "구체적으로 농업분야에서는?" 같은
+    # 심화 질문이 후속으로 잡히자 문서를 전혀 참조하지 못했다 (E-85).
     if intent == "followup":
-        return followup_decision()
+        if not result.needs_search:
+            return followup_decision()
+        logger.info("IntentGate: followup이지만 needs_search=True → 문서 검색 유지")
+        return RoutingDecision(
+            inject_rag=True,
+            rag_source="both",
+            tool_hint=(
+                "직전 대화에 이어지는 질문입니다. 아래 검색 결과와 앞선 대화를 함께 근거로 "
+                "삼아 답하세요."
+            ),
+            autonomous=False,
+            answer_guide=None,
+        )
 
     # doc_query / work_query
     if intent in ("doc_query", "work_query"):

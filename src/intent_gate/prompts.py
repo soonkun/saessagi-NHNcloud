@@ -14,6 +14,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "calendar_add",
             "confidence": 0.95,
+            "needs_search": False,
             "reason": "미래 시점 + 팀 업무회의 예정 → 일정 등록 의도",
         },
     ),
@@ -22,6 +23,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "calendar_add",
             "confidence": 0.97,
+            "needs_search": False,
             "reason": "미래 시점 회의 등록 요청",
         },
     ),
@@ -31,6 +33,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "calendar_query",
             "confidence": 0.93,
+            "needs_search": False,
             "reason": "내일 일정 조회 의도",
         },
     ),
@@ -39,6 +42,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "calendar_query",
             "confidence": 0.95,
+            "needs_search": False,
             "reason": "이번 주 일정 조회 요청",
         },
     ),
@@ -48,6 +52,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "doc_query",
             "confidence": 0.92,
+            "needs_search": True,
             "reason": "공용 규정 질의",
         },
     ),
@@ -56,6 +61,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "doc_query",
             "confidence": 0.90,
+            "needs_search": True,
             "reason": "사내 절차·규정 질의",
         },
     ),
@@ -65,6 +71,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "work_query",
             "confidence": 0.90,
+            "needs_search": True,
             "reason": "1인칭 과거 업무이력 회상",
         },
     ),
@@ -73,6 +80,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "work_query",
             "confidence": 0.92,
+            "needs_search": True,
             "reason": "본인 업무이력(개인 노트) 질의",
         },
     ),
@@ -82,6 +90,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "note_save",
             "confidence": 0.91,
+            "needs_search": False,
             "reason": "과거 시제 업무 보고 → 노트 저장",
         },
     ),
@@ -90,6 +99,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "note_save",
             "confidence": 0.95,
+            "needs_search": False,
             "reason": "명시적 저장 요청",
         },
     ),
@@ -101,6 +111,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "followup",
             "confidence": 0.95,
+            "needs_search": False,
             "reason": "주제어 없이 직전 답변을 다듬어 달라는 요청",
         },
     ),
@@ -109,6 +120,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "followup",
             "confidence": 0.96,
+            "needs_search": False,
             "reason": "'그 내용'이 직전 답변을 가리킴",
         },
     ),
@@ -117,7 +129,17 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "doc_query",
             "confidence": 0.90,
+            "needs_search": True,
             "reason": "'정리해줘'가 있으나 주제가 문장 안에 있으므로 새 문서 질의",
+        },
+    ),
+    (
+        "구체적으로 농업분야에서 대응할 수 있는 방안은 뭐야?",
+        {
+            "intent": "doc_query",
+            "confidence": 0.88,
+            "needs_search": True,
+            "reason": "직전 답변에 이어지지만 더 구체적인 내용을 요구 → 새 검색 필요",
         },
     ),
     # ── chat ───────────────────────────────────────────────────────────────────
@@ -126,6 +148,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "chat",
             "confidence": 0.98,
+            "needs_search": False,
             "reason": "일상 인사·대화",
         },
     ),
@@ -134,6 +157,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "chat",
             "confidence": 0.93,
+            "needs_search": False,
             "reason": "화면 관련 요청 → chat (take_screenshot은 LLM 자율 선택)",
         },
     ),
@@ -143,6 +167,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "note_save",
             "confidence": 0.90,
+            "needs_search": False,
             "reason": "과거 시제 완료 보고 → note_save",
         },
     ),
@@ -152,6 +177,7 @@ _FEW_SHOT: list[tuple[str, dict[str, object]]] = [
         {
             "intent": "doc_query",
             "confidence": 0.91,
+            "needs_search": True,
             "reason": "규정·절차 일반 질의 → doc_query",
         },
     ),
@@ -189,8 +215,10 @@ INTENT_JSON_SCHEMA: dict[str, object] = {
         },
         "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
         "reason": {"type": "string", "maxLength": 200},
+        # CR-52: 검색 필요 여부를 모델이 직접 정한다 (라벨에서 코드가 도출하지 않는다)
+        "needs_search": {"type": "boolean"},
     },
-    "required": ["intent", "confidence", "reason"],
+    "required": ["intent", "confidence", "reason", "needs_search"],
 }
 
 
@@ -200,7 +228,14 @@ SYSTEM_PROMPT: str = f"""당신은 사용자 발화를 7개 의도 라벨 중 �
 반드시 JSON 형식으로만 답하세요.
 
 ## 출력 스키마
-{{"intent": "<라벨>", "confidence": 0.0~1.0, "reason": "<한 문장 근거>"}}
+{{"intent": "<라벨>", "confidence": 0.0~1.0, "reason": "<한 문장 근거>", "needs_search": <true|false>}}
+
+`needs_search` — **이 요청에 제대로 답하려면 사내 문서를 새로 찾아봐야 하는가?**
+- `true`: 답하려면 새로운 사실·근거·구체적 내용이 필요하다. **직전 대화에 이어지는
+  질문이라도, 직전 답변에 없던 내용을 물으면 true다.**
+  예: "구체적으로 농업분야에서 대응할 수 있는 방안은?", "그 중 예산이 가장 큰 과제는?"
+- `false`: 직전 답변에 이미 있는 내용을 다시 다듬기만 하면 된다. 새 정보가 필요 없다.
+  예: "짧게 정리해줘", "표로 만들어줘", "번역해줘", 그리고 인사·잡담.
 
 ## 의도 라벨 정의 (7종 닫힌 집합)
 
@@ -223,13 +258,15 @@ SYSTEM_PROMPT: str = f"""당신은 사용자 발화를 7개 의도 라벨 중 �
    - 특징: 1인칭("내가", "제가") + 과거 업무 회상/조회
    - 예: "내가 지난주에 뭐 처리했지?", "내 업무이력에서 출장 정산 찾아줘"
 
-6. **followup** — **직전 답변을 대상으로 하는 후속 요청.** 새로 검색하지 않고 바로 앞
-   대화 내용을 다시 다듬어 달라는 요청이다.
-   - 특징: 그 자체로는 무엇에 관한 것인지 알 수 없고, 직전 답변이 있어야 말이 된다.
-   - 예: "짧게 정리해줘", "표로 만들어줘", "그 내용 요약해줘", "다시 설명해줘",
-     "두 번째 항목만 자세히"
+6. **followup** — **직전 답변을 그대로 다시 다듬어 달라는 요청.**
+   내용을 새로 알아낼 필요 없이, 이미 답한 것을 형식만 바꾸면 되는 경우다.
+   - 예: "짧게 정리해줘", "표로 만들어줘", "번역해줘", "다시 설명해줘"
    - **주제가 문장 안에 있으면 followup이 아니다.** "기후변화 대응방안을 정리해줘"는
      그 자체로 무엇을 묻는지 알 수 있으므로 doc_query다.
+   - **직전 대화에 이어지더라도 "새로운 내용"을 물으면 followup이 아니다.**
+     "구체적으로 농업분야에서는?", "그 중 예산이 가장 큰 건?"처럼 더 깊은 정보를 요구하면
+     doc_query(또는 work_query)이고 `needs_search`는 true다.
+     이것을 followup으로 처리하면 문서를 못 찾아 근거 없는 답이 된다.
 
 7. **chat** — 위 6개에 해당하지 않는 일상 대화·인사·잡담·감탄·화면 관련 요청 등.
    - 예: "안녕", "고마워", "화면 봐줘", "심심해"
@@ -251,6 +288,8 @@ SYSTEM_PROMPT: str = f"""당신은 사용자 발화를 7개 의도 라벨 중 �
    - 주제어가 문장에 있으면(예: "가축사양표준 정리해줘") 그 주제에 맞는 라벨을 고른다.
    - 주제어가 없어 직전 대화 없이는 뜻이 통하지 않으면 followup이다.
    - **직전 대화가 주어지지 않았다면 followup을 고르지 마세요.** 참조할 대상이 없다.
+   - 판단이 애매하면 **followup보다 doc_query 쪽으로** 기울이세요. 검색을 한 번 더 하는
+     손해보다, 근거 없이 답하는 손해가 훨씬 크다.
 
 ## 중요 주의사항
 - 사용자 메시지에 `[첨부 자료: ...]` 메타가 있으면 note_save 가능성이 높음.

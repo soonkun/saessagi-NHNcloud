@@ -172,6 +172,15 @@ class IntentClassifier:
         # ── reason 파싱 ──────────────────────────────────────────────────────
         reason = str(raw.get("reason", ""))[:200]
 
+        # ── needs_search 파싱 (CR-52) ────────────────────────────────────────
+        # 모델이 빠뜨렸을 때의 기본값은 라벨로 정한다 — 문서 질의 계열은 검색이 기본이고,
+        # 나머지는 검색하지 않는 편이 안전하다(엉뚱한 청크 주입 방지).
+        raw_needs = raw.get("needs_search")
+        if isinstance(raw_needs, bool):
+            needs_search = raw_needs
+        else:
+            needs_search = intent in ("doc_query", "work_query")
+
         # ── source 결정 ──────────────────────────────────────────────────────
         # 저신뢰 판정: doc_query/work_query는 별도(소스 폴백, autonomous=False)
         # → 여기서는 source="llm"으로 두고, decide()에서 처리
@@ -189,6 +198,7 @@ class IntentClassifier:
                 confidence=confidence,
                 reason=reason,
                 source="fallback_lowconf",
+                needs_search=needs_search,
             )
 
         return IntentResult(
@@ -196,4 +206,5 @@ class IntentClassifier:
             confidence=confidence,
             reason=reason,
             source="llm",
+            needs_search=needs_search,
         )

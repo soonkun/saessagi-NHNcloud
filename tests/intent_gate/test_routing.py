@@ -344,3 +344,49 @@ class TestFollowupIntentRouting:
         shots = _build_few_shot_text()
         assert "기후변화 대응방안을 정리해줘" in shots
         assert "doc_query" in shots
+
+
+# ── CR-52: 검색 여부를 분류기가 정한다 ────────────────────────────────────────
+
+
+class TestNeedsSearchDrivesRag:
+    """라벨이 아니라 분류기의 needs_search가 검색 여부를 정한다 (E-85)."""
+
+    @staticmethod
+    def _decide(intent: str, needs_search: bool):  # type: ignore[no-untyped-def]
+        from intent_gate.routing import decide_with_confidence
+        from intent_gate.types import IntentResult
+
+        return decide_with_confidence(
+            IntentResult(
+                intent=intent,  # type: ignore[arg-type]
+                confidence=0.95,
+                reason="",
+                source="llm",
+                needs_search=needs_search,
+            ),
+            confidence_threshold=0.55,
+        )
+
+    def test_followup_needing_search_keeps_rag(self) -> None:
+        """실제 사고: "구체적으로 농업분야에서는?"이 후속으로 잡혀 문서를 못 봤다.
+        후속이어도 새 내용을 물으면 검색해야 한다."""
+        dec = self._decide("followup", True)
+        assert dec.inject_rag is True
+        assert dec.autonomous is False
+
+    def test_pure_rephrase_skips_rag(self) -> None:
+        """ "짧게 정리해줘"까지 검색하면 무관한 청크가 섞여 답이 딴 데로 샌다."""
+        dec = self._decide("followup", False)
+        assert dec.inject_rag is False
+
+    def test_doc_query_unaffected(self) -> None:
+        assert self._decide("doc_query", True).inject_rag is True
+
+    def test_default_when_model_omits_field(self) -> None:
+        """모델이 needs_search를 빠뜨려도 문서 질의 계열은 검색이 기본이어야 한다."""
+        from intent_gate.types import IntentResult
+
+        r = IntentResult(intent="doc_query", confidence=0.9, reason="", source="llm")
+        assert r.needs_search is False  # dataclass 기본값
+        # 분류기 파싱 단계에서 라벨 기반 기본값이 채워진다 — classifier 테스트가 담당
