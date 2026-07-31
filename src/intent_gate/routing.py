@@ -26,8 +26,40 @@ _FOLLOWUP_REPHRASE = re.compile(
     r"(요약|정리)\s?해|짧게|간단히|한\s?문장|한\s?줄|표로\s?(만들|정리|보여)|"
     r"다시\s?(설명|말해)|풀어서|쉽게\s?(설명|말해)|번역해"
 )
+# 주제어 판정 시 걷어낼 군더더기 — 담화 표지·정도 부사·어투. 이것만 남으면 주제가 없는
+# 순수 재표현 요청이다.
+_FOLLOWUP_FILLER = re.compile(
+    r"(그럼|그러면|그리고|이제|일단|좀|더|조금|자세히|자세하게|계속|또|한번|한\s?번|"
+    # "내용·부분·항목"은 재표현 요청 안에서는 주제가 아니라 **직전 답변을 가리키는 말**이다.
+    # ("내용을 요약해줘"는 새 질문이 아니다)
+    r"내용|부분|항목|결과|답변|"
+    # 요청 동사·어미의 잔재 — 주제어로 세면 안 된다
+    r"보여|알려|말해|설명|만들어|바꿔|해서|하여|해|"
+    r"부탁해|부탁드려|해줘|해주세요|해줄래|줘|주세요|해봐|해다오|please)"
+)
+
+# 조사만으로 이루어진 토막 — 주제어로 세면 안 된다
+_PARTICLE_ONLY = re.compile(r"[을를이가은는에서의으로도만과와랑까지부터]+")
+
 # 새 검색 대상을 특정하는 단서 — 있으면 후속이 아니라 새 질의로 본다
-_FOLLOWUP_NEW_TARGET = re.compile(r"(문서|보고서|파일|자료|계획서|RFP|규정|노트)에?\s?(에서|의|를|을)?")
+_FOLLOWUP_NEW_TARGET = re.compile(
+    r"(문서|보고서|파일|자료|계획서|RFP|규정|노트)에?\s?(에서|의|를|을)?"
+)
+
+
+def residual_topic(text: str) -> str:
+    """재표현 요청에서 어투·군더더기를 걷어내고 **남는 주제어**를 돌려준다.
+
+    "짧게 정리해줘"에는 주제가 없지만 "기후변화 대응방안을 정리해줘"에는 있다.
+    이 차이를 못 보면 새 질문까지 후속으로 오인해 RAG를 건너뛴다 (E-79).
+    """
+    t = " ".join((text or "").split())
+    t = _FOLLOWUP_REPHRASE.sub(" ", t)  # 요약/정리/표로 … 요청 표현 제거
+    t = _FOLLOWUP_FILLER.sub(" ", t)  # 그럼·좀·다시·해줘 같은 군더더기 제거
+    # 조사만 남은 토막("을", "으로")을 버린다 — 이것까지 주제로 세면 순수 재표현 요청이
+    # 새 질문으로 오인된다. 주제어에 붙어 있는 조사는 길이 신호에 영향이 없어 그냥 둔다.
+    kept = [w for w in t.split() if _PARTICLE_ONLY.fullmatch(w) is None]
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", " ".join(kept))
 
 
 def looks_like_followup(text: str) -> bool:
@@ -35,8 +67,12 @@ def looks_like_followup(text: str) -> bool:
 
     True 조건:
     1. 내용 지시어(그 내용/그거/방금/아까 등) 포함, 또는
-    2. 60자 이하의 재표현 요청(요약/짧게/한 문장/표로 등)
+    2. 60자 이하의 재표현 요청이면서 **자체 주제어가 없을 때**
     단, 새 검색 대상(문서/보고서/파일명 등)을 명시하면 False.
+
+    2번의 "주제어가 없을 때" 조건이 핵심이다. 예전에는 짧고 "정리해"가 들어가기만 하면
+    후속으로 봤는데, 그러면 "기후변화 대응방안을 정리해줘" 같은 **새 질문까지** 후속으로
+    처리해 RAG를 건너뛰고 모델의 일반 지식으로만 답했다 (E-79).
     """
     t = " ".join((text or "").split())
     if not t:
@@ -45,7 +81,10 @@ def looks_like_followup(text: str) -> bool:
         return False
     if _FOLLOWUP_ANAPHORA.search(t):
         return True
-    return len(t) <= 60 and _FOLLOWUP_REPHRASE.search(t) is not None
+    if len(t) > 60 or _FOLLOWUP_REPHRASE.search(t) is None:
+        return False
+    # 주제어가 남으면 새 질문이다. 두 글자짜리 찌꺼기에 휘둘리지 않게 3자 이상을 요구한다.
+    return len(residual_topic(t)) < 3
 
 
 def followup_decision() -> "RoutingDecision":
@@ -60,6 +99,7 @@ def followup_decision() -> "RoutingDecision":
         autonomous=False,
         answer_guide=None,
     )
+
 
 # ── tool_hint 문구 상수 ────────────────────────────────────────────────────────
 

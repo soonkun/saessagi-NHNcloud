@@ -33,6 +33,10 @@ _RAG_TRIGGER_RE = re.compile(
     r"어떤거|어떤 거|어떤걸|어떤 걸"
 )
 
+# RAG 검색 시한(초). 정상 검색은 실측 10여 초지만, 모델을 바꾸는 중이거나 GPU가 바쁘면
+# 훨씬 길어질 수 있어 넉넉히 잡는다. 이 시간을 넘기면 검색을 포기하고 답변을 진행한다.
+_RAG_SEARCH_TIMEOUT_SEC = 60.0
+
 # Proactive RAG 주입 시 적용할 최소 유사도 임계값.
 # RagService의 min_score(0.35)보다 높게 설정해 낮은 관련성 문서 주입을 방지.
 _MIN_INJECTION_SCORE = 0.50
@@ -388,14 +392,27 @@ def _make_adapter_class() -> type:
                 if should_search:
                     # M_19: GraphRAG 활성 시 하이브리드(벡터+그래프 RRF), 아니면 기존 벡터 경로
                     if self._graph_rag is not None and self._graph_rag.available:
-                        retrieval = await self._graph_rag.hybrid_retrieve(
-                            user_text, 5, source=rag_source
-                        )
+                        search = self._graph_rag.hybrid_retrieve(user_text, 5, source=rag_source)
                     else:
-                        retrieval = await asyncio.get_event_loop().run_in_executor(
+                        search = asyncio.get_event_loop().run_in_executor(
                             None,
                             lambda: self._rag_service.retrieve(user_text, 5, source=rag_source),
                         )
+                    # 검색에 반드시 시한을 둔다 (E-80).
+                    # 예전에는 제한이 없어서, GPU가 대형 모델 적재로 바쁘거나 Neo4j가
+                    # 멎으면 턴이 **영원히** 매달렸다. 화면에는 "자료를 찾아볼게요!"만
+                    # 남고 답이 오지 않아 사용자에게는 무한 검색으로 보인다.
+                    # 시한을 넘기면 검색을 포기하고 RAG 없이라도 답한다 — 늦은 답보다
+                    # 답이 아예 없는 쪽이 훨씬 나쁘다.
+                    try:
+                        retrieval = await asyncio.wait_for(search, _RAG_SEARCH_TIMEOUT_SEC)
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "RAG 검색 %.0f초 초과 — 검색 없이 답변을 계속합니다 (query=%r)",
+                            _RAG_SEARCH_TIMEOUT_SEC,
+                            user_text[:60],
+                        )
+                        retrieval = None
 
                 # 일반 검색 hits (score 임계값 통과한 것만)
                 search_hits: list[dict[str, Any]] = []

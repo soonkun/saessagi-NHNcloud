@@ -253,6 +253,39 @@ class TestLooksLikeFollowup:
         assert looks_like_followup("방금 말한 두번째 항목 자세히")
         assert looks_like_followup("아까 답변 중에 날짜가 뭐였지")
 
+    def test_new_topic_with_rephrase_word_is_not_followup(self) -> None:
+        """E-79 회귀: "정리해줘"가 붙었다고 새 질문을 후속으로 보면 안 된다.
+
+        실제 사고: "기후변화 대응방안을 정리해줘"가 후속으로 잡혀 RAG를 통째로 건너뛰고
+        모델의 일반 지식으로만 답했다. 사내 문서를 근거로 답해야 하는 시스템에서 이건
+        기능이 없는 것과 같다.
+        """
+        from intent_gate.routing import looks_like_followup
+
+        assert not looks_like_followup("기후변화 대응방안을 정리해줘")
+        assert not looks_like_followup("기후변화 대응방안에 관해 정리해줘")
+        assert not looks_like_followup("가축사양표준 정리해줘")
+        assert not looks_like_followup("목초 신품종 육성 정리해줘")
+
+    def test_pure_rephrase_still_followup(self) -> None:
+        """주제어 없이 어투만 있는 요청은 여전히 후속이어야 한다.
+        (과교정하면 "짧게 정리해줘"마다 무관한 검색이 돌아 답이 딴 데로 샌다)"""
+        from intent_gate.routing import looks_like_followup
+
+        assert looks_like_followup("좀 더 자세히 정리해줘")
+        assert looks_like_followup("표로 정리해서 보여줘")
+        assert looks_like_followup("그럼 내용을 간단히 한 문장으로 요약해줘")
+
+    def test_residual_topic_extraction(self) -> None:
+        """판정 근거 — 어투를 걷어낸 뒤 주제어가 남는지."""
+        from intent_gate.routing import residual_topic
+
+        assert residual_topic("짧게 정리해줘") == ""
+        assert residual_topic("요약해줘") == ""
+        assert "기후변화" in residual_topic("기후변화 대응방안을 정리해줘")
+        # 조사만 남는 토막은 주제로 세지 않는다
+        assert residual_topic("그럼 내용을 간단히 한 문장으로 요약해줘") == ""
+
     def test_new_queries_not_followup(self) -> None:
         from intent_gate.routing import looks_like_followup
 
