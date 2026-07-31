@@ -39,17 +39,44 @@ export function useAppHeight(): void {
     };
     apply();
 
+    // 키보드가 열리는 동안 여러 번 다시 잰다 (E-83).
+    //
+    // 이벤트만 믿으면 안 된다. 카카오톡 인앱 브라우저에서는 입력창을 눌러 키보드가 올라와도
+    // resize/scroll이 제때 오지 않아 앱이 예전 높이(키보드 없는 높이)로 남았고, 입력바가
+    // 키보드 아래로 밀려 보이지 않았다. 사용자가 화면을 손가락으로 건드리자 그제야
+    // 이벤트가 발생해 정상 배치가 됐다 — 즉 계산은 맞고 **호출 시점**이 문제였다.
+    // 키보드 애니메이션(약 0.3초)을 덮도록 잠깐 반복 측정한다.
+    let burst: number | null = null;
+    const remeasure = (): void => {
+      if (burst !== null) window.clearInterval(burst);
+      let n = 0;
+      burst = window.setInterval(() => {
+        apply();
+        if (++n >= 12) {
+          // 1.2초면 키보드 애니메이션이 끝난다. 계속 돌리면 배터리만 먹는다.
+          if (burst !== null) window.clearInterval(burst);
+          burst = null;
+        }
+      }, 100);
+    };
+
     const vv = window.visualViewport;
     // resize만으로는 부족하다 — iOS는 툴바가 접힐 때 scroll 이벤트로 알린다.
     vv?.addEventListener("resize", apply);
     vv?.addEventListener("scroll", apply);
     window.addEventListener("resize", apply);
     window.addEventListener("orientationchange", apply);
+    // 입력에 포커스가 들어오고 나갈 때가 곧 키보드가 열리고 닫히는 순간이다.
+    document.addEventListener("focusin", remeasure);
+    document.addEventListener("focusout", remeasure);
     return () => {
+      if (burst !== null) window.clearInterval(burst);
       vv?.removeEventListener("resize", apply);
       vv?.removeEventListener("scroll", apply);
       window.removeEventListener("resize", apply);
       window.removeEventListener("orientationchange", apply);
+      document.removeEventListener("focusin", remeasure);
+      document.removeEventListener("focusout", remeasure);
     };
   }, []);
 }
