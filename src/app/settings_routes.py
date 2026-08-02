@@ -524,6 +524,136 @@ async def set_vision_model(body: SetVisionModelRequest, request: Request) -> dic
         raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
 
 
+# ── GET /api/settings/deep-research ──────────────────────────────────────────
+
+
+@router.get("/deep-research")
+async def get_deep_research(request: Request) -> dict[str, Any]:
+    """딥 리서치(M_20) 전용 LLM 설정을 반환한다 (CR-39 설정을 CR-56에서 UI로 노출).
+
+    provider=same_as_chat이면 대화 모델을 그대로 쓴다. 어떤 모델이 실제로 쓰이는지
+    화면에서 알 수 있도록 현재 대화 모델(`chat_model`)도 함께 돌려준다.
+    """
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    dr = getattr(app_cfg, "deep_research", None) if app_cfg else None
+
+    from .config import DeepResearchConfig
+
+    default = DeepResearchConfig()
+    provider = dr.provider if dr else default.provider
+
+    return {
+        "provider": getattr(provider, "value", str(provider)),
+        "ollama_model": dr.ollama_model if dr else default.ollama_model,
+        "openai_model": dr.openai_model if dr else default.openai_model,
+        "keep_alive_seconds": dr.keep_alive_seconds if dr else default.keep_alive_seconds,
+        # same_as_chat일 때 화면에 "지금 무슨 모델이 쓰이는지"를 보여주기 위한 참고값
+        "chat_model": getattr(getattr(app_cfg, "ollama", None), "model", "") if app_cfg else "",
+    }
+
+
+# ── POST /api/settings/deep-research ─────────────────────────────────────────
+
+
+class SetDeepResearchRequest(BaseModel):
+    provider: str | None = None  # "same_as_chat" | "ollama" | "openai"
+    ollama_model: str | None = None
+    openai_model: str | None = None
+    keep_alive_seconds: int | None = None
+
+
+@router.post("/deep-research")
+async def set_deep_research(body: SetDeepResearchRequest, request: Request) -> dict[str, Any]:
+    """딥 리서치 전용 LLM 설정을 저장하고 즉시 적용한다.
+
+    conf.yaml의 app.deep_research를 갱신한 뒤 agent를 재초기화한다 —
+    DeepResearchService는 init_agent 안에서 `_build_deep_research_agent()`로
+    조립되므로 재초기화해야 새 모델이 물린다.
+    """
+    from .config import IntentGateProviderKind
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+
+    # 저장 전에 값을 검증한다 — ollama를 골라 놓고 모델을 비우면 조립이 실패해
+    # 조용히 대화 모델로 폴백된다(사용자는 바뀐 줄 안다).
+    if body.provider is not None:
+        try:
+            provider_kind = IntentGateProviderKind(body.provider)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "provider는 'same_as_chat', 'ollama', 'openai' 중 하나여야 합니다: "
+                    f"{body.provider!r}"
+                ),
+            )
+        if provider_kind == IntentGateProviderKind.OLLAMA:
+            model = (
+                body.ollama_model
+                if body.ollama_model is not None
+                else (getattr(getattr(app_cfg, "deep_research", None), "ollama_model", ""))
+            )
+            if not (model or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="provider=ollama이면 ollama_model을 지정해야 합니다.",
+                )
+    if body.keep_alive_seconds is not None and body.keep_alive_seconds < 0:
+        raise HTTPException(status_code=422, detail="keep_alive_seconds는 0 이상이어야 합니다.")
+
+    conf = _conf_path()
+    try:
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    dr_section = raw.setdefault("app", {}).setdefault("deep_research", {})
+    if body.provider is not None:
+        dr_section["provider"] = body.provider
+    if body.ollama_model is not None:
+        dr_section["ollama_model"] = body.ollama_model
+    if body.openai_model is not None:
+        dr_section["openai_model"] = body.openai_model
+    if body.keep_alive_seconds is not None:
+        dr_section["keep_alive_seconds"] = body.keep_alive_seconds
+
+    try:
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
+        )
+        logger.info(f"conf.yaml deep_research 설정 저장 완료: {dr_section}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    if app_cfg:
+        updates: dict[str, Any] = {}
+        if body.provider is not None:
+            updates["provider"] = IntentGateProviderKind(body.provider)
+        if body.ollama_model is not None:
+            updates["ollama_model"] = body.ollama_model
+        if body.openai_model is not None:
+            updates["openai_model"] = body.openai_model
+        if body.keep_alive_seconds is not None:
+            updates["keep_alive_seconds"] = body.keep_alive_seconds
+        app_cfg.deep_research = app_cfg.deep_research.model_copy(update=updates)
+
+    if ctx is None:
+        return {"status": "conf_only"}
+
+    ctx.agent_engine = None
+    try:
+        char_cfg = ctx.character_config
+        await ctx.init_agent(char_cfg.agent_config, char_cfg.persona_prompt)
+        logger.info("deep_research 변경 후 agent 재초기화 완료")
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.error(f"deep_research agent 재초기화 실패: {exc}")
+        raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
+
+
 # ── GET /api/settings/graphrag-extraction ────────────────────────────────────
 
 

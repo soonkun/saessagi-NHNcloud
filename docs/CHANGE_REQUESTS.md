@@ -2575,3 +2575,40 @@ GPU를 나눠 쓰면 적재 대기가 붙어 12초를 넘긴다. 기본값을 30
 위쪽 테두리에 붙었다. `minHeight: 44`로 두 경우를 같게 고정했다(넓은 화면 44px / 좁은 화면
 45px, 글자 위 13px·아래 14px로 대칭).
 
+
+---
+
+## CR-56: 딥 리서치 LLM을 설정 화면에서 고를 수 있게
+
+**상태**: APPROVED (사용자 요청 2026-08-02)
+
+**요청**: "설정에서 딥리서치는 왜 LLM 모델을 설정할 수 없어? 이거 수정해줘"
+
+**진단**: CR-39에서 작업별 모델을 나눌 때 `app.deep_research`(provider / ollama_model /
+openai_model / keep_alive_seconds)를 만들고 백엔드 배선(`_build_deep_research_agent`)까지
+끝냈는데, **설정 API와 화면을 붙이지 않았다.** 비전 모델·지식그래프 추출 모델·의도 분류기는
+전부 화면에서 고를 수 있는데 딥 리서치만 conf.yaml을 직접 고쳐야 했다. 딥 리서치는 장문
+추론이라 모델을 갈아 끼울 일이 가장 많은 기능인데도 유일하게 손이 안 닿았다.
+
+**구현**:
+- `GET/POST /api/settings/deep-research` (settings_routes.py) — 다른 보조 모델 라우트와
+  같은 패턴. GET은 enum이 아니라 문자열 provider를 돌려준다(E-26 동형 회귀 방지).
+  POST는 conf.yaml + in-memory 갱신 후 **agent 재초기화**까지 한다 —
+  `DeepResearchService`는 `init_agent` 안에서 조립되므로 재초기화 없이는 안 바뀐다.
+- **provider=ollama인데 모델이 비면 422로 거절한다.** 그냥 저장하면
+  `_build_deep_research_agent()`가 조립에 실패해 조용히 대화 모델로 폴백하고, 사용자는
+  바꾼 줄 알지만 실제로는 안 바뀐 상태가 된다. 저장 전에 막는 편이 낫다.
+- 설정 화면 "LLM 설정" 묶음에 **딥 리서치 모델** 항목 추가. 공급자(대화 모델과 동일 /
+  Ollama / OpenAI), 모델 선택(국기·회사 병기, CR-50 정렬 적용), **GPU 상주 시간**을 함께 둔다 —
+  80GB급 모델은 로딩만 1~2분이라 이 값을 모르면 "딥 리서치가 느리다"로만 보인다.
+- "대화 모델과 동일"을 고르면 지금 실제로 쓰이는 대화 모델명을 안내에 적는다(GET의
+  `chat_model`). 저장 후 GET을 다시 읽어, 서버가 폴백했다면 화면에 드러나게 했다.
+
+**검증**:
+- 단위 6건 — provider 문자열 반환, 기본값, conf+메모리+재초기화, 모델 없는 ollama 422
+  (conf.yaml 미변경·init_agent 미호출까지 확인), 알 수 없는 provider 422, 저장된 모델이
+  있으면 provider만 바꿔도 통과.
+- 실서버 브라우저: 설정 → LLM 설정 → 딥 리서치 모델에서 `mistral-medium-3.5:128b` →
+  `gpt-oss:120b`로 바꿔 저장 → conf.yaml 반영 확인 → 백엔드 로그에
+  `DeepResearchService 배선 완료 (llm=ollama(gpt-oss:120b, keep_alive=3600s))` 확인
+  (폴백 라벨이 아님). 다시 열었을 때 선택값 유지 확인 후 원래 모델로 되돌림.

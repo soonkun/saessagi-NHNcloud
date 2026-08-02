@@ -124,6 +124,47 @@ async function apiSetGraphExtraction(body: {
   }
 }
 
+// ── 딥 리서치 LLM (M_20 보고서 생성) ─────────────────────────────────────────
+
+interface DeepResearchLlmState {
+  provider: "ollama" | "openai" | "same_as_chat";
+  ollama_model: string;
+  openai_model: string;
+  keep_alive_seconds: number;
+  /** same_as_chat일 때 실제로 쓰이는 대화 모델 — 화면에 안내용으로만 쓴다. */
+  chat_model: string;
+}
+
+async function fetchDeepResearchLlm(): Promise<DeepResearchLlmState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/deep-research");
+    if (!res.ok) return null;
+    return (await res.json()) as DeepResearchLlmState;
+  } catch {
+    return null;
+  }
+}
+
+async function apiSetDeepResearchLlm(body: {
+  provider?: string;
+  ollama_model?: string;
+  openai_model?: string;
+  keep_alive_seconds?: number;
+}): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/deep-research", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return { ok: true };
+    const err = (await res.json().catch(() => ({}))) as { detail?: string };
+    return { ok: false, detail: err.detail };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // ── Agent Prompts (M_17) ────────────────────────────────────────────────────
 
 interface PromptInfo {
@@ -268,6 +309,7 @@ type SettingsSection =
   | "vision"
   | "graph"
   | "intent"
+  | "research"
   | "prompts"
   | "voice"
   | "connection"
@@ -298,6 +340,7 @@ const SETTINGS_GROUPS: {
       { id: "vision", label: "비전 모델" },
       { id: "graph", label: "지식그래프 추출 모델" },
       { id: "intent", label: "의도 분류기" },
+      { id: "research", label: "딥 리서치 모델" },
     ],
   },
   {
@@ -451,6 +494,18 @@ export function SettingsView({
   const [gxSaving, setGxSaving] = useState(false);
   const [gxSaved, setGxSaved] = useState(false);
 
+  // 딥 리서치 전용 LLM (CR-56). conf.yaml에만 있고 화면에서는 못 고르던 설정.
+  const [drProvider, setDrProvider] = useState<"ollama" | "openai" | "same_as_chat">(
+    "same_as_chat",
+  );
+  const [drOllamaModel, setDrOllamaModel] = useState("");
+  const [drOpenaiModel, setDrOpenaiModel] = useState("gpt-4o");
+  const [drKeepAlive, setDrKeepAlive] = useState(1800);
+  const [drChatModel, setDrChatModel] = useState("");
+  const [drSaving, setDrSaving] = useState(false);
+  const [drSaved, setDrSaved] = useState(false);
+  const [drError, setDrError] = useState("");
+
   // 데스크톱 마스터-디테일: 현재 선택된 카테고리
   const [activeSection, setActiveSection] =
     useState<SettingsSection>("theme");
@@ -473,7 +528,41 @@ export function SettingsView({
       setGxOpenaiModel(s.openai_model || "gpt-4o-mini");
       setGxAutoIndex(s.auto_index ?? false);
     });
+    void fetchDeepResearchLlm().then((s) => {
+      if (!s) return;
+      setDrProvider(s.provider);
+      setDrOllamaModel(s.ollama_model);
+      setDrOpenaiModel(s.openai_model || "gpt-4o");
+      setDrKeepAlive(s.keep_alive_seconds ?? 1800);
+      setDrChatModel(s.chat_model ?? "");
+    });
   }, []);
+
+  async function handleDrSave(): Promise<void> {
+    if (drSaving) return;
+    setDrSaving(true);
+    setDrError("");
+    const body: {
+      provider: string;
+      ollama_model?: string;
+      openai_model?: string;
+      keep_alive_seconds?: number;
+    } = { provider: drProvider, keep_alive_seconds: drKeepAlive };
+    if (drProvider === "ollama") body.ollama_model = drOllamaModel;
+    if (drProvider === "openai") body.openai_model = drOpenaiModel;
+    const res = await apiSetDeepResearchLlm(body);
+    setDrSaving(false);
+    if (res.ok) {
+      setDrSaved(true);
+      setTimeout(() => setDrSaved(false), 2500);
+      // 저장 후 서버가 실제로 무엇을 쓰는지 다시 읽는다 — 폴백이 일어났다면 여기서 드러난다.
+      void fetchDeepResearchLlm().then((s) => {
+        if (s) setDrChatModel(s.chat_model ?? "");
+      });
+    } else {
+      setDrError(res.detail || "저장에 실패했습니다.");
+    }
+  }
 
   async function handleVisionSave(): Promise<void> {
     if (visionSaving) return;
@@ -1131,6 +1220,143 @@ export function SettingsView({
     );
   }
 
+  function renderDeepResearchModel(): React.ReactElement {
+    return (
+      <>
+        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
+          딥 리서치 LLM (보고서 생성)
+        </h3>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            marginBottom: 14,
+            lineHeight: 1.5,
+          }}
+        >
+          딥 리서치가 자료를 모은 뒤 보고서를 쓰는 데 사용하는 모델입니다. 한 번에 긴 글을
+          추론해야 하는 작업이라 대화 모델보다 큰 모델을 물리는 편이 유리합니다.
+          {drProvider === "same_as_chat" && drChatModel && (
+            <>
+              {" "}
+              지금은 대화 모델(<strong>{drChatModel}</strong>)을 그대로 씁니다.
+            </>
+          )}
+        </p>
+
+        <label style={labelStyle}>보고서 생성 모델 공급자</label>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          {[
+            { id: "same_as_chat" as const, label: "대화 모델과 동일" },
+            { id: "ollama" as const, label: "Ollama (별도 모델)" },
+            { id: "openai" as const, label: "OpenAI" },
+          ].map(({ id, label }) => (
+            <button
+              key={id}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                setDrProvider(id);
+              }}
+              style={{
+                flex: 1,
+                padding: "7px 6px",
+                fontSize: "var(--fs-12)",
+                fontWeight: drProvider === id ? 700 : 400,
+                background: drProvider === id ? "var(--color-accent)" : "transparent",
+                border: `1px solid ${drProvider === id ? "var(--color-accent)" : "var(--color-border)"}`,
+                borderRadius: 8,
+                color: drProvider === id ? "#fff" : "var(--color-text)",
+                cursor: "pointer",
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {drProvider === "ollama" && (
+          <>
+            <label style={labelStyle}>딥 리서치 Ollama 모델</label>
+            <select
+              value={drOllamaModel}
+              onChange={(e) => setDrOllamaModel(e.target.value)}
+              style={{ ...inputStyle, cursor: "pointer", appearance: "auto", marginBottom: 14 }}
+              disabled={ollamaModels.length === 0}
+            >
+              {ollamaModels.length === 0 ? (
+                <option value="">모델 목록 로딩 중...</option>
+              ) : (
+                <>
+                  <option value="">— 선택하세요 —</option>
+                  {ollamaModels.map((m) => (
+                    <option key={m} value={m}>
+                      {modelOptionLabel(m)}
+                    </option>
+                  ))}
+                </>
+              )}
+            </select>
+
+            <label style={labelStyle}>GPU 상주 시간 (초)</label>
+            <input
+              type="number"
+              min={0}
+              step={60}
+              value={drKeepAlive}
+              onChange={(e) => setDrKeepAlive(Math.max(0, Number(e.target.value) || 0))}
+              style={{ ...inputStyle, marginBottom: 6 }}
+            />
+            <p
+              style={{
+                fontSize: "var(--fs-11)",
+                color: "var(--color-text-muted)",
+                marginBottom: 14,
+                lineHeight: 1.5,
+              }}
+            >
+              80GB급 모델은 GPU에 올리는 데만 1~2분이 걸립니다. 이 시간이 짧으면 딥 리서치를
+              부를 때마다 재로딩을 기다리게 됩니다(0이면 끝나는 즉시 내려 GPU를 비웁니다).
+            </p>
+          </>
+        )}
+
+        {drProvider === "openai" && (
+          <>
+            <label style={labelStyle}>딥 리서치 OpenAI 모델</label>
+            <OpenaiModelSelect value={drOpenaiModel} onChange={setDrOpenaiModel} />
+          </>
+        )}
+
+        {drError && (
+          <p style={{ fontSize: "var(--fs-12)", color: "#e74c3c", marginBottom: 8 }}>
+            {drError}
+          </p>
+        )}
+
+        <button
+          onClick={() => {
+            void handleDrSave();
+          }}
+          disabled={drSaving}
+          style={{
+            marginTop: 10,
+            background: drSaved ? "var(--color-accent)" : "transparent",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            color: drSaved ? "#fff" : "var(--color-text)",
+            cursor: drSaving ? "not-allowed" : "pointer",
+            padding: "7px 16px",
+            fontSize: "var(--fs-13)",
+            width: "100%",
+            opacity: drSaving ? 0.6 : 1,
+          }}
+        >
+          {drSaving ? "적용 중..." : drSaved ? "적용됨 ✓" : "딥 리서치 LLM 적용"}
+        </button>
+      </>
+    );
+  }
+
   function renderIntent(): React.ReactElement {
     return (
       <>
@@ -1756,6 +1982,7 @@ export function SettingsView({
       vision: renderVisionModel(),
       graph: renderGraphModel(),
       intent: renderIntent(),
+      research: renderDeepResearchModel(),
       prompts: (
         <>
           <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
