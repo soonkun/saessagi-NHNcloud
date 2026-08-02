@@ -23,14 +23,26 @@ RUN_DIR="$ROOT/data/run"
 LOG_DIR="$ROOT/data/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
-# 두 곳에서 동시에 띄우지 않는다.
+# 두 곳에서 동시에 띄우지 않는다 (E-89).
 # 사람이 이 스크립트를 돌리는 동안 워치독이 "응답 없음"으로 판단해 또 띄우면, 나중 것이
 # bind에 실패해 죽으면서 backend.log를 덮어써 **먼저 뜬 프로세스의 진짜 사인이 지워진다.**
-# 실제로 그렇게 로그를 잃었다. 락을 잡고 들어오되, 이미 잡고 들어온 경우(워치독이
-# flock으로 감싸 호출)는 그대로 진행한다 — 아니면 자기 자신과 교착된다.
-if [ -z "${SAESSAGI_LAUNCH_LOCKED:-}" ]; then
-    export SAESSAGI_LAUNCH_LOCKED=1
-    exec flock -w 600 "$RUN_DIR/launcher.lock" "$0" "$@"
+#
+# 락은 **직접 연 fd 9**로 잡는다. `flock <파일> <명령>` 형태를 쓰면 flock이 연 fd를
+# 백그라운드로 띄운 백엔드가 그대로 물려받아, 백엔드가 사는 내내 락이 풀리지 않는다
+# (실제로 그래서 다음 재시작이 10분간 멈췄다). fd 번호를 알고 있어야 자식에게
+# 물려주지 않도록 닫아 줄 수 있다 — 아래 백그라운드 실행마다 `9>&-`가 붙는 이유다.
+exec 9>"$RUN_DIR/launcher.lock"
+if [ -n "${SAESSAGI_LOCK_NOWAIT:-}" ]; then
+    # 워치독 경로: 사람이 띄우는 중이면 끼어들지 않고 물러난다.
+    if ! flock -n 9; then
+        echo "다른 곳에서 새싹이를 켜는 중입니다 — 이번 실행은 건너뜁니다." >&2
+        exit 75
+    fi
+else
+    if ! flock -w 600 9; then
+        echo "[오류] 다른 실행이 10분 넘게 락을 잡고 있습니다." >&2
+        exit 1
+    fi
 fi
 
 SKIP_BUILD=0
@@ -112,7 +124,7 @@ fi
 if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
     ok "Ollama 실행 중"
 else
-    setsid nohup ollama serve >"$LOG_DIR/ollama.log" 2>&1 </dev/null &
+    setsid nohup ollama serve >"$LOG_DIR/ollama.log" 2>&1 </dev/null 9>&- &
     for _ in $(seq 1 30); do
         sleep 1
         curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break
@@ -132,7 +144,7 @@ if [ "$GRAPHRAG" = "True" ] || [ "$GRAPHRAG" = "true" ]; then
         NEO="$ROOT/../opt/neo4j/bin/neo4j"
         JRE="$ROOT/../opt/jre21"
         if [ -x "$NEO" ]; then
-            JAVA_HOME="$JRE" setsid nohup "$NEO" console >"$LOG_DIR/neo4j.log" 2>&1 </dev/null &
+            JAVA_HOME="$JRE" setsid nohup "$NEO" console >"$LOG_DIR/neo4j.log" 2>&1 </dev/null 9>&- &
             for _ in $(seq 1 40); do
                 sleep 2
                 curl -sf -o /dev/null http://127.0.0.1:7474 2>/dev/null && break
@@ -168,7 +180,7 @@ if [ -s "$LOG_DIR/backend.log" ]; then
     # 오래된 것은 정리 — 최근 10개만 남긴다.
     ls -1t "$LOG_DIR"/backend.prev-*.log 2>/dev/null | tail -n +11 | xargs -r rm -f
 fi
-setsid --fork nohup "$PY" -m app.main >"$LOG_DIR/backend.log" 2>&1 </dev/null &
+setsid --fork nohup "$PY" -m app.main >"$LOG_DIR/backend.log" 2>&1 </dev/null 9>&- &
 
 BE_READY=0
 for _ in $(seq 1 180); do
@@ -210,7 +222,7 @@ if [ "$WANT_TUNNEL" -eq 1 ]; then
         : > "$LOG_DIR/cloudflared.log"
         # QUIC(UDP/443)이 막힌 사내망에서 끊기므로 http2로 고정한다
         setsid nohup "$CF" tunnel --url "http://127.0.0.1:$PORT" \
-            --protocol http2 --no-autoupdate >"$LOG_DIR/cloudflared.log" 2>&1 </dev/null &
+            --protocol http2 --no-autoupdate >"$LOG_DIR/cloudflared.log" 2>&1 </dev/null 9>&- &
         echo $! > "$RUN_DIR/cloudflared.pid"
         for _ in $(seq 1 40); do
             sleep 2

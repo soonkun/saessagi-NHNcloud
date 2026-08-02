@@ -13,6 +13,7 @@ import {
   Network,
   Paperclip,
   Play,
+  Printer,
   X,
 } from "lucide-react";
 import { API_BASE, createNote } from "../services/api";
@@ -36,6 +37,54 @@ interface SseEvent {
   /** 보고서 생성 중 "살아 있음" 신호 (CR-57). */
   elapsed_seconds?: number;
 }
+
+/** 인쇄 문서에 넣을 텍스트 이스케이프 — 요청 문구에 <, & 가 있어도 문서가 깨지지 않게. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * 인쇄 문서 스타일 (CR-58). 앱 CSS와 완전히 분리된 독립 문서라 여기에 다 적는다.
+ * 화면 테마(어두운 배경 등)를 끌고 오면 종이에서 읽을 수 없으므로 흑백으로 고정한다.
+ */
+const PRINT_CSS = `
+@page { size: A4; margin: 16mm 14mm; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: #000;
+  background: #fff;
+  font-family: "Noto Sans KR", "Malgun Gothic", "AppleGothic", sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.65;
+}
+.doc-title { font-size: 16pt; margin: 0 0 2mm; }
+.doc-meta {
+  font-size: 9pt;
+  color: #333;
+  border-bottom: 1px solid #000;
+  padding-bottom: 2mm;
+  margin-bottom: 5mm;
+}
+h1, h2, h3, h4 { page-break-after: avoid; margin: 4mm 0 2mm; line-height: 1.35; }
+h1 { font-size: 14pt; } h2 { font-size: 12.5pt; } h3 { font-size: 11pt; }
+p, li { orphans: 2; widows: 2; }
+ul, ol { padding-left: 6mm; margin: 2mm 0; }
+table { width: 100%; border-collapse: collapse; margin: 3mm 0; font-size: 9.5pt; }
+th, td { border: 1px solid #666; padding: 1.5mm 2mm; vertical-align: top; word-break: break-word; }
+th { background: #eee; font-weight: 700; }
+tr { page-break-inside: avoid; }
+/* 화면에서는 표를 가로 스크롤 상자에 담지만 종이에서는 잘리면 안 된다 */
+.md-table-wrap { overflow: visible !important; }
+code, pre { font-family: "D2Coding", Consolas, monospace; font-size: 9pt; }
+pre { background: #f4f4f4; padding: 2mm; page-break-inside: avoid; white-space: pre-wrap; }
+blockquote { margin: 2mm 0; padding-left: 3mm; border-left: 2px solid #999; color: #333; }
+img { max-width: 100%; }
+`;
 
 const MODES: {
   id: ResearchMode;
@@ -124,6 +173,8 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
   const [noteSaved, setNoteSaved] = useState(false);
   const [noteSaving, setNoteSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // 인쇄(PDF)용 원본 — 보고서 카드 전체를 복제해 독립 문서로 만든다 (CR-58).
+  const printRef = useRef<HTMLDivElement | null>(null);
 
   const activeMode = MODES.find((m) => m.id === mode) ?? MODES[0];
   const canRun = !running && (prompt.trim().length > 0 || file !== null);
@@ -246,6 +297,71 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
     }
   }
 
+  /**
+   * PDF로 저장 (CR-58).
+   *
+   * 서버에서 PDF를 만들려면 렌더링 엔진과 한글 폰트를 새로 들여야 하는데, 이미 화면에
+   * 잘 그려진 보고서가 있다. 브라우저 인쇄(→ "PDF로 저장")를 쓰면 표·제목·각주가
+   * 보이는 그대로 나오고 의존성이 하나도 늘지 않는다.
+   *
+   * 다만 **현재 페이지를 그대로 인쇄하면 안 된다.** 앱은 화면을 꽉 채우는 고정 레이아웃
+   * (`position: fixed` body, `overflow: hidden` 컨테이너)이라, 인쇄 CSS로 다른 요소를
+   * 숨겨도 보고서가 그 컨테이너에 잘려 **빈 페이지가 나온다**(실제로 그랬다).
+   * 그래서 숨은 iframe에 보고서만 담은 독립 문서를 만들어 그걸 인쇄한다.
+   */
+  function handlePrintPdf(): void {
+    const src = printRef.current;
+    if (!src) return;
+
+    // 화면용 버튼 줄은 종이에 남길 이유가 없다 — 복제본에서 걷어낸다.
+    const clone = src.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll(".dr-print-hide").forEach((el) => el.remove());
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    // 인쇄 대화상자의 기본 파일 이름은 문서 제목에서 온다.
+    const title = `딥리서치_${activeMode.label}_${stamp}`;
+    const head = `${activeMode.label} · ${new Date().toLocaleString("ko-KR")}${
+      prompt.trim() ? ` · 요청: ${escapeHtml(prompt.trim().slice(0, 80))}` : ""
+    }`;
+
+    const iframe = document.createElement("iframe");
+    iframe.setAttribute("aria-hidden", "true");
+    iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;";
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentDocument;
+    if (!doc) {
+      iframe.remove();
+      return;
+    }
+    doc.open();
+    doc.write(
+      `<!doctype html><html lang="ko"><head><meta charset="utf-8">` +
+        `<title>${escapeHtml(title)}</title><style>${PRINT_CSS}</style></head><body>` +
+        `<h1 class="doc-title">딥 리서치 보고서</h1>` +
+        `<div class="doc-meta">${head}</div>` +
+        clone.innerHTML +
+        `</body></html>`
+    );
+    doc.close();
+
+    const done = (): void => {
+      // 인쇄 대화상자가 닫힌 뒤에 지운다 — 먼저 지우면 인쇄가 취소된다.
+      window.setTimeout(() => iframe.remove(), 500);
+    };
+    const win = iframe.contentWindow;
+    if (!win) {
+      iframe.remove();
+      return;
+    }
+    win.addEventListener("afterprint", done);
+    // 폰트·레이아웃이 자리를 잡은 뒤 띄운다.
+    window.setTimeout(() => {
+      win.focus();
+      win.print();
+    }, 120);
+  }
+
   function handleDownloadMd(): void {
     const blob = new Blob([reportWithSources()], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -260,6 +376,10 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
 
   return (
     <div
+      // 세로 flex 컨테이너 안에서 자식은 기본적으로 줄어든다(flex-shrink:1). 보고서가
+      // 길어지면 위쪽 입력창·진행 목록이 한 줄로 찌부러졌다(사용자 지적). CSS에서
+      // 직계 자식의 축소를 막는다 — 스크롤은 이 컨테이너가 담당한다 (CR-58).
+      className="dr-column"
       style={{
         flex: 1,
         minHeight: 0,
@@ -534,6 +654,7 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
       {/* 결과 보고서 */}
       {report && (
         <div
+          ref={printRef}
           style={{
             background: "var(--color-panel)",
             border: "1px solid var(--color-border)",
@@ -541,7 +662,10 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
             padding: desktop ? "18px 22px" : 14,
           }}
         >
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 4, flexWrap: "wrap" }}>
+          <div
+            className="dr-print-hide"
+            style={{ display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 4, flexWrap: "wrap" }}
+          >
             {sources.length > 0 && (
               <ResultBtn onClick={handlePinInGraph} title="근거 문서를 그래프 탭에 핀으로 표시">
                 <Network size={11} /> 그래프에 핀
@@ -550,6 +674,12 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
             <ResultBtn onClick={() => void handleSaveNote()} title="보고서를 업무 노트로 저장">
               <BookOpen size={11} />
               {noteSaving ? "저장 중..." : noteSaved ? "노트 저장됨 ✓" : "업무노트로 저장"}
+            </ResultBtn>
+            <ResultBtn
+              onClick={handlePrintPdf}
+              title="인쇄 창에서 '대상'을 'PDF로 저장'으로 고르면 PDF 파일이 됩니다"
+            >
+              <Printer size={11} /> PDF 저장
             </ResultBtn>
             <ResultBtn onClick={handleDownloadMd} title="마크다운 파일로 다운로드">
               <FileDown size={11} /> MD 저장

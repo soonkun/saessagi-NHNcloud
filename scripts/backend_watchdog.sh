@@ -7,7 +7,6 @@
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOG_DIR="$ROOT/data/logs"
 WD_LOG="$LOG_DIR/watchdog.log"
-LOCK="$ROOT/data/run/launcher.lock"
 PORT="$(grep -A 5 '^  web:' "$ROOT/conf.yaml" | grep -m1 'port:' | tr -dc '0-9')"
 PORT="${PORT:-50002}"
 INTERVAL=15
@@ -40,13 +39,17 @@ while true; do
                 # 죽기 직전 stderr 마지막 줄을 남겨 원인 추적을 돕는다
                 tail -n 5 "$LOG_DIR/backend.log" 2>/dev/null | sed 's/^/    /' >> "$WD_LOG"
                 # 사람이 런처를 돌리는 중이면 건너뛴다 — 둘이 동시에 띄우면 뒤엣것이
-                # bind에 실패하고, 그 과정에서 로그가 덮인다. -n: 못 잡으면 즉시 포기.
-                # SAESSAGI_LAUNCH_LOCKED: 런처가 안에서 같은 락을 다시 잡아 교착되는 것을 막는다.
-                if SAESSAGI_LAUNCH_LOCKED=1 flock -n "$LOCK" \
-                        "$ROOT/새싹이.sh" --no-build --local >> "$WD_LOG" 2>&1; then
+                # bind에 실패하고, 그 과정에서 로그가 덮인다.
+                # 락은 런처가 직접 잡는다(여기서 flock으로 감싸면 그 fd를 백엔드가
+                # 물려받아 락이 영영 안 풀린다). 못 잡으면 런처가 75로 물러난다.
+                SAESSAGI_LOCK_NOWAIT=1 "$ROOT/새싹이.sh" --no-build --local >> "$WD_LOG" 2>&1
+                rc=$?
+                if [ "$rc" -eq 0 ]; then
                     echo "$(date '+%F %T') 재시작 완료" >> "$WD_LOG"
-                else
+                elif [ "$rc" -eq 75 ]; then
                     echo "$(date '+%F %T') 다른 곳에서 기동 중 — 이번 재시작 건너뜀" >> "$WD_LOG"
+                else
+                    echo "$(date '+%F %T') 재시작 실패 (exit $rc)" >> "$WD_LOG"
                 fi
             fi
         fi

@@ -322,3 +322,9 @@ body {
 }
 .md-body th { background: var(--color-panel); font-weight: 700; }
 .md-body tr:nth-child(even) td { background: rgba(128, 128, 128, 0.05); }
+
+/* 딥 리서치 화면: 세로 스크롤 칼럼의 직계 자식이 눌리지 않게 한다 (CR-58).
+   보고서가 길어질수록 위쪽 입력창과 진행 목록이 찌부러지던 문제. */
+.dr-column > * {
+  flex-shrink: 0;
+}
