@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import ReactMarkdown from "react-markdown";
+import { cleanReportMarkdown, printHtmlDocument, safeFileStem } from "../reportDoc";
 import remarkGfm from "remark-gfm";
 import {
   BookOpen,
@@ -14,6 +15,9 @@ import {
   ExternalLink,
   Sparkles,
   X,
+  Printer,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import type {
   KnowledgeNote,
@@ -91,6 +95,8 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
   const selectedTextRef = useRef("");
   const [selectedPreview, setSelectedPreview] = useState("");
   const aiFileInputRef = useRef<HTMLInputElement | null>(null);
+  // 인쇄(PDF)용 — 미리보기에 렌더된 본문을 그대로 복제해 독립 문서로 만든다 (CR-59).
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
   // BlockNote(데스크톱)·미리보기의 DOM 선택을 추적
   useEffect(() => {
@@ -336,6 +342,35 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
   }, [notes, query]);
 
   // 저장
+  /**
+   * 노트를 PDF로 저장 (CR-59). 딥 리서치 보고서를 노트로 옮겨 둔 뒤 배포할 때 쓰라는
+   * 요청. 인쇄 규격은 딥 리서치와 같은 것을 쓴다(reportDoc).
+   *
+   * 미리보기에 이미 렌더된 HTML을 복제해 넣는다 — 편집 탭에서 눌렀다면 미리보기 DOM이
+   * 없으므로 먼저 미리보기로 전환하고, 그려진 뒤에 인쇄한다.
+   */
+  function handlePrintNote(): void {
+    if (!current) return;
+    const note = current;
+    const run = (): void => {
+      const src = previewRef.current;
+      if (!src) return;
+      const clone = src.cloneNode(true) as HTMLElement;
+      // 미리보기 머리말(제목·태그·관련 자료)은 빼낸다 — 인쇄 문서가 자체 머리말을 만든다.
+      clone.querySelectorAll(".note-print-hide").forEach((el) => el.remove());
+      const meta =
+        (note.tags.length ? `${note.tags.join(" · ")} · ` : "") +
+        `작성 ${fmtDateTime(note.created)} · 마지막 수정 ${fmtDateTime(note.updated)}`;
+      printHtmlDocument(safeFileStem(note.title || note.slug), meta, clone.innerHTML);
+    };
+    if (subTab === "preview" && previewRef.current) {
+      run();
+    } else {
+      setSubTab("preview");
+      window.setTimeout(run, 250); // 미리보기가 그려진 뒤에 복제해야 한다
+    }
+  }
+
   const saveCurrent = useCallback(async () => {
     if (!current || !dirty) return;
     const tags = editTags
@@ -599,6 +634,25 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                 <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>저장됨 ✓</span>
               )}
               <button
+                onClick={handlePrintNote}
+                title="인쇄 창에서 '대상'을 'PDF로 저장'으로 고르면 PDF 파일이 됩니다"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  background: "transparent",
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 6,
+                  color: "var(--color-text-muted)",
+                  cursor: "pointer",
+                  padding: "4px 10px",
+                  fontSize: "var(--fs-11)",
+                }}
+              >
+                <Printer size={11} />
+                PDF
+              </button>
+              <button
                 onClick={() => void saveCurrent()}
                 disabled={!dirty}
                 title="저장 (⌘S)"
@@ -778,15 +832,20 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
             </div>
           )}
           {current && subTab === "preview" && (
-            <div style={{ padding: 20, overflow: "auto", flex: 1, minWidth: 0, fontSize: "var(--fs-13)", lineHeight: 1.6, overflowWrap: "anywhere" }}>
-              <h2 style={{ fontSize: "var(--fs-18)", fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
-              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 4 }}>
+            <div
+              ref={previewRef}
+              style={{ padding: 20, overflow: "auto", flex: 1, minWidth: 0, fontSize: "var(--fs-13)", lineHeight: 1.6, overflowWrap: "anywhere" }}
+            >
+              <h2 className="note-print-hide" style={{ fontSize: "var(--fs-18)", fontWeight: 700, marginBottom: 6 }}>{current.title}</h2>
+              <div className="note-print-hide" style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 4 }}>
                 {current.tags.join(" · ") || "태그 없음"}
               </div>
-              <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 14 }}>
+              <div className="note-print-hide" style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 14 }}>
                 작성 {fmtDateTime(current.created)} · 마지막 수정 {fmtDateTime(current.updated)}
               </div>
-              <RelatedDocsSection note={current} />
+              <div className="note-print-hide">
+                <RelatedDocsSection note={current} />
+              </div>
 
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -825,7 +884,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                   },
                 }}
               >
-                {renderWikilinks(current.content)}
+                {renderWikilinks(cleanReportMarkdown(current.content))}
               </ReactMarkdown>
             </div>
           )}
@@ -893,8 +952,26 @@ function EmptyHint({ isEmptyAtAll }: { isEmptyAtAll: boolean }): React.ReactElem
 
 // `[[slug]]` 위키링크를 ReactMarkdown이 처리할 수 있도록 마크다운 링크로 변환.
 // 관련 자료(첨부 파일) 섹션 — 노트와 연결된 doc_id를 다운로드 가능한 칩으로 표시
+/**
+ * 몇 건부터 접은 채로 시작할지 (CR-59).
+ *
+ * 딥 리서치 보고서를 노트로 옮기면 근거 문서가 20건 넘게 붙는다. 그게 다 펼쳐져 있으면
+ * 정작 본문이 화면 밖으로 밀린다("참조문서 링크가 너무 많다보니 문서공간을 너무
+ * 잡아먹는데" — 사용자). 서너 건은 한눈에 보이는 편이 나으므로 그때는 펼쳐 둔다.
+ */
+const RELATED_DOCS_COLLAPSE_FROM = 5;
+
 function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactElement | null {
   const docs = note.related_docs_info ?? [];
+  // 노트를 옮겨 다닐 때마다 접힘 상태를 새로 정한다 — slug를 key로 삼아 초기화한다.
+  const [open, setOpen] = useState(docs.length < RELATED_DOCS_COLLAPSE_FROM);
+  const lastSlug = useRef(note.slug);
+  if (lastSlug.current !== note.slug) {
+    lastSlug.current = note.slug;
+    // 렌더 중 상태 갱신이지만 같은 커밋에서 정리된다(React 권장 패턴).
+    setOpen(docs.length < RELATED_DOCS_COLLAPSE_FROM);
+  }
+
   if (docs.length === 0) return null;
   return (
     <div
@@ -906,21 +983,34 @@ function RelatedDocsSection({ note }: { note: KnowledgeNote }): React.ReactEleme
         background: "var(--color-bg)",
       }}
     >
-      <div
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        title={open ? "관련 자료 접기" : "관련 자료 펼치기"}
         style={{
+          width: "100%",
           fontSize: "var(--fs-11)",
           fontWeight: 600,
           color: "var(--color-text-muted)",
-          marginBottom: 6,
+          marginBottom: open ? 6 : 0,
           display: "flex",
           alignItems: "center",
           gap: 4,
+          background: "transparent",
+          border: "none",
+          padding: 0,
+          cursor: "pointer",
+          textAlign: "left",
         }}
       >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <Paperclip size={11} />
         관련 자료 · {docs.length}건
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {!open && <span style={{ fontWeight: 400 }}>(눌러서 펼치기)</span>}
+      </button>
+      <div style={{ display: open ? "flex" : "none", flexWrap: "wrap", gap: 6 }}>
         {docs.map((d) => {
           const label = d.filename ?? d.id;
           if (!d.filename) {
