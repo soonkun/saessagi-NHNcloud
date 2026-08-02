@@ -1,6 +1,6 @@
 // M_20 딥 리서치 (CR-20) — 사내 지식 기반(GraphRAG+벡터) 심층 검토·보고서 생성.
 // 인터넷 검색 없음. 회의록과 동일한 SSE 진행률 패턴.
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -18,8 +18,14 @@ import {
 import { API_BASE, createNote } from "../services/api";
 import { readSseStream } from "../services/sse";
 import { useStore } from "../store";
+import { ModelBadge } from "./ModelBadge";
 
 type ResearchMode = "duplication" | "discovery" | "proposal";
+
+/** 리서치가 끝나기 전에 스트림이 끊겼을 때 보여줄 문구 (CR-57). */
+const DISCONNECTED_MSG =
+  "리서치가 도중에 끊겼습니다 — 새싹이 서버가 멈춘 것 같아요. " +
+  "잠시 후 새로고침하고 다시 시도해 주세요. 같은 증상이 반복되면 관리자에게 알려주세요.";
 
 interface SseEvent {
   stage: string;
@@ -27,6 +33,8 @@ interface SseEvent {
   report?: string;
   sources?: { n: number; doc_id: string; doc_name: string; page: number | null; score: number }[];
   sub_queries?: string[];
+  /** 보고서 생성 중 "살아 있음" 신호 (CR-57). */
+  elapsed_seconds?: number;
 }
 
 const MODES: {
@@ -108,12 +116,28 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
   const [sources, setSources] = useState<NonNullable<SseEvent["sources"]>>([]);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+  // 진행 중 "살아 있는지" 표시 (CR-57). 서버가 죽으면 스트림이 조용히 끊겨서, 예전에는
+  // 화면이 진행 중인지 끝난 것인지 알 수 없는 상태로 멈췄다(사용자 지적).
+  const [elapsed, setElapsed] = useState(0);
+  const [stalled, setStalled] = useState(false);
+  const lastEventRef = useRef(Date.now());
   const [noteSaved, setNoteSaved] = useState(false);
   const [noteSaving, setNoteSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const activeMode = MODES.find((m) => m.id === mode) ?? MODES[0];
   const canRun = !running && (prompt.trim().length > 0 || file !== null);
+
+  // 아무 신호도 없이 오래 지나면 알린다. 서버가 죽어도 브라우저는 한동안 조용히
+  // 기다리기만 해서, 사용자는 진행 중인지 멈춘 건지 구분할 수 없다 (CR-57).
+  // 임계값은 계획 단계의 LLM 타임아웃(90초)보다 넉넉히 잡아 오탐을 피한다.
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => {
+      setStalled(Date.now() - lastEventRef.current > 120_000);
+    }, 5_000);
+    return () => clearInterval(t);
+  }, [running]);
 
   async function handleRun(): Promise<void> {
     if (!canRun) return;
@@ -122,6 +146,10 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
     setReport("");
     setSources([]);
     setError("");
+    setElapsed(0);
+    setStalled(false);
+    lastEventRef.current = Date.now();
+    let finished = false;
     try {
       const form = new FormData();
       form.append("mode", mode);
@@ -136,22 +164,38 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
       });
       if (!res.ok) throw new Error(`서버 오류 (${res.status})`);
       await readSseStream<SseEvent>(res, (evt) => {
+        lastEventRef.current = Date.now();
+        setStalled(false);
         if (evt.stage === "error") {
+          finished = true;
           setError(evt.message ?? "알 수 없는 오류");
           return;
         }
         if (evt.stage === "done") {
+          finished = true;
           setReport(evt.report ?? "");
           setSources(evt.sources ?? []);
           setSteps((prev) => [...prev, "완료"]);
           return;
         }
+        // 보고서 생성 중 주기 신호 — 목록을 늘리지 않고 경과 시간만 갱신한다.
+        if (evt.stage === "synthesis_tick") {
+          setElapsed(evt.elapsed_seconds ?? 0);
+          return;
+        }
         if (evt.message) setSteps((prev) => [...prev, evt.message as string]);
       });
+      // 스트림이 done/error 없이 끝났다 = 서버가 도중에 사라졌다는 뜻이다.
+      // 예전에는 이 경우 아무 말 없이 멈춰서, 진행 중인지 끝난 건지 알 수 없었다.
+      if (!finished) setError(DISCONNECTED_MSG);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      // 브라우저가 주는 "network error" 같은 문구는 사용자에게 아무 의미가 없다.
+      // 리서치가 끝나기 전에 끊긴 것이면 무슨 일이 났는지 사람 말로 알린다.
+      const raw = e instanceof Error ? e.message : String(e);
+      setError(finished ? raw : `${DISCONNECTED_MSG} (${raw})`);
     } finally {
       setRunning(false);
+      setStalled(false);
     }
   }
 
@@ -228,7 +272,11 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
       }}
     >
       <div>
-        <h2 style={{ fontWeight: 700, fontSize: "var(--fs-18)", margin: 0 }}>딥 리서치</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <h2 style={{ fontWeight: 700, fontSize: "var(--fs-18)", margin: 0 }}>딥 리서치</h2>
+          {/* 어떤 모델이 보고서를 쓰는지 제목 옆에 밝힌다 (CR-57) */}
+          <ModelBadge modelKey="deep_research" />
+        </div>
         <p style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)", margin: "4px 0 0", lineHeight: 1.5 }}>
           사내 지식 기반(문서·노트·지식그래프)을 충분히 검토한 뒤 보고서를 작성합니다.
           인터넷 검색은 하지 않습니다.
@@ -446,6 +494,24 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
               {s}
             </div>
           ))}
+        </div>
+      )}
+
+      {running && (elapsed > 0 || stalled) && (
+        <div
+          style={{
+            background: stalled ? "rgba(255,167,38,0.10)" : "var(--color-panel)",
+            border: `1px solid ${stalled ? "rgba(255,167,38,0.45)" : "var(--color-border)"}`,
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: "var(--fs-12)",
+            color: stalled ? "#ffb74d" : "var(--color-text-muted)",
+            lineHeight: 1.5,
+          }}
+        >
+          {stalled
+            ? "2분 넘게 아무 소식이 없어요. 서버가 멈췄을 수 있습니다 — 잠시 더 기다려 보고, 계속 이 상태면 새로고침 후 다시 시도해 주세요."
+            : `보고서 작성 중… ${elapsed}초 경과 (새싹이는 살아 있어요)`}
         </div>
       )}
 

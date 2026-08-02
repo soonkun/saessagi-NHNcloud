@@ -23,6 +23,16 @@ RUN_DIR="$ROOT/data/run"
 LOG_DIR="$ROOT/data/logs"
 mkdir -p "$RUN_DIR" "$LOG_DIR"
 
+# 두 곳에서 동시에 띄우지 않는다.
+# 사람이 이 스크립트를 돌리는 동안 워치독이 "응답 없음"으로 판단해 또 띄우면, 나중 것이
+# bind에 실패해 죽으면서 backend.log를 덮어써 **먼저 뜬 프로세스의 진짜 사인이 지워진다.**
+# 실제로 그렇게 로그를 잃었다. 락을 잡고 들어오되, 이미 잡고 들어온 경우(워치독이
+# flock으로 감싸 호출)는 그대로 진행한다 — 아니면 자기 자신과 교착된다.
+if [ -z "${SAESSAGI_LAUNCH_LOCKED:-}" ]; then
+    export SAESSAGI_LAUNCH_LOCKED=1
+    exec flock -w 600 "$RUN_DIR/launcher.lock" "$0" "$@"
+fi
+
 SKIP_BUILD=0
 WANT_TUNNEL=1
 for arg in "$@"; do

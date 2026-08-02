@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator, Callable
 from typing import Any, Protocol
 
@@ -37,6 +38,9 @@ _MAX_INPUT_CHARS = 30_000
 _PLANNER_TIMEOUT = 90.0
 _GAP_TIMEOUT = 90.0
 _SYNTHESIS_TIMEOUT = 600.0
+# 보고서 생성 중 "아직 살아 있다"를 알리는 간격. 너무 잦으면 로그·네트워크만 시끄럽고,
+# 너무 뜸하면 화면이 멈춘 것처럼 보인다.
+_SYNTHESIS_TICK_SEC = 10.0
 _SYNTHESIS_MAX_TOKENS = 4096
 
 
@@ -220,15 +224,31 @@ class DeepResearchService:
             except Exception as exc:
                 logger.warning("DeepResearch 커스텀 지침 조회 실패 (기본값 사용): %s", exc)
         system, user = synthesis_prompts(mode, user_input, evidence_block, custom_instructions)
-        try:
-            report = await self._agent.complete_text(
+        # 보고서 생성은 수 분짜리 단일 호출이라, 그냥 await하면 그동안 스트림에 아무것도
+        # 흐르지 않는다. 화면에서는 진행 중인지 서버가 죽은 것인지 구분할 수 없다
+        # (사용자 지적). 살아 있다는 신호를 주기적으로 보낸다 (CR-57).
+        started = time.monotonic()
+        task = asyncio.create_task(
+            self._agent.complete_text(
                 system,
                 user,
                 max_tokens=_SYNTHESIS_MAX_TOKENS,
                 temperature=0.3,
                 timeout_seconds=_SYNTHESIS_TIMEOUT,
             )
+        )
+        try:
+            while True:
+                finished, _ = await asyncio.wait({task}, timeout=_SYNTHESIS_TICK_SEC)
+                if finished:
+                    break
+                yield {
+                    "stage": "synthesis_tick",
+                    "elapsed_seconds": int(time.monotonic() - started),
+                }
+            report = task.result()
         except Exception as exc:
+            task.cancel()
             logger.error("DeepResearch 종합 실패: %s", exc)
             yield {"stage": "error", "message": f"보고서 생성 실패: {exc}"}
             return

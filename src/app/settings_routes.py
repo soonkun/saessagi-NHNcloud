@@ -524,6 +524,106 @@ async def set_vision_model(body: SetVisionModelRequest, request: Request) -> dic
         raise HTTPException(status_code=500, detail=f"agent 재초기화 실패: {exc}") from exc
 
 
+# ── GET /api/settings/active-models ──────────────────────────────────────────
+
+
+@router.get("/active-models")
+async def get_active_models(request: Request) -> dict[str, Any]:
+    """기능별로 **지금 실제 적용 중인** 모델을 한 번에 반환한다 (CR-57).
+
+    설정이 여러 곳(대화·비전·의도분류·그래프추출·딥리서치)으로 나뉜 뒤로, 어느 화면이
+    어떤 모델로 도는지 알 방법이 없었다. 화면마다 제목 옆에 붙일 수 있도록 한 곳에 모은다.
+
+    `same_as_chat`은 여기서 해석해 **실제 모델 이름**으로 내보낸다 — 화면에서
+    "메인 모델과 동일"이라고만 보이면 결국 무엇이 도는지 모르는 것은 똑같다.
+    """
+    from .config import IntentGateProviderKind, LlmProviderKind
+
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = ctx.app_config if ctx else None
+    if app_cfg is None:
+        return {"models": []}
+
+    chat_provider = getattr(app_cfg.llm_provider, "value", str(app_cfg.llm_provider))
+    chat_model = (
+        app_cfg.openai.model
+        if chat_provider == LlmProviderKind.OPENAI.value
+        else app_cfg.ollama.model
+    )
+
+    def resolve(cfg: Any, ollama_attr: str, openai_attr: str) -> tuple[str, str]:
+        """(provider, model) — same_as_chat이면 대화 모델로 풀어서 돌려준다."""
+        if cfg is None:
+            return chat_provider, chat_model
+        provider = getattr(cfg, "provider", IntentGateProviderKind.SAME_AS_CHAT)
+        value = getattr(provider, "value", str(provider))
+        if value == IntentGateProviderKind.SAME_AS_CHAT.value:
+            return chat_provider, chat_model
+        if value == IntentGateProviderKind.OPENAI.value:
+            return "openai", getattr(cfg, openai_attr, "") or ""
+        return "ollama", getattr(cfg, ollama_attr, "") or ""
+
+    models: list[dict[str, Any]] = [
+        {"key": "chat", "label": "대화", "provider": chat_provider, "model": chat_model}
+    ]
+
+    ig = getattr(app_cfg, "intent_gate", None)
+    ig_provider, ig_model = resolve(ig, "ollama_model", "openai_model")
+    models.append(
+        {
+            "key": "intent_gate",
+            "label": "의도 분류기",
+            "provider": ig_provider,
+            "model": ig_model,
+            "enabled": bool(getattr(ig, "enabled", True)),
+        }
+    )
+
+    vision = getattr(getattr(app_cfg, "ollama", None), "vision_model", "") or ""
+    models.append(
+        {
+            "key": "vision",
+            "label": "비전(이미지)",
+            "provider": "ollama" if vision else chat_provider,
+            # 비전 모델이 비어 있으면 이미지 턴도 대화 모델이 그대로 처리한다.
+            "model": vision or chat_model,
+        }
+    )
+
+    gr = getattr(app_cfg, "graphrag", None)
+    if gr is not None:
+        gr_provider = getattr(gr, "extraction_provider", None)
+        gr_value = getattr(gr_provider, "value", str(gr_provider))
+        if gr_value == IntentGateProviderKind.SAME_AS_CHAT.value:
+            gp, gm = chat_provider, chat_model
+        elif gr_value == IntentGateProviderKind.OPENAI.value:
+            gp, gm = "openai", getattr(gr, "extraction_openai_model", "")
+        else:
+            gp, gm = "ollama", getattr(gr, "extraction_ollama_model", "")
+        models.append(
+            {
+                "key": "graphrag",
+                "label": "지식그래프 추출",
+                "provider": gp,
+                "model": gm,
+                "enabled": bool(getattr(gr, "enabled", False)),
+            }
+        )
+
+    dr = getattr(app_cfg, "deep_research", None)
+    dr_provider, dr_model = resolve(dr, "ollama_model", "openai_model")
+    models.append(
+        {
+            "key": "deep_research",
+            "label": "딥 리서치",
+            "provider": dr_provider,
+            "model": dr_model,
+        }
+    )
+
+    return {"models": models}
+
+
 # ── GET /api/settings/deep-research ──────────────────────────────────────────
 
 

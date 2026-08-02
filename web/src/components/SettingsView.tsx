@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useIsCompact } from "../hooks/useMediaQuery";
 import { modelOptionLabel, sortModels } from "../modelOrigin";
+import { ModelBadge } from "./ModelBadge";
 import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
@@ -430,6 +431,7 @@ export function SettingsView({
   const setTtsEngine = useStore((s) => s.setTtsEngine);
   const llmInfo = useStore((s) => s.llmInfo);
   const setLlmInfo = useStore((s) => s.setLlmInfo);
+  const refreshActiveModels = useStore((s) => s.refreshActiveModels);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
   // CR-38: 펫 모드가 사라져 화면은 데스크탑 하나뿐 — 글씨 크기도 하나만 쓴다.
@@ -554,6 +556,7 @@ export function SettingsView({
     setDrSaving(false);
     if (res.ok) {
       setDrSaved(true);
+      void refreshActiveModels();
       setTimeout(() => setDrSaved(false), 2500);
       // 저장 후 서버가 실제로 무엇을 쓰는지 다시 읽는다 — 폴백이 일어났다면 여기서 드러난다.
       void fetchDeepResearchLlm().then((s) => {
@@ -571,6 +574,7 @@ export function SettingsView({
     setVisionSaving(false);
     if (ok) {
       setVisionSaved(true);
+      void refreshActiveModels();
       setTimeout(() => setVisionSaved(false), 2500);
     }
   }
@@ -594,6 +598,7 @@ export function SettingsView({
     setGxSaving(false);
     if (ok) {
       setGxSaved(true);
+      void refreshActiveModels();
       setTimeout(() => setGxSaved(false), 2500);
     }
   }
@@ -631,6 +636,7 @@ export function SettingsView({
     setIgSaving(false);
     if (ok) {
       setIgSaved(true);
+      void refreshActiveModels();
       setTimeout(() => setIgSaved(false), 2500);
     }
   }
@@ -718,6 +724,7 @@ export function SettingsView({
     setLlmSaving(false);
     if (ok) {
       setLlmSaved(true);
+      void refreshActiveModels();
       setLlmInfo({
         provider: llmProvider,
         model: llmProvider === "openai" ? openaiModel : ollamaModel,
@@ -876,9 +883,19 @@ export function SettingsView({
   function renderLlm(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 12 }}>
-          LLM 설정
-        </h3>
+        {/* 지금 실제로 적용 중인 모델을 제목 옆에 밝힌다 (CR-57) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 12,
+          }}
+        >
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: 0 }}>LLM 설정</h3>
+          <ModelBadge modelKey="chat" compact />
+        </div>
         <label style={labelStyle}>LLM 공급자</label>
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
           <button
@@ -1006,9 +1023,19 @@ export function SettingsView({
   function renderVisionModel(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
-          비전 모델 (이미지 인식)
-        </h3>
+        {/* 지금 실제로 적용 중인 모델을 제목 옆에 밝힌다 (CR-57) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: 0 }}>비전 모델 (이미지 인식)</h3>
+          <ModelBadge modelKey="vision" compact />
+        </div>
         <p
           style={{
             fontSize: "var(--fs-11)",
@@ -1064,9 +1091,19 @@ export function SettingsView({
   function renderGraphModel(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
-          지식그래프 추출 LLM (문서 등록 시)
-        </h3>
+        {/* 지금 실제로 적용 중인 모델을 제목 옆에 밝힌다 (CR-57) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: 0 }}>지식그래프 추출 LLM (문서 등록 시)</h3>
+          <ModelBadge modelKey="graphrag" compact />
+        </div>
         <p
           style={{
             fontSize: "var(--fs-11)",
@@ -1223,9 +1260,19 @@ export function SettingsView({
   function renderDeepResearchModel(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
-          딥 리서치 LLM (보고서 생성)
-        </h3>
+        {/* 지금 실제로 적용 중인 모델을 제목 옆에 밝힌다 (CR-57) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: 0 }}>딥 리서치 LLM (보고서 생성)</h3>
+          <ModelBadge modelKey="deep_research" compact />
+        </div>
         <p
           style={{
             fontSize: "var(--fs-11)",
@@ -1360,9 +1407,19 @@ export function SettingsView({
   function renderIntent(): React.ReactElement {
     return (
       <>
-        <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 8 }}>
-          의도 분류기
-        </h3>
+        {/* 지금 실제로 적용 중인 모델을 제목 옆에 밝힌다 (CR-57) */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+            marginBottom: 8,
+          }}
+        >
+          <h3 style={{ fontWeight: 600, fontSize: "var(--fs-14)", margin: 0 }}>의도 분류기</h3>
+          <ModelBadge modelKey="intent_gate" compact />
+        </div>
         <p
           style={{
             fontSize: "var(--fs-11)",

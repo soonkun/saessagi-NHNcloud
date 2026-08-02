@@ -7,6 +7,7 @@ import type {
   ChatTab,
   HistoryInfo,
 } from "./types";
+import { fetchActiveModels, type ActiveModel } from "./services/api";
 
 // ────────────────────────────────────────────────────────────
 // 초기 캐릭터 위치: 화면 오른쪽 아래 (저장된 값 우선)
@@ -192,6 +193,9 @@ interface UiSlice {
   ttsEngine: "melo" | "system";
   windowMode: "pet" | "window";
   llmInfo: LlmInfo | null;
+  /** 기능별 적용 중인 모델 (CR-57). 설정을 바꾸면 다시 읽는다. */
+  activeModels: ActiveModel[];
+  refreshActiveModels: () => Promise<void>;
   selectedNoteSlug: string | null;
   notesRevision: number;
   // M_19: 채팅 답변의 "근거 그래프" 버튼 → 그래프 탭이 evidence 하이라이트를 로드하는 트리거
@@ -379,6 +383,7 @@ export const useStore = create<AppStore>((set) => ({
   ttsEngine: loadTtsEngine(),
   windowMode: loadWindowMode(),
   llmInfo: loadLlmInfo(),
+  activeModels: [],
   selectedNoteSlug: null as string | null,
   notesRevision: 0,
   graphEvidenceReq: 0,
@@ -406,6 +411,10 @@ export const useStore = create<AppStore>((set) => ({
       else localStorage.removeItem("saessagi_llm_info");
     } catch { /* ignore */ }
     set({ llmInfo: info });
+  },
+  refreshActiveModels: async () => {
+    const models = await fetchActiveModels();
+    set({ activeModels: models });
   },
   setSelectedNoteSlug: (slug) => set({ selectedNoteSlug: slug }),
   bumpNotesRevision: () => set((state) => ({ notesRevision: state.notesRevision + 1 })),

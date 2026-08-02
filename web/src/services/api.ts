@@ -554,3 +554,27 @@ export async function fetchLlmProvider(): Promise<LlmProviderState | null> {
     return null;
   }
 }
+
+// ── 기능별 적용 중인 모델 (CR-57) ────────────────────────────────────────────
+// 설정이 대화·비전·의도분류·그래프추출·딥리서치로 나뉘어, 어느 화면이 어떤 모델로
+// 도는지 알 수가 없었다. 화면 제목 옆에 붙이려고 한 번에 받아온다.
+
+export interface ActiveModel {
+  key: "chat" | "intent_gate" | "vision" | "graphrag" | "deep_research";
+  label: string;
+  provider: string;
+  model: string;
+  /** 해당 기능이 꺼져 있으면 false (의도분류기·지식그래프). */
+  enabled?: boolean;
+}
+
+export async function fetchActiveModels(): Promise<ActiveModel[]> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/active-models");
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: ActiveModel[] };
+    return data.models ?? [];
+  } catch {
+    return [];
+  }
+}

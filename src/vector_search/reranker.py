@@ -16,6 +16,36 @@ from .types import SearchHit
 logger = logging.getLogger(__name__)
 
 
+def _disable_cudnn_sdpa() -> None:
+    """PyTorch의 cuDNN attention 백엔드를 끈다 (E-88).
+
+    torch 2.11+cu130 / cuDNN 9.19 / B200(sm_100) 조합에서 cross-encoder를 FP16으로
+    돌리면 cuDNN이 attention 실행 계획을 만들지 못한다:
+
+        RuntimeError: cuDNN Frontend error: [cudnn_frontend] Error:
+                      No valid execution plans built.
+
+    문제는 이 예외를 잡아도 끝이 아니라는 것이다. 계획 수립에 실패한 뒤 **다음 호출에서
+    libtorch_cuda.so 안에서 segfault가 나고 프로세스가 통째로 죽는다.** 파이썬 예외가
+    아니라 프로세스 사망이라 try/except로는 막을 수 없고, 로그에는 아무 흔적 없이
+    서버만 사라진다(dmesg에만 남는다). 딥 리서치가 자주 죽던 원인이 이것이다 —
+    검색 한 번에 리랭크가 여러 번 도니 두 번째 호출까지 금방 도달한다.
+
+    cuDNN 백엔드를 끄면 flash/mem-efficient attention으로 내려가고, 실측상 오히려
+    빠르다(30쌍 기준 106ms → 12ms). 프로세스 전역 설정이라 한 번만 부르면 된다.
+    """
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
+            torch.backends.cuda.enable_cudnn_sdp(False)
+            logger.info("cuDNN SDPA 백엔드 비활성화 (E-88 segfault 회피)")
+    except Exception as exc:  # torch 미설치·API 변경 등
+        logger.warning("cuDNN SDPA 비활성화 실패 (그대로 진행): %s", exc)
+
+
 class Reranker:
     """질문-청크 쌍을 cross-encoder로 정밀 재채점해 상위 top_k를 고른다.
 
@@ -55,15 +85,39 @@ class Reranker:
 
             kwargs: dict[str, Any] = {"max_length": 512, "device": self._device}
             if self._device == "cuda":
+                # cuDNN attention 백엔드는 이 조합에서 프로세스를 죽인다 — 모델을 만들기
+                # 전에 꺼야 한다 (E-88).
+                _disable_cudnn_sdpa()
                 # FP16: 실측 323ms → 126ms (30쌍), top-8 순서 FP32와 동일 (무손실)
                 import torch
 
-                kwargs["automodel_args"] = {"torch_dtype": torch.float16}
+                # `automodel_args`/`torch_dtype`은 둘 다 이름이 바뀌어 경고를 낸다.
+                kwargs["model_kwargs"] = {"dtype": torch.float16}
             self._model = CrossEncoder(str(model_path), **kwargs)
         except Exception as exc:
             raise RerankerError(f"리랭커 모델 로드 실패: {exc}") from exc
 
+        if self._device == "cuda":
+            self._warmup()
+
         logger.info("Reranker 초기화 완료: model_dir=%s, device=%s", model_dir, self._device)
+
+    def _warmup(self) -> None:
+        """가장 긴 입력으로 한 번 돌려 커널 자동튜닝을 미리 끝낸다.
+
+        첫 호출은 입력 길이에 따라 수 초가 걸린다(최대 길이에서 실측 12초). 그 비용을
+        사용자의 첫 질문이 아니라 기동 시점으로 옮긴다. 실패해도 검색에는 지장이 없다.
+        """
+        try:
+            import time
+
+            started = time.time()
+            self._model.predict(
+                [("워밍업 질의", "본문 " * 400)] * 2, batch_size=2, show_progress_bar=False
+            )
+            logger.info("Reranker 워밍업 완료 (%.1fs)", time.time() - started)
+        except Exception as exc:
+            logger.warning("Reranker 워밍업 실패 (그대로 진행): %s", exc)
 
     @staticmethod
     def _resolve_device(device: str) -> str:
