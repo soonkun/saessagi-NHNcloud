@@ -516,6 +516,15 @@ def _make_adapter_class() -> type:
             - EndOfTurn → 스트림 종료
             - AgentError → 에러 텍스트를 SentenceOutput으로 yield
             """
+            from rag_watch.activity import conversation_active
+
+            # 이 턴이 끝날 때까지 배경 인제스트를 쉬게 한다 (CR-54).
+            # 같은 GPU를 두고 다투면 응답이 느려지고, 심하면 백엔드가 죽는다 (E-87).
+            with conversation_active():
+                async for _out in self._chat_inner(input_data):
+                    yield _out
+
+        async def _chat_inner(self, input_data: BatchInput) -> AsyncIterator[Any]:
             from open_llm_vtuber.agent.output_types import SentenceOutput, DisplayText, Actions
 
             # ── M_16 변경 2: chat() 진입 직후 1회 분류 ──────────────────────

@@ -13,6 +13,7 @@ from typing import Any
 
 from loguru import logger
 
+from .activity import is_conversation_active
 from .scanner import build_plan, sanitize_folder_name
 from .state import WatchState, file_digest
 from .types import ScanPlan
@@ -130,6 +131,14 @@ class RagWatchService:
         """스캔 1회. 겹치면 즉시 빈 계획을 돌려준다."""
         if self._lock.locked():
             logger.debug("rag_watch: 이전 스캔이 진행 중 — 이번 주기 건너뜀")
+            return ScanPlan()
+
+        # 사용자가 답을 기다리는 동안에는 쉰다 (CR-54).
+        # 임베딩과 대화·딥 리서치가 같은 GPU를 쓰기 때문이다 — 겹치면 응답이 느려지고,
+        # 실제로 GPU가 고갈돼 백엔드가 죽은 적이 있다 (E-87).
+        # 배경 작업이므로 한 주기 미루는 비용은 사실상 없다.
+        if is_conversation_active():
+            logger.debug("rag_watch: 대화 처리 중 — 이번 주기 쉬어감")
             return ScanPlan()
 
         async with self._lock:
@@ -339,6 +348,12 @@ class RagWatchService:
         from app.rag_routes import ingest_document_bytes
 
         for cand in plan.to_ingest:
+            # 배치 도중 대화가 시작되면 남은 문서는 다음 주기로 미룬다 (CR-54).
+            # 한 주기에 20건을 도는 동안 사용자가 질문하면 그 20건이 끝날 때까지
+            # GPU를 물고 있게 되므로, 문서 하나 단위로 확인해 곧바로 비켜준다.
+            if is_conversation_active():
+                logger.info("rag_watch: 대화 시작 감지 — 남은 인제스트를 다음 주기로 미룸")
+                break
             if cand.folder_name in deleted_folders:
                 # 이 주기에 지워진 폴더다. 계획은 삭제 전에 세워졌으므로 여기서 인제스트하면
                 # 폴더가 되살아난다. 다음 주기에 (파일이 아직 있으면) 정상 경로로 처리된다.

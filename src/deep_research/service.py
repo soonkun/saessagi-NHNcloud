@@ -93,6 +93,24 @@ class DeepResearchService:
         attachment_text: str = "",
         scope_doc_ids: list[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
+        """딥 리서치 실행. 도는 동안 배경 인제스트를 쉬게 한다 (CR-54).
+
+        리서치는 128B 모델을 GPU에 올린 채 수 분간 돈다. 그 사이 임베딩이 계속 돌면
+        GPU가 고갈돼 백엔드가 죽은 적이 있다 (E-87).
+        """
+        from rag_watch.activity import conversation_active
+
+        with conversation_active():
+            async for _ev in self._run_inner(mode, prompt, attachment_text, scope_doc_ids):
+                yield _ev
+
+    async def _run_inner(
+        self,
+        mode: str,
+        prompt: str,
+        attachment_text: str = "",
+        scope_doc_ids: list[str] | None = None,
+    ) -> AsyncIterator[dict[str, Any]]:
         """딥 리서치 실행 — 진행 이벤트를 순차 yield (스펙 §3).
 
         scope_doc_ids가 주어지면 검색 근거를 해당 문서들로 제한한다
