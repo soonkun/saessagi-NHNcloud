@@ -374,6 +374,10 @@ export function ChatContent({
       <div
         style={{
           padding: "2px 10px",
+          // 줄 높이를 내용에 맡기면 메뉴 버튼(40px)이 있는 좁은 화면에서만 넉넉하고,
+          // 버튼이 없는 넓은 화면에서는 20px로 쪼그라들어 글자가 위쪽 테두리에 붙는다.
+          // 두 경우의 높이를 같게 고정한다 (CR-55 후속, 사용자 지적).
+          minHeight: 44,
           borderBottom: "1px solid var(--color-border)",
           display: "flex",
           alignItems: "center",
