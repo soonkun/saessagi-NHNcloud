@@ -106,11 +106,15 @@ export function composerHeight(scrollHeight: number): number {
 
 export function ChatContent({
   emptyHero,
+  leading,
 }: {
   emptyHero?: React.ReactNode;
+  /** 상태줄 맨 앞에 넣을 요소 (좁은 화면의 메뉴 버튼). CR-55에서 타이틀 바를 없애며 추가. */
+  leading?: React.ReactNode;
 } = {}): React.ReactElement {
   const messages = useStore((s) => s.messages);
   const aiStatus = useStore((s) => s.aiStatus);
+  const llmInfo = useStore((s) => s.llmInfo);
   const agentStatus = useStore((s) => s.agentStatus);
   const addMessage = useStore((s) => s.addMessage);
   const setChatTab = useStore((s) => s.setChatTab);
@@ -369,7 +373,7 @@ export function ChatContent({
       {/* 상태 표시 줄 */}
       <div
         style={{
-          padding: "8px 16px",
+          padding: "2px 10px",
           borderBottom: "1px solid var(--color-border)",
           display: "flex",
           alignItems: "center",
@@ -377,6 +381,7 @@ export function ChatContent({
           flexShrink: 0,
         }}
       >
+        {leading}
         <span
           className={aiStatus !== "idle" ? "status-blink" : ""}
           style={{
@@ -391,6 +396,22 @@ export function ChatContent({
         <span style={{ color: "var(--color-text-muted)", fontSize: "var(--fs-12)" }}>
           {STATUS_LABEL[aiStatus] ?? ""}
         </span>
+        {/* CR-55: 타이틀 바에 있던 사용 중인 모델명을 여기로 옮겼다. */}
+        {llmInfo && (
+          <span
+            title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
+            style={{
+              fontSize: "var(--fs-12)",
+              color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              minWidth: 0,
+            }}
+          >
+            · {llmInfo.model}
+          </span>
+        )}
         {/* LLM 표시는 상단 바(펫: 패널 헤더, 데스크톱: 타이틀 바)로 이동 — 상태줄에선 제거 */}
         {voiceActive && (
           <span

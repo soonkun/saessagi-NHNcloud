@@ -6,7 +6,7 @@ import { useStore, UI_SCALE_OPTIONS } from "../store";
 import { connect } from "../services/websocket";
 import { speakLocal } from "../services/speech";
 import { speakMeloTTS } from "../services/tts";
-import { API_BASE } from "../services/api";
+import { API_BASE, fetchLlmProvider } from "../services/api";
 
 // ── Ollama ────────────────────────────────────────────────────────────────────
 
@@ -171,22 +171,7 @@ async function saveAgentPrompt(
 
 // ── LLM provider ─────────────────────────────────────────────────────────────
 
-interface LlmProviderState {
-  provider: "ollama" | "openai";
-  openai_api_key_set: boolean;
-  openai_model: string;
-  ollama_model: string;
-}
-
-async function fetchLlmProvider(): Promise<LlmProviderState | null> {
-  try {
-    const res = await fetch(API_BASE + "/api/settings/llm-provider");
-    if (!res.ok) return null;
-    return (await res.json()) as LlmProviderState;
-  } catch {
-    return null;
-  }
-}
+// LlmProviderState / fetchLlmProvider는 services/api.ts로 옮겼다 (CR-55).
 
 async function apiSetLlmProvider(body: {
   provider: string;

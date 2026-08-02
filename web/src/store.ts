@@ -28,6 +28,15 @@ function loadPosition(): Position {
   };
 }
 
+function loadAvatarVisible(): boolean {
+  try {
+    // 기본값은 표시. 꺼둔 사람만 저장돼 있다.
+    return localStorage.getItem("saessagi_avatar_visible") !== "0";
+  } catch {
+    return true;
+  }
+}
+
 function loadCharSize(): number {
   try {
     const raw = localStorage.getItem("saessagi_char_size");
@@ -159,12 +168,15 @@ interface AvatarSlice {
   charSize: number;
   isUploading: boolean;
   isMeetingGenerating: boolean;
+  /** 떠 있는 새싹이를 보여줄지 (CR-55). 기기별로 저장된다. */
+  avatarVisible: boolean;
   setEmotion: (emotion: Emotion) => void;
   setSpeaking: (speaking: boolean) => void;
   setPosition: (pos: Position) => void;
   setPositionSilent: (pos: Position) => void;
   setCharSize: (size: number) => void;
   setIsUploading: (v: boolean) => void;
+  toggleAvatarVisible: () => void;
   setMeetingGenerating: (v: boolean) => void;
 }
 
@@ -326,10 +338,21 @@ export const useStore = create<AppStore>((set) => ({
   position: loadPosition(),
   charSize: loadCharSize(),
   isUploading: false,
+  avatarVisible: loadAvatarVisible(),
   isMeetingGenerating: false,
   setEmotion: (emotion) => set({ emotion }),
   setSpeaking: (speaking) => set({ speaking }),
   setIsUploading: (v) => set({ isUploading: v }),
+  toggleAvatarVisible: () =>
+    set((st) => {
+      const next = !st.avatarVisible;
+      try {
+        localStorage.setItem("saessagi_avatar_visible", next ? "1" : "0");
+      } catch {
+        /* localStorage 불가 환경 무시 */
+      }
+      return { avatarVisible: next };
+    }),
   setMeetingGenerating: (v) => set({ isMeetingGenerating: v }),
   setPosition: (pos) => {
     try {

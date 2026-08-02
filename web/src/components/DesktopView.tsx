@@ -5,17 +5,15 @@ import {
   Calendar,
   PanelLeftClose,
   Power,
-  Minus,
-  Square,
   X as XIcon,
-  Copy as RestoreIcon,
   Sun,
   Moon,
   LogOut,
+  Sprout,
   Menu,
 } from "lucide-react";
 import { fetchAuthEnabled, logout } from "../services/api";
-import { useIsNarrow } from "../hooks/useMediaQuery";
+import { useIsCompact, useIsNarrow } from "../hooks/useMediaQuery";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
@@ -36,13 +34,44 @@ const SIDEBAR_TABS = CHAT_TABS.map(({ id, desktopLabel, Icon }) => ({
   Icon,
 }));
 
+/** 좁은 화면에서 사이드바 서랍을 여는 버튼. 손가락 대상 크기(44×40)를 지킨다. */
+export function MenuButton({
+  open,
+  onToggle,
+}: {
+  open: boolean;
+  onToggle: () => void;
+}): React.ReactElement {
+  return (
+    <button
+      onClick={onToggle}
+      title={open ? "메뉴 닫기" : "메뉴 열기"}
+      aria-label="메뉴"
+      style={{
+        width: 44,
+        height: 40,
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "none",
+        color: "var(--color-text)",
+        cursor: "pointer",
+      }}
+    >
+      {open ? <XIcon size={20} /> : <Menu size={20} />}
+    </button>
+  );
+}
+
 export function DesktopView(): React.ReactElement {
   const chatTab = useStore((s) => s.chatTab);
   const setChatTab = useStore((s) => s.setChatTab);
-  const llmInfo = useStore((s) => s.llmInfo);
-  const emotion = useStore((s) => s.emotion);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const avatarVisible = useStore((s) => s.avatarVisible);
+  const toggleAvatarVisible = useStore((s) => s.toggleAvatarVisible);
 
   // 네이티브 전용 UI(창 제어·펫 모드·앱 종료) 노출 여부. 브라우저에서는 전부 감춘다.
   const isElectron = isElectronRuntime();
@@ -62,22 +91,6 @@ export function DesktopView(): React.ReactElement {
     void fetchAuthEnabled().then(setAuthEnabled);
   }, []);
 
-  const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
-
-  // window 최대화 상태 추적 — 토글 아이콘 결정용
-  const [isMaximized, setIsMaximized] = useState(false);
-  useEffect(() => {
-    const ipc = (window as { electron?: { ipcRenderer?: { on: (c: string, h: (...a: unknown[]) => void) => void; removeListener: (c: string, h: (...a: unknown[]) => void) => void } } }).electron?.ipcRenderer;
-    if (!ipc) return;
-    const handler = (_e: unknown, val: boolean): void => setIsMaximized(!!val);
-    ipc.on("window-maximized-change", handler as (...a: unknown[]) => void);
-    return () => ipc.removeListener("window-maximized-change", handler as (...a: unknown[]) => void);
-  }, []);
-
-  function sendWindowAction(channel: string): void {
-    const ipc = (window as { electron?: { ipcRenderer?: { send: (c: string) => void } } }).electron?.ipcRenderer;
-    ipc?.send(channel);
-  }
 
   return (
     <div
@@ -95,116 +108,31 @@ export function DesktopView(): React.ReactElement {
         fontSize: "var(--fs-16)",
       }}
     >
-      {/* 상단 타이틀 바 — 드래그 영역 + 창 제어 버튼 */}
-      <header
-        style={{
-          height: 36,
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          background: "var(--color-sidebar)",
-          borderBottom: "1px solid var(--color-border)",
-          // 전체를 드래그 가능 영역으로 — 아래에서 버튼만 no-drag
-          // @ts-ignore — Electron 전용 CSS
-          WebkitAppRegion: "drag",
-        }}
-      >
-        {/* 왼쪽: 좁은 화면에서는 메뉴 버튼, 넓으면 여백 (macOS traffic light 회피) */}
-        {isNarrow ? (
-          <button
-            onClick={() => setDrawerOpen((o) => !o)}
-            title={drawerOpen ? "메뉴 닫기" : "메뉴 열기"}
-            aria-label="메뉴"
-            style={{
-              width: 44,
-              height: 32,
-              marginLeft: 4,
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              background: "transparent",
-              border: "none",
-              color: "var(--color-text)",
-              cursor: "pointer",
-              // @ts-ignore — 드래그 영역 안의 버튼은 클릭 가능해야 한다
-              WebkitAppRegion: "no-drag",
-            }}
-          >
-            {drawerOpen ? <XIcon size={18} /> : <Menu size={18} />}
-          </button>
-        ) : (
-          <div style={{ width: 70, flexShrink: 0 }} />
-        )}
-        {/* 중앙: 새싹이 + 사용 중인 LLM — 드래그 영역 안에 표시만 */}
+      {/* CR-55: 상단 타이틀 바를 없앴다.
+          로고·모델명만 있던 줄인데, 히어로·떠 있는 캐릭터와 합쳐 **같은 캐릭터가 크기만
+          다르게 셋** 보여 산만했다(사용자 지적). 햄버거는 아래 줄로 내리고 모델명은
+          상태줄로 옮겼다. 창 제어 버튼은 Electron 전용이라 CR-38 이후 쓰이지 않는다.
+
+          채팅 탭은 ChatContent의 상태줄이 햄버거를 안고 있고, 나머지 탭은 여기서
+          좁은 화면에 한해 최소 바를 그린다 — 그래야 어느 탭에서도 메뉴를 열 수 있다. */}
+      {isNarrow && chatTab !== "chat" && (
         <div
           style={{
-            flex: 1,
+            flexShrink: 0,
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
-            gap: 7,
-            fontSize: "var(--fs-13)",
-            color: "var(--color-text-muted)",
-            userSelect: "none",
-            minWidth: 0,
+            gap: 4,
+            padding: "2px 6px",
+            background: "var(--color-sidebar)",
+            borderBottom: "1px solid var(--color-border)",
           }}
         >
-          <img
-            src={avatarSrc}
-            alt=""
-            style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }}
-            onError={(e) => {
-              e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
-            }}
-          />
-          <span style={{ fontWeight: 700, color: "var(--color-text)" }}>새싹이</span>
-          {llmInfo && (
-            <span
-              title={`현재 LLM: ${llmInfo.provider === "openai" ? "OpenAI" : "Ollama"} / ${llmInfo.model}`}
-              style={{
-                color: llmInfo.provider === "openai" ? "#10a37f" : "#7aa8ff",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              · {llmInfo.provider === "openai" ? "GPT" : "Ollama"} · {llmInfo.model}
-            </span>
-          )}
+          <MenuButton open={drawerOpen} onToggle={() => setDrawerOpen((o) => !o)} />
+          <span style={{ fontSize: "var(--fs-14)", fontWeight: 600 }}>
+            {SIDEBAR_TABS.find((t) => t.id === chatTab)?.label ?? ""}
+          </span>
         </div>
-        {/* 오른쪽: 창 제어 버튼 */}
-        {/* 창 제어는 Electron 창을 조작하는 IPC라 브라우저에선 누를 대상이 없다 (CR-38) */}
-        {isElectron && (
-          <div
-            style={{
-              display: "flex",
-              gap: 0,
-              flexShrink: 0,
-              // @ts-ignore
-              WebkitAppRegion: "no-drag",
-            }}
-          >
-            <TitleBarBtn onClick={() => sendWindowAction("window-minimize")} title="최소화">
-              <Minus size={13} />
-            </TitleBarBtn>
-            <TitleBarBtn
-              onClick={() => sendWindowAction("window-maximize")}
-              title={isMaximized ? "복원" : "최대화"}
-            >
-              {isMaximized ? <RestoreIcon size={11} /> : <Square size={11} />}
-            </TitleBarBtn>
-            <TitleBarBtn
-              onClick={() => sendWindowAction("window-close")}
-              title="창 닫기 (앱은 트레이에 남음)"
-              danger
-            >
-              <XIcon size={13} />
-            </TitleBarBtn>
-          </div>
-        )}
-      </header>
+      )}
 
       {/* 본문: 사이드바 + 메인 영역 */}
       <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
@@ -341,6 +269,31 @@ export function DesktopView(): React.ReactElement {
               펫 모드
             </button>
           )}
+          {/* CR-55: 떠 있는 새싹이 켜기/끄기. 데스크톱에서 잠깐 치우고 싶을 때 쓴다. */}
+          <button
+            onClick={toggleAvatarVisible}
+            title={avatarVisible ? "새싹이 숨기기" : "새싹이 보이기"}
+            aria-label={avatarVisible ? "새싹이 숨기기" : "새싹이 보이기"}
+            style={{
+              width: 36,
+              height: 36,
+              flexShrink: 0,
+              justifyContent: "center",
+              background: "transparent",
+              border: "1px solid var(--color-border)",
+              borderRadius: 8,
+              color: avatarVisible ? "var(--color-accent)" : "var(--color-text-muted)",
+              cursor: "pointer",
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            {/* 캐릭터 그림을 쓰면 히어로·떠 있는 캐릭터와 함께 **같은 얼굴이 크기만 다르게
+                여럿** 보인다 — 사용자가 지적한 바로 그 산만함이다. 새싹 아이콘으로 대신한다. */}
+            <Sprout size={17} strokeWidth={avatarVisible ? 2.4 : 1.8} />
+          </button>
+
           {/* 테마 전환은 가끔 쓰는 기능이라 아이콘만. 자리는 로그아웃에 양보한다. */}
           <button
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -427,7 +380,14 @@ export function DesktopView(): React.ReactElement {
             overflow: "hidden",
           }}
         >
-          <ChatContent emptyHero={<WelcomeHero />} />
+          <ChatContent
+            emptyHero={<WelcomeHero />}
+            leading={
+              isNarrow ? (
+                <MenuButton open={drawerOpen} onToggle={() => setDrawerOpen((o) => !o)} />
+              ) : undefined
+            }
+          />
         </div>
         {chatTab === "calendar" && <CalendarView />}
         {chatTab === "documents" && <DocumentsView />}
@@ -490,54 +450,16 @@ export function DesktopView(): React.ReactElement {
 // 타이틀바 버튼
 // ────────────────────────────────────────────────────────────
 
-function TitleBarBtn({
-  onClick,
-  title,
-  children,
-  danger = false,
-}: {
-  onClick: () => void;
-  title: string;
-  children: React.ReactNode;
-  danger?: boolean;
-}): React.ReactElement {
-  const [hover, setHover] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        width: 44,
-        height: 36,
-        background: hover
-          ? danger
-            ? "#e53935"
-            : "rgba(255,255,255,0.08)"
-          : "transparent",
-        border: "none",
-        cursor: "pointer",
-        color: hover && danger ? "#fff" : "var(--color-text)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "background 0.12s, color 0.12s",
-      }}
-    >
-      {children}
-    </button>
-  );
-}
-
-// ────────────────────────────────────────────────────────────
-// 환영 화면 — chat 탭에서 메시지가 0개일 때 ChatContent의 emptyHero로 주입
-// ────────────────────────────────────────────────────────────
-
 function WelcomeHero(): React.ReactElement {
   const emotion = useStore((s) => s.emotion);
   const startupBriefing = useStore((s) => s.startupBriefing);
+  const avatarVisible = useStore((s) => s.avatarVisible);
+  const isCompact = useIsCompact();
   const avatarSrc = `${import.meta.env.BASE_URL}avatars/${emotion}.png`;
+  // CR-55: 화면에 새싹이는 **하나만** 둔다. 떠 있는 캐릭터가 보이는 상태면
+  // 첫 화면 그림은 생략한다 — 같은 얼굴이 크기만 다르게 둘 보이면 산만하다는 지적.
+  // 좁은 화면·숨김 상태에서는 떠 있는 쪽이 없으므로 여기서 보여준다.
+  const showHeroAvatar = isCompact || !avatarVisible;
 
   return (
     <div
@@ -558,14 +480,16 @@ function WelcomeHero(): React.ReactElement {
           maxWidth: 720,
         }}
       >
-        <img
-          src={avatarSrc}
-          alt="새싹이"
-          style={{ width: 88, height: 88, objectFit: "contain" }}
-          onError={(e) => {
-            e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
-          }}
-        />
+        {showHeroAvatar && (
+          <img
+            src={avatarSrc}
+            alt="새싹이"
+            style={{ width: 88, height: 88, objectFit: "contain" }}
+            onError={(e) => {
+              e.currentTarget.src = `${import.meta.env.BASE_URL}avatars/neutral.png`;
+            }}
+          />
+        )}
         <h1 style={{ fontSize: "var(--fs-26)", fontWeight: 700, margin: 0 }}>
           안녕하세요, 새싹이예요
         </h1>

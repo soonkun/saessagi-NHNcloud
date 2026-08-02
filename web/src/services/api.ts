@@ -533,3 +533,24 @@ export async function generateMeetingMinutesStream(
 //     body: JSON.stringify({ transcript: params.transcript, pages: params.pages }),
 //   });
 // }
+
+// ── LLM 공급자 (CR-55) ────────────────────────────────────────────────────────
+// 설정 화면 안에만 있던 조회를 공용으로 옮겼다 — 상태줄에 쓰는 모델명은
+// 설정 탭을 열지 않아도 앱 시작 시 알아야 한다.
+
+export interface LlmProviderState {
+  provider: "ollama" | "openai";
+  openai_api_key_set: boolean;
+  openai_model: string;
+  ollama_model: string;
+}
+
+export async function fetchLlmProvider(): Promise<LlmProviderState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/llm-provider");
+    if (!res.ok) return null;
+    return (await res.json()) as LlmProviderState;
+  } catch {
+    return null;
+  }
+}

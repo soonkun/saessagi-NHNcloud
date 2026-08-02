@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useAppHeight } from "./hooks/useAppHeight";
 import { useStore } from "./store";
 import { connect } from "./services/websocket";
+import { fetchLlmProvider } from "./services/api";
 import { showStartupGreeting } from "./services/startup";
 import { startReminderPoll } from "./services/reminder";
 import { DesktopView } from "./components/DesktopView";
@@ -46,6 +47,23 @@ export function App(): React.ReactElement {
   useEffect(() => {
     connect(wsUrl);
   }, [wsUrl]);
+
+  // 사용 중인 모델 정보를 시작할 때 한 번 읽는다 (CR-55).
+  // 예전에는 설정 탭을 열어야만 채워져, 상태줄의 모델명이 첫 화면에서 비어 있었다.
+  useEffect(() => {
+    void fetchLlmProvider()
+      .then((s) => {
+        if (!s) return;
+        const provider = s.provider === "openai" ? "openai" : "ollama";
+        useStore.getState().setLlmInfo({
+          provider,
+          model: provider === "openai" ? s.openai_model : s.ollama_model,
+        });
+      })
+      .catch(() => {
+        /* 모델명 표시는 부가 정보다 — 실패해도 앱 동작에는 영향 없음 */
+      });
+  }, []);
 
   // 시작 인사 + 일정 알림 폴링 — 한 번만
   useEffect(() => {

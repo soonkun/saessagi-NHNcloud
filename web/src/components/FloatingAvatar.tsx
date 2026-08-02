@@ -14,6 +14,7 @@
  * 위치·크기도 store의 position/charSize(localStorage 영속)를 재사용한다.
  */
 import React from "react";
+import { MoveDiagonal2 } from "lucide-react";
 
 import { COMPACT_MAX_WIDTH, useIsCompact } from "../hooks/useMediaQuery";
 import { useStore } from "../store";
@@ -91,15 +92,18 @@ export function FloatingAvatar(): React.ReactElement | null {
   // 좁은 화면에서는 캐릭터가 입력줄·버튼을 가린다. 그럴 땐 "쇽~" 하고 사라진다.
   // 곧바로 unmount하면 툭 끊기므로 연출이 끝날 때까지만 남겨 둔다.
   const isCompact = useIsCompact();
-  const [mounted, setMounted] = React.useState(!isCompact);
+  // 사용자가 꺼둘 수도 있다 (CR-55). 좁은 화면 자동 숨김과 같은 연출로 사라진다.
+  const avatarVisible = useStore((s) => s.avatarVisible);
+  const hidden = isCompact || !avatarVisible;
+  const [mounted, setMounted] = React.useState(!hidden);
   React.useEffect(() => {
-    if (!isCompact) {
+    if (!hidden) {
       setMounted(true);
       return;
     }
     const t = window.setTimeout(() => setMounted(false), HIDE_ANIM_MS);
     return () => window.clearTimeout(t);
-  }, [isCompact]);
+  }, [hidden]);
 
   const [drag, setDrag] = React.useState<DragState>({ kind: "none" });
   // 영상 재생에 실패했는가 — 실패하면 같은 감정의 정지 그림으로 대체한다.
@@ -219,11 +223,11 @@ export function FloatingAvatar(): React.ReactElement | null {
         touchAction: "none",
         // 등장·퇴장은 바깥 상자가, 떠 있는 움직임은 안쪽이 맡는다.
         // 한 요소에 두 animation을 얹으면 서로 transform을 덮어써 튄다.
-        animation: isCompact
+        animation: hidden
           ? `char-shrink-out ${HIDE_ANIM_MS}ms ease-in forwards`
           : "char-pop-in 260ms ease-out",
         // 사라지는 중에는 클릭·드래그를 받지 않는다.
-        pointerEvents: isCompact ? "none" : "auto",
+        pointerEvents: hidden ? "none" : "auto",
         // 클릭으로 무언가 열리지 않는다 — 이동·크기조절 외에는 동작이 없다(CR-47).
       }}
     >
@@ -303,20 +307,29 @@ export function FloatingAvatar(): React.ReactElement | null {
         onPointerCancel={endDrag}
         style={{
           position: "absolute",
-          right: -2,
-          bottom: -2,
-          width: 16,
-          height: 16,
-          borderRadius: 8,
+          right: -4,
+          bottom: -4,
+          width: 22,
+          height: 22,
+          borderRadius: 11,
           cursor: "nwse-resize",
-          background: "var(--color-bg, #fff)",
+          // 배경색과 같아 어디 있는지 안 보인다는 지적 (CR-55).
+          // 대각선 화살표를 넣고 테두리·그림자로 띄워 손잡이임을 한눈에 알게 한다.
+          background: "var(--color-panel, #fff)",
           border: "1px solid var(--color-border, #ccc)",
-          // 평소엔 눈에 띄지 않다가 캐릭터에 마우스를 올리면 드러난다.
-          opacity: dragging ? 1 : 0.35,
+          boxShadow: "0 1px 4px rgba(0,0,0,0.2)",
+          color: "var(--color-text-muted)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: dragging ? 1 : 0.9,
           transition: "opacity 150ms ease",
           touchAction: "none",
         }}
-      />
+      >
+        {/* ↘↖ 대각선 화살표 — 크기 조절 손잡이의 관용 표기 */}
+        <MoveDiagonal2 size={13} strokeWidth={2.5} />
+      </div>
     </div>
   );
 }
