@@ -124,7 +124,11 @@ fi
 if curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
     ok "Ollama 실행 중"
 else
-    setsid nohup ollama serve >"$LOG_DIR/ollama.log" 2>&1 </dev/null 9>&- &
+    # OLLAMA_NUM_PARALLEL: 기본값이면 요청이 서버에서 줄을 서서 동시 호출 효과가 거의
+    # 없다(실측 1.26배). 4로 켜면 지식그래프 추출 처리량이 2.07배가 된다
+    # (7.3 → 15.1 청크/분, gemma4:26b). 8까지 올려도 더 나아지지 않고 메모리만 쓴다.
+    OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-4}" \
+        setsid nohup ollama serve >"$LOG_DIR/ollama.log" 2>&1 </dev/null 9>&- &
     for _ in $(seq 1 30); do
         sleep 1
         curl -sf http://127.0.0.1:11434/api/version >/dev/null 2>&1 && break

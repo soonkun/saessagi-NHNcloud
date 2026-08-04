@@ -578,3 +578,89 @@ export async function fetchActiveModels(): Promise<ActiveModel[]> {
     return [];
   }
 }
+
+// ── M_23 지식그래프 파이프라인 (CR-60) ───────────────────────────────────────
+// 기존 그래프 재인덱싱과 같은 자리에서 시작·중단·진행 확인이 되도록 노출한다.
+// CLI만 두면 사용자가 터미널을 열어야 한다 — 버튼이 이미 있는 화면이라면 더더욱.
+
+export interface KgFolder {
+  folder_id: string;
+  name: string;
+  document_type: string;
+  documents: number;
+  /** 이미 추출이 끝난 문서 수 — 재개 시 건너뛰는 대상 */
+  extracted: number;
+}
+
+export interface KgProgress {
+  job_id: string;
+  state: "IDLE" | "RUNNING" | "STOPPING" | "COMPLETED" | "CANCELLED" | "FAILED";
+  scope: string;
+  total_documents: number;
+  processed: number;
+  completed: number;
+  partial_failed: number;
+  failed: number;
+  accepted: number;
+  rejected: number;
+  elapsed_sec: number;
+  eta_sec: number;
+  current_doc: string;
+  error: string;
+  recent: string[];
+}
+
+export interface KgStatus {
+  running: boolean;
+  progress: KgProgress;
+  stats: Record<string, unknown>;
+}
+
+export async function fetchKgFolders(): Promise<KgFolder[]> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/folders");
+    if (!res.ok) return [];
+    return ((await res.json()) as { folders?: KgFolder[] }).folders ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchKgStatus(): Promise<KgStatus | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/status");
+    if (!res.ok) return null;
+    return (await res.json()) as KgStatus;
+  } catch {
+    return null;
+  }
+}
+
+export async function startKgExtraction(body: {
+  folder_id?: string;
+  limit?: number;
+  resume?: boolean;
+  chunks_per_document?: number;
+}): Promise<{ started: boolean; reason?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { started: false, reason: `서버 오류 (${res.status})` };
+    return (await res.json()) as { started: boolean; reason?: string };
+  } catch {
+    return { started: false, reason: "연결 실패" };
+  }
+}
+
+export async function stopKgExtraction(): Promise<{ stopped: boolean; reason?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/stop", { method: "POST" });
+    if (!res.ok) return { stopped: false, reason: `서버 오류 (${res.status})` };
+    return (await res.json()) as { stopped: boolean; reason?: string };
+  } catch {
+    return { stopped: false, reason: "연결 실패" };
+  }
+}

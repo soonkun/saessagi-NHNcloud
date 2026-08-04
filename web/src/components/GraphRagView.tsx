@@ -30,6 +30,7 @@ import {
   type GraphDocMatch,
 } from "../services/api";
 import { useStore } from "../store";
+import { KgExtractionPanel } from "./KgExtractionPanel";
 
 // CR-30: 키워드 역할별 팔레트 (다크/라이트 공용)
 const TYPE_COLORS: Record<string, string> = {
@@ -865,6 +866,12 @@ export default function GraphRagView(): React.ReactElement {
           >
             초기화
           </button>
+        </div>
+
+        {/* M_23 신규 파이프라인 — 폴더 선택·시작·중단·진행률을 이 자리에서 (CR-60).
+            위 버튼들은 기존(구 CR-30) 그래프용이라 나란히 두고 구분한다. */}
+        <div style={{ padding: "0 10px 10px" }}>
+          <KgExtractionPanel isDark={isDark} />
         </div>
       </div>
 

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from kg.config import KnowledgeGraphConfig
+
 
 if TYPE_CHECKING:
     pass  # upstream
@@ -429,6 +431,7 @@ class AppConfig(BaseModel):
     graphrag: GraphRagConfig = Field(default_factory=GraphRagConfig)  # M_19
     deep_research: DeepResearchConfig = Field(default_factory=DeepResearchConfig)  # M_20 (CR-39)
     rag_watch: RagWatchConfig = Field(default_factory=RagWatchConfig)  # M_22 (CR-41)
+    knowledge_graph: KnowledgeGraphConfig = Field(default_factory=KnowledgeGraphConfig)  # M_23
     morning_briefing_time: str = Field(default="09:00")
     dnd_enabled: bool = Field(default=False)
     rag_min_score: float = Field(default=0.35, ge=0.0, le=1.0)
@@ -522,6 +525,7 @@ class AppConfig(BaseModel):
                 f"rag_chunk_chars({self.rag_chunk_chars})보다 작아야 합니다"
             )
         return self
+
     screenshot_continuous_interval_sec: int = Field(default=5, ge=1, le=60)
     meeting_download_base_url: str = Field(
         default="http://127.0.0.1:12393",

@@ -681,9 +681,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 )
                 label = f"openai({cfg.openai_model})"
         except Exception as exc:
-            logger.warning(
-                f"딥 리서치 전용 LLM 조립 실패 — 채팅 모델로 폴백합니다: {exc!r}"
-            )
+            logger.warning(f"딥 리서치 전용 LLM 조립 실패 — 채팅 모델로 폴백합니다: {exc!r}")
             model = getattr(getattr(self.app_config, "ollama", None), "model", "?")
             return chat_agent, f"fallback_to_chat({model})"
 
@@ -828,6 +826,27 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 hybrid_enabled=app_config.rag_hybrid_enabled,
                 rerank_candidates=app_config.rag_rerank_candidates,
             )
+            # M_23 지식그래프 파이프라인 — 벡터 스토어를 읽기 전용으로 쓴다.
+            # 실패해도 앱 기동은 계속한다(기능만 비활성).
+            try:
+                from pathlib import Path as _Path
+
+                from kg.config import KnowledgeGraphConfig
+                from kg.service import KnowledgeGraphService
+
+                kg_cfg = getattr(app_config, "knowledge_graph", None) or KnowledgeGraphConfig()
+                if kg_cfg.enabled:
+                    self.kg_service = KnowledgeGraphService(
+                        config=kg_cfg,
+                        vector_store=store,
+                        ollama_base_url=str(app_config.ollama.base_url),
+                        root=_Path(os.environ.get("SAESSAGI_ROOT", ".")),
+                    )
+                    logger.info("M_23 KnowledgeGraphService 배선 완료")
+            except Exception as exc:
+                logger.warning(f"M_23 KnowledgeGraphService 배선 실패 (기능 비활성): {exc!r}")
+                self.kg_service = None
+
             logger.info(
                 f"RagService 초기화 완료: model={bge_model_dir}, store={vector_store_dir}, "
                 f"device={app_config.rag_device}, batch={app_config.rag_embed_batch_size}, "
