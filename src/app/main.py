@@ -177,6 +177,7 @@ async def _start_rag_watch(ctx: Any, app_config: Any) -> "asyncio.Task[None] | N
         delete_policy=cfg.delete_policy.value,
         unindex_guard_ratio=cfg.unindex_guard_ratio,
         unindex_guard_min=cfg.unindex_guard_min,
+        max_ingest_failures=cfg.max_ingest_failures,
     )
     ctx.rag_watch_service = service
 

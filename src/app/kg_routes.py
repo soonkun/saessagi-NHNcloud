@@ -31,6 +31,10 @@ class StartReq(BaseModel):
     limit: int = 0
     resume: bool = True
     chunks_per_document: int | None = None
+    # 등록된 모든 폴더를 한 작업으로. 폴더를 하나씩 골라 여러 번 누르지 않아도 되게 한다.
+    all_folders: bool = False
+    # 추출이 정상 완료되면 6~9단계 구축까지 자동으로 잇는다 (CR-61).
+    build_after: bool = False
 
 
 @router.get("/folders")
@@ -54,8 +58,13 @@ async def start(body: StartReq, request: Request) -> dict[str, Any]:
         limit=body.limit,
         resume=body.resume,
         chunks_per_document=body.chunks_per_document,
+        all_folders=body.all_folders,
+        build_after=body.build_after,
     )
-    logger.info(f"KG 추출 시작 요청: folder={body.folder_id!r} → {result.get('started')}")
+    logger.info(
+        f"KG 추출 시작 요청: folder={body.folder_id!r} all={body.all_folders} "
+        f"limit={body.limit} build_after={body.build_after} → {result.get('started')}"
+    )
     return result
 
 
@@ -63,3 +72,80 @@ async def start(body: StartReq, request: Request) -> dict[str, Any]:
 async def stop(request: Request) -> dict[str, Any]:
     """진행 중인 청크가 끝나면 멈춘다 (강제 종료 아님)."""
     return await _svc(request).stop()
+
+
+# ── 6~9단계 그래프 구축 (CR-61) ──────────────────────────────────────────────
+#
+# 추출 버튼만 있고 구축은 CLI로 두면 CR-60에서 지적받은 것과 같은 상황이 된다
+# ("엔티티 추출 버튼이 있는데 왜 파이썬 코드를 주냐"). 같은 자리에서 구축까지 된다.
+
+
+class BuildReq(BaseModel):
+    folder_id: str = ""
+    dry_run: bool = False
+    # M_19 키워드 그래프 삭제는 되돌릴 수 없다. 기본은 끄고 호출자가 명시해야 한다.
+    purge_legacy: bool = False
+
+
+def _graph_store_factory(request: Request) -> Any:
+    """graphrag 설정의 Neo4j 접속 정보를 그대로 쓴다 — 같은 인스턴스에 적재한다."""
+    import os
+
+    from kg.graph_store import KgGraphStore
+
+    ctx = getattr(request.app.state, "service_context", None)
+    cfg = getattr(ctx, "config", None)
+    g = getattr(getattr(cfg, "app", None), "graphrag", None) if cfg else None
+    if g is None:
+        return None
+
+    def make() -> KgGraphStore:
+        return KgGraphStore(
+            uri=g.neo4j_uri,
+            user=g.neo4j_user,
+            password=os.environ.get("SAESSAGI_NEO4J_PASSWORD") or g.neo4j_password,
+            database=g.neo4j_database,
+        )
+
+    return make
+
+
+@router.post("/build")
+async def build(body: BuildReq, request: Request) -> dict[str, Any]:
+    """6~9단계 실행 — LLM을 부르지 않으므로 GPU를 잡지 않는다."""
+    svc = _svc(request)
+    result = await svc.start_build(
+        folder_id=body.folder_id,
+        dry_run=body.dry_run,
+        purge_legacy=body.purge_legacy,
+        graph_store_factory=None if body.dry_run else _graph_store_factory(request),
+    )
+    logger.info(
+        f"KG 그래프 구축 요청: folder={body.folder_id!r} dry_run={body.dry_run} "
+        f"purge_legacy={body.purge_legacy} → {result.get('started')}"
+    )
+    return result
+
+
+@router.get("/build/status")
+async def build_status(request: Request) -> dict[str, Any]:
+    svc = _svc(request)
+    return {"running": svc.build_running, "progress": svc.build_progress()}
+
+
+@router.post("/build/stop")
+async def build_stop(request: Request) -> dict[str, Any]:
+    """단계 경계에서 멈춘다. 끝난 단계 결과는 SQLite에 남는다."""
+    return await _svc(request).stop_build()
+
+
+@router.get("/review")
+async def review(request: Request, limit: int = 50) -> dict[str, Any]:
+    """검토 큐 — 블롭 감시·모호 판정에 걸린 정규 엔티티."""
+    return {"items": _svc(request).review_queue(limit)}
+
+
+@router.get("/report")
+async def report(request: Request) -> dict[str, Any]:
+    """10단계 관찰 리포트. **품질 증명이 아니다** (스펙 §9.1)."""
+    return _svc(request).report()

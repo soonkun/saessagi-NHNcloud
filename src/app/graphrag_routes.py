@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from loguru import logger
 from pydantic import BaseModel
 
@@ -42,6 +43,8 @@ class StatusResp(BaseModel):
 class ReindexReq(BaseModel):
     doc_id: str | None = None
     only_missing: bool = False  # CR-35: 그래프에 없는 문서만 (증분)
+    # CR-61: M_23 그래프가 있는데도 굳이 구버전 인덱싱을 돌리겠다는 명시적 의사표시.
+    force_legacy: bool = False
 
 
 class ReindexResp(BaseModel):
@@ -73,6 +76,50 @@ def _get_service(request: Request) -> Any:
     return svc
 
 
+def _get_kg_store(request: Request) -> Any:
+    """M_23 정규 엔티티 그래프 스토어 (CR-61).
+
+    적재가 끝나 있으면 이쪽이 그래프 탭의 데이터 출처다. 없거나 비어 있으면 `None`을
+    돌려주고, 호출자는 M_19 키워드 경로로 폴백한다 — 구축 전에도 탭이 죽지 않아야 한다.
+    """
+    store = getattr(_get_context(request), "kg_graph_store", None)
+    if store is None:
+        return None
+    try:
+        if not store.ping():
+            return None
+        rows = store._run("MATCH (c:CanonicalEntity) RETURN count(c) AS c LIMIT 1")  # noqa: SLF001
+        return store if (rows and rows[0]["c"] > 0) else None
+    except Exception as exc:
+        logger.warning(f"M_23 그래프 스토어 확인 실패 (키워드 경로 폴백): {exc}")
+        return None
+
+
+def _dict_to_resp(snap: dict[str, Any], stats: dict[str, int]) -> GraphResp:
+    """KgGraphStore가 돌려주는 dict를 기존 응답 형태로 옮긴다.
+
+    M_19 스냅샷과 형태를 맞춰 두었으므로 프론트는 출처가 바뀐 줄 모른다.
+    """
+    return GraphResp(
+        nodes=[
+            GraphNodeResp(
+                id=n["id"], label=n["label"], kind=n["kind"], type=str(n.get("type") or "")
+            )
+            for n in snap.get("nodes", [])
+        ],
+        edges=[
+            GraphEdgeResp(
+                source=e["source"],
+                target=e["target"],
+                kind=e["kind"],
+                weight=float(e.get("weight") or 1.0),
+            )
+            for e in snap.get("edges", [])
+        ],
+        stats=stats,
+    )
+
+
 def _snapshot_to_resp(snap: Any, stats: dict[str, int]) -> GraphResp:
     return GraphResp(
         nodes=[GraphNodeResp(id=n.id, label=n.label, kind=n.kind, type=n.type) for n in snap.nodes],
@@ -85,11 +132,27 @@ def _snapshot_to_resp(snap: Any, stats: dict[str, int]) -> GraphResp:
 
 
 @router.get("/graph", response_model=GraphResp)
-async def get_graph(request: Request, limit: int = 500, types: str = "") -> GraphResp:
+async def get_graph(
+    request: Request, limit: int = 500, types: str = "", min_df: int = 2
+) -> GraphResp:
+    entity_types = [t.strip() for t in types.split(",") if t.strip()] or None
+
+    # CR-61: M_23 정규 엔티티 그래프가 적재돼 있으면 그쪽을 보여준다.
+    # min_df 기본 2 — 엔티티 207,674개를 다 그리면 아무것도 안 보인다(스펙 §5.2).
+    kg = _get_kg_store(request)
+    if kg is not None:
+        try:
+            snap = await run_in_threadpool(
+                kg.snapshot, limit=limit, entity_types=entity_types, min_df=min_df
+            )
+            stats = await run_in_threadpool(kg.graph_stats)
+            return _dict_to_resp(snap, stats)
+        except Exception as exc:
+            logger.error(f"M_23 /graph 실패 (키워드 경로 폴백): {exc}")
+
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
-    entity_types = [t.strip() for t in types.split(",") if t.strip()] or None
     try:
         snap = await svc.snapshot(limit=limit, entity_types=entity_types)
         stats = await svc.stats()
@@ -102,6 +165,15 @@ async def get_graph(request: Request, limit: int = 500, types: str = "") -> Grap
 @router.get("/doc-focus", response_model=GraphResp)
 async def get_doc_focus(request: Request, doc_id: str, limit: int = 40) -> GraphResp:
     """CR-37: 한 문서 중심 포커스 서브그래프 — 검색→선택 시 그 과제와 연결만 로드."""
+    kg = _get_kg_store(request)
+    if kg is not None:
+        try:
+            snap_d = await run_in_threadpool(kg.doc_focus_snapshot, doc_id, limit=max(limit, 60))
+            stats = await run_in_threadpool(kg.graph_stats)
+            return _dict_to_resp(snap_d, stats)
+        except Exception as exc:
+            logger.error(f"M_23 /doc-focus 실패 (키워드 경로 폴백): {exc}")
+
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
@@ -132,11 +204,35 @@ async def get_status(request: Request) -> StatusResp:
     )
 
 
+def _refuse_legacy_if_m23(request: Request, force: bool, what: str) -> None:
+    """M_23 그래프가 살아 있으면 구버전(M_19) 작업을 거부한다 (CR-61).
+
+    UI에서 버튼을 없앴지만 엔드포인트는 되돌릴 여지를 위해 남겨 뒀는데, **그것만으로는
+    부족했다.** 실제로 작업 중에 이 엔드포인트를 한 번 호출했다가 폐기한 Keyword 노드
+    163개가 되살아났다(E-92). UI를 지우는 것과 실행 경로를 막는 것은 다른 일이다.
+
+    되돌릴 필요가 생기면 `force_legacy: true`로 명시하면 된다.
+    """
+    if force:
+        logger.warning(f"구버전 {what} 강제 실행 (force_legacy) — Keyword 그래프가 생성됩니다")
+        return
+    if _get_kg_store(request) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"M_23 정규 엔티티 그래프가 이미 적재돼 있어 구버전 {what}을 거부합니다. "
+                "실행하면 폐기한 Keyword 노드가 되살아납니다. "
+                "정말 필요하면 force_legacy=true 로 호출하세요."
+            ),
+        )
+
+
 @router.post("/reindex", response_model=ReindexResp)
 async def reindex(request: Request, body: ReindexReq) -> ReindexResp:
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
+    _refuse_legacy_if_m23(request, body.force_legacy, "인덱싱")
     if body.doc_id:
         svc.schedule_index_document(body.doc_id)
         return ReindexResp(scheduled=True, count=1)
@@ -176,6 +272,18 @@ async def clear_graph(request: Request, body: ClearReq) -> ClearResp:
             status_code=422,
             detail=f"확인 문구가 일치하지 않습니다. 정확히 '{_CLEAR_CONFIRM_PHRASE}'를 입력하세요.",
         )
+    # CR-61: M_23이 적재돼 있으면 M_23을 아는 초기화를 쓴다.
+    # M_19의 clear_all은 Document·Chunk를 지우는데 그 둘은 M_23도 쓰므로, 그대로 두면
+    # Mention 216,509개가 고아가 된다 — 노드는 남고 연결만 끊긴 최악의 상태.
+    kg = _get_kg_store(request)
+    if kg is not None:
+        before = await run_in_threadpool(kg.clear_all)
+        logger.warning(
+            f"그래프 초기화 실행 (Neo4j 전용): {before} — "
+            "추출 후보(entity_candidates)는 보존됨. kg_build.py load 로 재적재 가능."
+        )
+        return ClearResp(ok=True, before=before)
+
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")
@@ -189,11 +297,13 @@ class NormalizeResp(BaseModel):
 
 
 class NormalizeReq(BaseModel):
-    only_new: bool = True  # CR-35: 아직 정규화 안 된 키워드만 (증분). False면 전체 재정규화
+    only_new: bool = True
+    force_legacy: bool = False  # CR-61: M_23 적재 상태에서 구버전 정규화 강행  # CR-35: 아직 정규화 안 된 키워드만 (증분). False면 전체 재정규화
 
 
 @router.post("/normalize", response_model=NormalizeResp)
 async def normalize(request: Request, body: NormalizeReq | None = None) -> NormalizeResp:
+    _refuse_legacy_if_m23(request, bool(body and body.force_legacy), "정규화")
     """CR-22/35: 키워드 정규화 — 표기 변형을 LLM 제안으로 묶어 normalized_term 갱신.
 
     기본은 증분(only_new=True) — 새로 인덱싱된 키워드만 기존 대표어에 붙인다.
@@ -214,7 +324,15 @@ class DocSearchResp(BaseModel):
 
 @router.get("/search-docs", response_model=DocSearchResp)
 async def search_docs(request: Request, q: str, limit: int = 20) -> DocSearchResp:
-    """CR-31: 제목·키워드로 과제(문서) 검색 — 키워드는 신호, 결과는 문서만."""
+    """CR-31: 제목·엔티티로 과제(문서) 검색 — 결과는 문서만."""
+    kg = _get_kg_store(request)
+    if kg is not None:
+        try:
+            docs = await run_in_threadpool(kg.search_documents, q, max(1, min(limit, 50)))
+            return DocSearchResp(docs=docs)
+        except Exception as exc:
+            logger.error(f"M_23 /search-docs 실패 (키워드 경로 폴백): {exc}")
+
     svc = _get_service(request)
     if not svc.available:
         raise HTTPException(status_code=503, detail="그래프 저장소(Neo4j) 연결 불가")

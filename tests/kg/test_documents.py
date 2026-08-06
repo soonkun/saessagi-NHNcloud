@@ -158,3 +158,60 @@ class TestChunkSelection:
         rows[2]["text"] = "제3장 연구수행 내용\n" + "세부 서술. " * 30
         picked = {c.chunk_id: c for c in select_chunks(rows, budget=5)}
         assert "연구수행 내용" in picked["c2"].section_hint
+
+
+class TestLowValueVetoDoesNotStarveDocuments:
+    """E-92 회귀 — 하드 제외가 문서를 통째로 비우면 안 된다.
+
+    2008~2014년 RFP는 한 쪽짜리라 머리글에 `총 연구비 : 130백만원`이 있고 **그 아래에
+    연구목표·연구내용이 이어진다.** 예전 규칙은 앞 200자의 저가치 패턴만 보고 통째로
+    버려서, 알맹이가 가득한 문서가 "COMPLETED · 후보 0건"으로 조용히 끝났다.
+    실측 RFP(2008-2009) 84% · RFP(2010-2014) 28%가 이렇게 비었다.
+    """
+
+    def test_budget_header_does_not_veto_research_content(self) -> None:
+        """예산 한 줄이 머리글에 있어도 연구 내용이 있으면 살려야 한다."""
+        text = (
+            "제안요청서(RFP)\n소과제명 감귤 등 겔 이용 의료용 신소재 개발\n"
+            "예산구분 총 연구비 : 130백만원\n"
+            "1. 연구목표\n○ 과실 발효물 gel이용 생체공학용 신소재 개발\n"
+            "2. 세부과제 연구내용\n○ 신균주 개발 및 효소 선발\n"
+        )
+        score, _hint = score_chunk(text)
+        assert score > EXCLUDED, "연구목표가 있는데 예산 머리글 때문에 제외됐다"
+        assert score > 0
+
+    def test_pure_budget_chunk_is_still_excluded(self) -> None:
+        """반대로 정말 예산표뿐이면 여전히 버려야 한다 — 규칙을 무력화한 게 아니다."""
+        text = "소요예산 내역\n항목 금액\n인건비 100\n재료비 50\n연구비 집행실적 정산\n"
+        score, _hint = score_chunk(text)
+        assert score == EXCLUDED
+
+    def test_single_chunk_document_is_never_starved(self) -> None:
+        """청크가 전부 제외돼도 최소 1개는 보낸다 — 안전망."""
+        rows = [
+            {
+                "chunk_id": "only",
+                "doc_id": "D1",
+                "page": 1,
+                "text": "참고문헌\n" + "Kim et al. (2020). " * 30,
+            }
+        ]
+        picked = select_chunks(rows, budget=8)
+        assert len(picked) == 1, "제외 규칙이 문서를 통째로 비웠다"
+        assert picked[0].chunk_id == "only"
+
+    def test_safety_net_prefers_longest_chunk(self) -> None:
+        """안전망이 고를 때는 본문일 확률이 높은 긴 청크를 택한다."""
+        rows = [
+            {"chunk_id": "short", "doc_id": "D1", "page": 1, "text": "목차\n1. 개요"},
+            {"chunk_id": "long", "doc_id": "D1", "page": 2, "text": "붙임\n" + "가나다라. " * 80},
+        ]
+        picked = select_chunks(rows, budget=8)
+        assert len(picked) == 1
+        assert picked[0].chunk_id == "long"
+
+    def test_empty_document_yields_nothing(self) -> None:
+        """내용이 없으면 안전망도 발동하지 않는다 — 빈 걸 LLM에 보낼 이유는 없다."""
+        rows = [{"chunk_id": "c0", "doc_id": "D1", "page": 1, "text": "   \n  "}]
+        assert select_chunks(rows, budget=8) == []

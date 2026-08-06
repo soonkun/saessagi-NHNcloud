@@ -100,11 +100,28 @@ def documents_in_folder(vstore: Any, folder_name: str) -> list[str]:
         names = ", ".join(f.get("name", "") for f in folders)
         raise SystemExit(f"폴더를 찾을 수 없습니다: {folder_name!r}\n사용 가능: {names}")
     fid = match[0]["folder_id"]
+    rows = scan_doc_categories(vstore)
+    return sorted({str(r["doc_id"]) for r in rows if str(r.get("category") or "") == fid})
+
+
+def scan_doc_categories(vstore: Any) -> list[dict[str, Any]]:
+    """(doc_id, category)를 **빠짐없이** 읽는다 (E-91).
+
+    상한을 상수로 박으면 코퍼스가 그 값을 넘는 순간 조용히 잘린다. 실제로 400,000 상한에
+    청크가 599,338개가 되면서 폴더 3개가 통째로 안 보였고 문서 5,953건이 추출에서 빠졌다.
+    """
     tbl = getattr(vstore, "_tbl", None)
     if tbl is None:
         return []
-    rows = tbl.search().select(["doc_id", "category"]).limit(400_000).to_list()
-    return sorted({str(r["doc_id"]) for r in rows if str(r.get("category") or "") == fid})
+    try:
+        total = int(tbl.count_rows())
+    except Exception:
+        total = 5_000_000
+    cap = total + 10_000
+    rows: list[dict[str, Any]] = tbl.search().select(["doc_id", "category"]).limit(cap).to_list()
+    if len(rows) >= cap:
+        print(f"경고: 폴더 스캔이 상한({cap})에 걸렸습니다 — 목록이 불완전할 수 있습니다.")
+    return rows
 
 
 def pick_documents(vstore: Any, folders: dict[str, Any], count: int, seed: int = 7) -> list[str]:
@@ -113,10 +130,7 @@ def pick_documents(vstore: Any, folders: dict[str, Any], count: int, seed: int =
     한쪽만 보면 문서 유형별 특성(계획 vs 실적)을 못 본다. 지침서가 "핵심 분석 대상은
     연구개발계획서와 완결보고서"라고 했으므로 둘 다 들어가야 검증이 성립한다.
     """
-    tbl = getattr(vstore, "_tbl", None)
-    if tbl is None:
-        return []
-    rows = tbl.search().select(["doc_id", "category"]).limit(400_000).to_list()
+    rows = scan_doc_categories(vstore)
     by_type: dict[str, set[str]] = {}
     for r in rows:
         doc_id = str(r.get("doc_id") or "")

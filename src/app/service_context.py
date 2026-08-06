@@ -63,6 +63,7 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         self.intent_classifier: Any = None  # IntentClassifier | None
         # M_19: GraphRagService 슬롯 (init_agent에서 조립 — 추출 LLM이 필요)
         self.graph_rag_service: Any = None  # GraphRagService | None
+        self.kg_graph_store: Any = None  # CR-61: kg.graph_store.KgGraphStore | None
         self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
         # M_20: DeepResearchService 슬롯 (init_agent에서 조립 — LLM·검색 서비스 필요)
         self.deep_research_service: Any = None  # DeepResearchService | None
@@ -514,7 +515,29 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     _extract_complete_json = _extract_agent.complete_json
                     _extract_label = f"openai({graphrag_cfg.extraction_openai_model})"
 
+                # CR-61: 그래프 검색을 M_23 정규 엔티티 그래프로 넘긴다.
+                # 같은 Neo4j 인스턴스를 쓰되 스키마가 달라 스토어를 따로 둔다.
+                # 조립에 실패해도 치명적이지 않다 — GraphRagService가 키워드 경로로 폴백한다.
+                _kg_retriever = None
+                try:
+                    from kg.graph_store import KgGraphStore
+                    from kg.retrieve import KgRetriever
+
+                    _kg_store = KgGraphStore(
+                        uri=graphrag_cfg.neo4j_uri,
+                        user=graphrag_cfg.neo4j_user,
+                        password=graphrag_cfg.neo4j_password,
+                        database=graphrag_cfg.neo4j_database,
+                    )
+                    _kg_retriever = KgRetriever(_kg_store)
+                    # 그래프 탭(graphrag_routes)이 스토어를 직접 쓴다 — 시각화·검색·초기화.
+                    self.kg_graph_store = _kg_store
+                    logger.info("CR-61: M_23 정규 엔티티 그래프 검색기·스토어 배선 완료")
+                except Exception as exc:
+                    logger.warning(f"M_23 검색기 조립 실패 (키워드 경로 폴백): {exc!r}")
+
                 self.graph_rag_service = GraphRagService(
+                    kg_retriever=_kg_retriever,
                     graph_store=_graph_store,
                     vector_store=_vstore,
                     extractor=EntityExtractor(
@@ -605,11 +628,14 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                     key = _dr_mode_to_key.get(mode)
                     return _prompt_provider().get(key, "") if key else ""
 
+                _dr_cfg = getattr(self.app_config, "deep_research", None)
                 self.deep_research_service = DeepResearchService(
                     agent=_dr_agent,
                     rag_service=self.rag_service,
                     graph_rag_service=self.graph_rag_service,
                     prompt_provider=_dr_prompt_provider,
+                    max_queue_size=getattr(_dr_cfg, "max_queue_size", 5),
+                    max_queue_wait_seconds=getattr(_dr_cfg, "max_queue_wait_seconds", 900.0),
                 )
                 logger.info(
                     "AppServiceContext.init_agent: DeepResearchService 배선 완료 "
@@ -836,13 +862,33 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
 
                 kg_cfg = getattr(app_config, "knowledge_graph", None) or KnowledgeGraphConfig()
                 if kg_cfg.enabled:
+                    # CR-61: 추출이 끝나면 구축까지 자동으로 이으려면 서비스가 Neo4j
+                    # 스토어를 스스로 만들 수 있어야 한다. 10시간짜리 추출이 새벽에
+                    # 끝나도 아침에 그래프가 준비돼 있게 하는 장치다.
+                    _g = getattr(app_config, "graphrag", None)
+
+                    def _kg_store_factory() -> Any:
+                        from kg.graph_store import KgGraphStore
+
+                        if _g is None:
+                            raise RuntimeError(
+                                "graphrag 설정이 없어 Neo4j 스토어를 만들 수 없습니다"
+                            )
+                        return KgGraphStore(
+                            uri=_g.neo4j_uri,
+                            user=_g.neo4j_user,
+                            password=os.environ.get("SAESSAGI_NEO4J_PASSWORD") or _g.neo4j_password,
+                            database=_g.neo4j_database,
+                        )
+
                     self.kg_service = KnowledgeGraphService(
                         config=kg_cfg,
                         vector_store=store,
                         ollama_base_url=str(app_config.ollama.base_url),
                         root=_Path(os.environ.get("SAESSAGI_ROOT", ".")),
+                        graph_store_factory=_kg_store_factory if _g is not None else None,
                     )
-                    logger.info("M_23 KnowledgeGraphService 배선 완료")
+                    logger.info("M_23 KnowledgeGraphService 배선 완료 (추출→구축 자동 연결 가능)")
             except Exception as exc:
                 logger.warning(f"M_23 KnowledgeGraphService 배선 실패 (기능 비활성): {exc!r}")
                 self.kg_service = None

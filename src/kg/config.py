@@ -140,26 +140,152 @@ class KgNormalizationConfig(BaseModel):
         description="작물·품종·병해충·지역이 다르면 병합 금지 (사과 육종 ≠ 복숭아 육종).",
     )
     llm_adjudication: bool = Field(
-        default=True, description="규칙 통과 후보에 대해 LLM 동일성 판정을 수행."
+        default=False,
+        description=(
+            "규칙 통과 후보에 대해 LLM 동일성 판정을 수행. **기본 False** — 실측(스펙 §4.1-A) "
+            "결과 규칙 퍼지 병합의 효과가 0.5%였고, 남은 쌍은 애초에 병합하면 안 되는 것들이다. "
+            "LLM을 얹으면 얻는 것 없이 False Merge 위험만 커진다. 8단계 관계추출과 함께 재검토."
+        ),
+    )
+
+    fuzzy_enabled: bool = Field(
+        default=True,
+        description=(
+            "정확일치 후 토큰 블로킹 퍼지 병합 수행 여부. 실측 효과는 0.5%(39,795→39,601)라 "
+            "꺼도 결과가 거의 같다. 대량 재실행에서 시간을 아끼려면 끈다."
+        ),
+    )
+    blocking_max_document_frequency: int = Field(
+        default=2000,
+        ge=1,
+        description=(
+            "이보다 많은 엔티티에 등장하는 토큰은 블로킹 색인에서 제외한다. '이용한'·'통한' "
+            "같은 토큰이 후보군을 통째로 끌어와 비교가 O(n²)이 되는 것을 막는다."
+        ),
+    )
+    max_block_candidates: int = Field(
+        default=50,
+        ge=1,
+        description="한 항목이 비교해 볼 대표 수 상한. 공유 토큰이 많은 순으로 자른다.",
+    )
+    max_members_per_canonical: int = Field(
+        default=50,
+        ge=2,
+        description=(
+            "**블롭 감시.** 한 정규 엔티티가 이보다 많은 표기를 흡수하면 더 받지 않고 "
+            "REVIEW_REQUIRED로 보낸다. CR-36에서 union-find 연쇄가 3만 용어를 208개 blob으로 "
+            "붕괴시킨 전례가 있다 — 그 실패를 조기에 감지하는 장치다."
+        ),
+    )
+    max_aliases_stored: int = Field(
+        default=20, ge=1, description="정규 엔티티당 보관할 별칭 수 상한 (빈도 높은 순)."
     )
 
 
+# entity_type → Project 관계 1:1 사상 (스펙 §4.1-B).
+# 유형 7종이 스펙 §5.2의 Project 관계 7종과 정확히 맞아떨어진다. 관계를 LLM으로 다시
+# 뽑을 이유가 없다 — 청크 28,976개 재호출(20~30시간)을 이 표 하나가 대신한다.
+ENTITY_TYPE_TO_RELATION: dict[str, str] = {
+    "RESEARCH_PROBLEM": "HAS_PROBLEM",
+    "OBJECTIVE": "HAS_OBJECTIVE",
+    "RESEARCH_TARGET": "TARGETS",
+    "TECHNOLOGY": "USES_TECHNOLOGY",
+    "METHOD": "USES_METHOD",
+    "DATASET": "USES_DATASET",
+    "OUTPUT": "PRODUCES",
+}
+
+# 엔티티 유형 → Neo4j 라벨 (스펙 §5.2)
+ENTITY_TYPE_TO_LABEL: dict[str, str] = {
+    "RESEARCH_PROBLEM": "ResearchProblem",
+    "OBJECTIVE": "ResearchObjective",
+    "RESEARCH_TARGET": "ResearchTarget",
+    "TECHNOLOGY": "Technology",
+    "METHOD": "Method",
+    "DATASET": "Dataset",
+    "OUTPUT": "Output",
+}
+
+# 문서유형 → derived_status 사전확률 (스펙 §5.3).
+# RFP는 정의상 "앞으로 할 일", 완결보고서는 "한 일". 이 경계까지만 정확하고
+# 완결보고서 **안에서** 계획과 실적을 가르지는 못한다 — 그건 재추출로만 얻는다.
+DOC_TYPE_TO_STATUS: dict[str, str] = {
+    "RFP": "REQUIREMENT",
+    "FINAL_REPORT": "ACTUAL",
+}
+
+
 class KgRelationConfig(BaseModel):
-    """관계 추출 — 검증된 엔티티 목록 안에서만."""
+    """관계 유도 — 검증된 엔티티 목록 안에서만. v2는 LLM을 쓰지 않는다."""
 
     enabled: bool = Field(default=True)
     max_relations_per_chunk: int = Field(default=10, ge=1)
     minimum_confidence: float = Field(default=0.70, ge=0.0, le=1.0)
     enabled_relation_types: list[str] = Field(default_factory=lambda: list(DEFAULT_RELATION_TYPES))
 
+    derive_from_entity_type: bool = Field(
+        default=True,
+        description=(
+            "entity_type→관계 1:1 사상으로 Project 집계 엣지를 만든다 (LLM 없음, 스펙 §4.1-B)."
+        ),
+    )
+    link_target_key: bool = Field(
+        default=True,
+        description=(
+            "target_key를 RESEARCH_TARGET 정규 엔티티로 승격하고 APPLIED_TO로 잇는다. "
+            "엔티티의 91.5%가 단일 문서 전용이라(스펙 §4.1-C) 이 엣지가 없으면 그래프가 "
+            "'별들의 숲'이 된다 — CR-34에서 이미 한 번 실패한 구조다."
+        ),
+    )
+    derive_statement_status: bool = Field(
+        default=True,
+        description="statement_status가 UNCERTAIN이면 문서유형에서 유도 (스펙 §5.3).",
+    )
+
 
 class KgGraphConfig(BaseModel):
     """Neo4j 적재."""
 
-    batch_size: int = Field(default=500, ge=1)
+    batch_size: int = Field(default=1000, ge=1)
     create_mentions: bool = Field(default=True)
     create_project_aggregates: bool = Field(default=True)
     preserve_relation_evidence: bool = Field(default=True)
+
+    # ── 연결성·잡음 제어 (스펙 §4.1-C) ──────────────────────────────────────
+    boilerplate_document_frequency: int = Field(
+        default=60,
+        ge=2,
+        description=(
+            "이보다 많은 문서에 등장하는 엔티티는 is_boilerplate로 표시한다. 실측 최상위는 "
+            "'산업재산권 출원' 206문서·'학술발표' 139 등 전부 행정 상용구였다. "
+            "**삭제가 아니라 표시**다 — 코퍼스가 늘면 판정이 달라져야 하므로 하드코딩하지 않는다."
+        ),
+    )
+    shares_entity_enabled: bool = Field(
+        default=True, description="문서↔문서 SHARES_ENTITY 가중 엣지 파생 (중복성 분석의 본체)."
+    )
+    shares_entity_max_fanout: int = Field(
+        default=15,
+        ge=2,
+        description=(
+            "이보다 많은 문서가 공유하는 엔티티는 문서-문서 엣지 계산에서 뺀다. M_19의 "
+            "_RELATED_MAX_FANOUT과 같은 IDF 발상 — 상용구 허브가 만드는 가짜 유사도를 막는다."
+        ),
+    )
+    shares_entity_min_weight: float = Field(
+        default=2.0, ge=0.0, description="이 미만 가중치의 문서-문서 엣지는 만들지 않는다."
+    )
+    shares_entity_max_edges: int = Field(
+        default=200000, ge=1, description="문서-문서 엣지 총량 상한 (가중치 큰 순 유지)."
+    )
+    visualization_min_document_frequency: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "그래프 탭 기본 뷰에 그릴 최소 df. 174,985개를 다 그리면 아무것도 안 보인다. "
+            "노드를 지우는 것이 아니라 기본 뷰에서 감추는 것이다."
+        ),
+    )
 
 
 class KgJobConfig(BaseModel):

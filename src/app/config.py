@@ -273,6 +273,17 @@ class RagWatchConfig(BaseModel):
             "문서가 몇 건뿐일 때 비율 가드가 정상 삭제까지 막는 것을 방지."
         ),
     )
+    max_ingest_failures: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "한 파일이 이 횟수만큼 연속 실패하면 인제스트를 포기한다 (E-91). "
+            "실패한 파일은 상태에 남지 않아 매 주기 '신규'로 되돌아오므로, 이 한도가 없으면 "
+            "영구 실패 파일(예: 텍스트 레이어 없는 스캔 PDF)이 max_per_cycle 정원을 전부 "
+            "차지해 정상 파일이 무기한 밀린다. 포기 목록과 사유는 상태 파일의 failures에 "
+            "기록되고, 파일 내용이 바뀌면 자동으로 다시 시도한다. 0이면 한도 없음(권장하지 않음)."
+        ),
+    )
 
 
 class DeepResearchConfig(BaseModel):
@@ -294,6 +305,20 @@ class DeepResearchConfig(BaseModel):
         description="provider=ollama일 때 사용할 모델 태그 (예: mistral-medium-3.5:128b).",
     )
     openai_model: str = Field(default="gpt-4o", description="provider=openai일 때 사용할 모델.")
+    max_queue_size: int = Field(
+        default=5,
+        ge=0,
+        description=(
+            "딥 리서치 대기열 최대 길이 (CR-61). 딥 리서치는 큰 모델로 수 분간 GPU를 쓰므로 "
+            "동시에 하나만 돌린다. 겹쳐 들어온 요청은 거절 대신 줄을 세운다. "
+            "0이면 대기 없이 즉시 거절(예전 동작)."
+        ),
+    )
+    max_queue_wait_seconds: float = Field(
+        default=900.0,
+        ge=0,
+        description="대기 상한. 이 시간을 넘기면 기다리기를 포기하고 안내한다.",
+    )
     keep_alive_seconds: int = Field(
         default=1800,
         ge=0,

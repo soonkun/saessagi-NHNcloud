@@ -200,14 +200,25 @@ def score_chunk(text: str) -> tuple[float, str]:
         return EXCLUDED, ""
 
     lowered = body.lower()
-    for bad in _LOW_VALUE_PATTERNS:
-        if bad.lower() in lowered[:200]:
-            return EXCLUDED, ""
 
     score = 0.0
     for token, weight in _HIGH_VALUE_PATTERNS:
         if token in body:
             score += weight
+
+    # 하드 제외는 **연구 내용이 전혀 없을 때만** 적용한다 (E-92).
+    #
+    # 예전에는 앞 200자에 저가치 패턴이 하나라도 있으면 무조건 버렸다. 그런데 2008~2014년
+    # RFP는 한 쪽짜리라 머리글에 `총 연구비 : 130백만원`이 있고 **바로 아래에 연구목표·
+    # 연구내용이 이어진다.** 그래서 알맹이가 가득한 청크가 '예산 표'로 오인돼 통째로
+    # 버려졌다 — 실측 RFP(2008-2009) 84%, RFP(2010-2014) 28%가 이렇게 0청크가 됐다.
+    #
+    # 저가치 패턴의 취지는 "참고문헌·예산표처럼 건질 게 없는 자리"를 거르는 것이지
+    # "예산 숫자가 한 줄 섞인 본문"을 버리는 것이 아니다. 고가치 신호가 있으면 살린다.
+    if score <= 0:
+        for bad in _LOW_VALUE_PATTERNS:
+            if bad.lower() in lowered[:200]:
+                return EXCLUDED, ""
 
     # 너무 짧은 청크는 표지·목차 조각일 확률이 높다.
     length = len(body.strip())
@@ -272,6 +283,24 @@ def select_chunks(rows: list[dict[str, Any]], budget: int) -> list[ScoredChunk]:
         filler = [c for c in scored if c.chunk_id not in picked_ids and c.score > EXCLUDED]
         filler.sort(key=lambda c: (-c.score, c.page or 0, c.chunk_id))
         picked.extend(filler[: budget - len(picked)])
+
+    # **최후의 안전망 — 문서 하나가 통째로 0청크가 되게 두지 않는다** (E-92).
+    #
+    # 하드 제외가 전부 걸리면 그 문서는 LLM을 한 번도 못 보고 "COMPLETED · 후보 0건"으로
+    # 끝난다. 오류도 경고도 없어서 눈에 띄지 않는다 — 실제로 그렇게 수백 건이 조용히
+    # 비었다. 제외 규칙이 틀릴 수 있다는 것을 전제하고, 내용이 있는 문서라면 최소 한
+    # 조각은 반드시 보낸다. 규칙이 맞았다면 검증 단계가 걸러 줄 것이고, 그건 싸다.
+    if not picked:
+        fallback = [c for c in scored if c.text.strip()]
+        if fallback:
+            # 길수록 본문일 확률이 높다. 동점이면 앞 페이지.
+            fallback.sort(key=lambda c: (-len(c.text), c.page or 0, c.chunk_id))
+            picked = fallback[:1]
+            logger.info(
+                "청크 선별: 전부 제외돼 안전망으로 1개 복구 (doc=%s, page=%s)",
+                picked[0].doc_id[:60],
+                picked[0].page,
+            )
 
     picked.sort(key=lambda c: (c.page or 0, c.chunk_id))
     return picked[:budget]

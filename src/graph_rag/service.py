@@ -64,6 +64,7 @@ class GraphRagService:
         max_hops: int = 2,
         evidence_buffer: int = 5,
         embedder: Any = None,  # CR-36: 대규모 정규화용 임베더 (없으면 LLM 경로 폴백)
+        kg_retriever: Any = None,  # CR-61: kg.retrieve.KgRetriever
     ) -> None:
         self._graph = graph_store
         self._vstore = vector_store
@@ -71,6 +72,9 @@ class GraphRagService:
         self._rag = rag_service
         self._embedder = embedder
         self._max_hops = max_hops
+        # CR-61: 그래프 검색을 M_23 정규 엔티티 그래프로 넘긴다. 주입돼 있으면 이쪽이
+        # 우선이고, 없으면 M_19 키워드 경로로 폴백한다(구축 전이거나 Neo4j가 죽은 경우).
+        self._kg = kg_retriever
 
         self._statuses: dict[str, IndexStatus] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
@@ -574,10 +578,18 @@ class GraphRagService:
     async def graph_retrieve(
         self, query: str, top_k: int = 5
     ) -> tuple[list[SearchHit], EvidenceSubgraph | None]:
-        """CR-30 그래프 탐색: 질의 용어 → 키워드 매칭 → 소속 과제(문서) → 대표 청크.
+        """그래프 탐색 → 문서 → 대표 청크.
 
-        문서는 매칭된 키워드 수·confidence로 랭킹한다.
+        CR-61 이후 기본 경로는 M_23 정규 엔티티 그래프다(`_kg`). 키워드 경로는 M_23
+        그래프가 아직 구축되지 않았거나 조회에 실패했을 때만 쓰인다 — 키워드는 문서
+        스코프라 문서를 가로지르는 신호가 원리적으로 없다(CR-34).
         """
+        if self._kg is not None:
+            hits, evidence = await self._kg_retrieve(query, top_k)
+            if hits:
+                return hits, evidence
+            # 빈 결과면 키워드 경로로 한 번 더 시도한다 (구축 이행기 안전장치).
+
         terms = _TERM_RE.findall(query or "")
         if not terms:
             return [], None
@@ -651,6 +663,39 @@ class GraphRagService:
             len(hits),
             (query or "")[:50],
         )
+        return hits, evidence
+
+    async def _kg_retrieve(
+        self, query: str, top_k: int
+    ) -> tuple[list[SearchHit], EvidenceSubgraph | None]:
+        """M_23 정규 엔티티 그래프 경로 (CR-61).
+
+        `_row_to_hit`을 재사용한다 — LanceDB row → SearchHit 변환이 두 곳에 생기면
+        한쪽만 고쳐지는 사고가 난다.
+        """
+        try:
+            rows, matches = await self._kg.retrieve(query, self._vstore, top_k=top_k)
+        except Exception as exc:
+            self._warn_fallback(f"M_23 그래프 질의 실패: {exc}")
+            return [], None
+        if not rows:
+            return [], None
+
+        hits = [_row_to_hit(row, float(row.get("_kg_score") or _GRAPH_SCORE_MIN)) for row in rows]
+        evidence: EvidenceSubgraph | None = None
+        try:
+            from kg.retrieve import evidence_payload
+
+            payload = evidence_payload(query, matches, [h.chunk_id for h in hits])
+            evidence = EvidenceSubgraph(
+                query=payload["query"],
+                created=payload["created"],
+                nodes=[GraphNode(**n) for n in payload["nodes"]],
+                edges=[GraphEdge(**e) for e in payload["edges"]],
+                chunk_ids=payload["chunk_ids"],
+            )
+        except Exception as exc:
+            logger.debug("M_23 근거 서브그래프 조립 실패 (무시): %s", exc)
         return hits, evidence
 
     async def hybrid_retrieve(

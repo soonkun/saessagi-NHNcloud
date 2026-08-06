@@ -41,6 +41,8 @@ _SYNTHESIS_TIMEOUT = 600.0
 # 보고서 생성 중 "아직 살아 있다"를 알리는 간격. 너무 잦으면 로그·네트워크만 시끄럽고,
 # 너무 뜸하면 화면이 멈춘 것처럼 보인다.
 _SYNTHESIS_TICK_SEC = 10.0
+# 대기 중 "아직 줄 서 있다"를 알리는 간격.
+_QUEUE_TICK_SEC = 5.0
 _SYNTHESIS_MAX_TOKENS = 4096
 
 
@@ -78,11 +80,18 @@ class DeepResearchService:
         rag_service: Any,  # vector_search.RagService (순환 의존 회피용 Any)
         graph_rag_service: Any = None,  # GraphRagService | None
         prompt_provider: "Callable[[str], str] | None" = None,
+        max_queue_size: int = 5,
+        max_queue_wait_seconds: float = 900.0,
     ) -> None:
         self._agent = agent
         self._rag = rag_service
         self._graph_rag = graph_rag_service
         self._lock = asyncio.Lock()
+        # 대기열 깊이. 잠금 자체는 순서를 보장하지 않지만, 몇 명이 기다리는지는
+        # 사용자에게 알려 줘야 한다.
+        self._waiting = 0
+        self._max_queue_size = max_queue_size
+        self._max_queue_wait = max_queue_wait_seconds
         # M_17 연동 (CR-44): mode("duplication"/"discovery"/"proposal") → 커스텀 지침
         # raw 텍스트(빈 문자열 = 미설정). 호출 시점 lazy 조회라 지침 저장 즉시 다음
         # 실행부터 반영되고, agent 재초기화가 필요 없다.
@@ -137,13 +146,6 @@ class DeepResearchService:
                 "message": f"입력이 길어 앞 {_MAX_INPUT_CHARS:,}자만 사용합니다.",
             }
 
-        if self._lock.locked():
-            yield {
-                "stage": "error",
-                "message": "이미 딥 리서치가 진행 중입니다. 완료 후 다시 시도해 주세요.",
-            }
-            return
-
         scope = {s for s in (scope_doc_ids or []) if s}
         if scope:
             yield {
@@ -151,9 +153,76 @@ class DeepResearchService:
                 "message": f"검색 범위를 지정 문서 {len(scope)}건으로 제한합니다.",
             }
 
-        async with self._lock:
+        # 동시 실행은 하나로 묶되, 겹친 요청은 **거절하지 않고 줄을 세운다** (CR-61).
+        # 여러 사람이 같이 쓰는 상황에서 "이미 진행 중"만 뱉으면 언제 다시 눌러야 할지
+        # 알 수 없고, 그냥 실패로 보인다.
+        if self._lock.locked():
+            if self._max_queue_size <= 0:
+                yield {
+                    "stage": "error",
+                    "message": "이미 딥 리서치가 진행 중입니다. 완료 후 다시 시도해 주세요.",
+                }
+                return
+            if self._waiting >= self._max_queue_size:
+                yield {
+                    "stage": "error",
+                    "message": (
+                        f"대기열이 가득 찼습니다(최대 {self._max_queue_size}건). "
+                        "잠시 후 다시 시도해 주세요."
+                    ),
+                }
+                return
+
+        acquired = False
+        self._waiting += 1
+        position = self._waiting
+        try:
+            if self._lock.locked():
+                yield {
+                    "stage": "queued",
+                    "position": position,
+                    "message": (
+                        f"다른 리서치가 진행 중입니다. 대기 {position}번째 — "
+                        "차례가 되면 자동으로 시작합니다."
+                    ),
+                }
+            waited = 0.0
+            while True:
+                try:
+                    await asyncio.wait_for(self._lock.acquire(), timeout=_QUEUE_TICK_SEC)
+                    acquired = True
+                    break
+                except (TimeoutError, asyncio.TimeoutError):
+                    waited += _QUEUE_TICK_SEC
+                    if waited >= self._max_queue_wait:
+                        yield {
+                            "stage": "error",
+                            "message": (
+                                f"앞선 리서치가 {int(waited / 60)}분 넘게 끝나지 않아 "
+                                "기다리기를 멈췄습니다. 잠시 후 다시 시도해 주세요."
+                            ),
+                        }
+                        return
+                    # 살아 있다는 신호 — 없으면 화면이 멈춘 것처럼 보인다.
+                    yield {
+                        "stage": "queued",
+                        "position": position,
+                        "elapsed_seconds": int(waited),
+                        "message": f"대기 중… {int(waited)}초 경과 (대기 {position}번째)",
+                    }
+        finally:
+            self._waiting -= 1
+
+        try:
+            # 줄을 섰던 경우에만 알린다. 바로 시작한 요청에까지 안내를 붙이면
+            # 기존 이벤트 순서(planning이 첫 이벤트)가 깨진다.
+            if position > 1:
+                yield {"stage": "notice", "message": "차례가 되어 시작합니다."}
             async for event in self._run_pipeline(mode, user_input, scope or None):
                 yield event
+        finally:
+            if acquired:
+                self._lock.release()
 
     async def _run_pipeline(
         self, mode: str, user_input: str, scope: set[str] | None = None

@@ -4,51 +4,83 @@
 //        문서 상세/다운로드 패널, 시뮬레이션 안정화.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
-import {
-  FileText,
-  ExternalLink,
-  Network,
-  Pin,
-  PinOff,
-  RefreshCw,
-  Search,
-  Telescope,
-  X,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, ExternalLink, FileText, Network, Pin, PinOff, Search, Telescope, X } from "lucide-react";
 import type { GraphRagData, GraphRagEvidence, GraphRagStatus, GraphRagNode } from "../types";
 import {
-  cancelGraphIndexing,
   clearGraph,
   fetchGraphEvidence,
   fetchGraphDocFocus,
   fetchGraphRag,
   fetchGraphRagStatus,
   openDocument,
-  requestGraphNormalize,
-  requestGraphReindex,
   searchGraphDocs,
   type GraphDocMatch,
 } from "../services/api";
 import { useStore } from "../store";
 import { KgExtractionPanel } from "./KgExtractionPanel";
 
-// CR-30: 키워드 역할별 팔레트 (다크/라이트 공용)
+// CR-61: M_23 정규 엔티티 유형별 팔레트 (다크/라이트 공용).
+// CR-30의 키워드 역할 4종을 대체한다 — 이제 그래프는 문서 스코프 키워드가 아니라
+// 코퍼스 전역에서 정규화된 엔티티다.
 const TYPE_COLORS: Record<string, string> = {
-  research_target: "#56b380", // 연구대상
-  technology: "#5f8fe0", // 기술
-  problem: "#e07a5f", // 문제
-  outcome: "#d8a44f", // 산출물
+  RESEARCH_TARGET: "#56b380", // 연구대상 (작물·병해충 — 대개 허브 노드)
+  TECHNOLOGY: "#5f8fe0", // 기술
+  METHOD: "#7f6fd0", // 방법
+  OBJECTIVE: "#4fb3c4", // 목표
+  RESEARCH_PROBLEM: "#e07a5f", // 연구문제
+  OUTPUT: "#d8a44f", // 산출물
+  DATASET: "#b06fa8", // 데이터
+  // CR-30 키워드 역할 — 구축 전 폴백 화면에서만 쓰인다.
+  research_target: "#56b380",
+  technology: "#5f8fe0",
+  problem: "#e07a5f",
+  outcome: "#d8a44f",
 };
 
 const ROLE_LABELS: Record<string, string> = {
+  RESEARCH_TARGET: "연구대상",
+  TECHNOLOGY: "기술",
+  METHOD: "방법",
+  OBJECTIVE: "목표",
+  RESEARCH_PROBLEM: "연구문제",
+  OUTPUT: "산출물",
+  DATASET: "데이터",
   research_target: "연구대상",
   technology: "기술",
   problem: "문제",
   outcome: "산출물",
 };
 
-const ENTITY_TYPES = ["research_target", "technology", "problem", "outcome"];
+const ENTITY_TYPES = [
+  "RESEARCH_TARGET",
+  "TECHNOLOGY",
+  "METHOD",
+  "OBJECTIVE",
+  "RESEARCH_PROBLEM",
+  "OUTPUT",
+  "DATASET",
+];
 const FALLBACK_COLOR = "#9aa0ab";
+
+// 관리 패널 펼침 상태. 그래프 탭 전용이라 zustand가 아니라 컴포넌트 로컬 + localStorage로
+// 둔다(store.ts 주석: 두 트리에서 마운트되는 것만 전역). 키 접두사는 기존 관례 saessagi_.
+const ADMIN_OPEN_KEY = "saessagi_graph_admin_open";
+
+function loadAdminOpen(): boolean {
+  try {
+    return localStorage.getItem(ADMIN_OPEN_KEY) === "1";
+  } catch {
+    return false; // localStorage 불가 환경 무시 — 기본은 접힘(그래프가 우선)
+  }
+}
+
+function saveAdminOpen(open: boolean): void {
+  try {
+    localStorage.setItem(ADMIN_OPEN_KEY, open ? "1" : "0");
+  } catch {
+    /* localStorage 불가 환경 무시 */
+  }
+}
 
 interface RFNode extends GraphRagNode {
   degree: number;
@@ -70,23 +102,6 @@ function readCssVar(name: string): string {
 }
 
 // CR-35: 상단 컨트롤 바 버튼 스타일 — primary(증분)는 액센트 강조, 보조(전체)는 평범
-function barBtn(disabled: boolean, primary: boolean, accent: string, isDark: boolean): React.CSSProperties {
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 4,
-    fontSize: "var(--fs-11)",
-    padding: "3px 8px",
-    borderRadius: 6,
-    border: `1px solid ${primary ? accent : "var(--color-border)"}`,
-    background: primary ? accent + (isDark ? "22" : "14") : "var(--color-bg)",
-    color: "var(--color-text)",
-    cursor: disabled ? "not-allowed" : "pointer",
-    fontFamily: "inherit",
-    opacity: disabled ? 0.5 : 1,
-  };
-}
-
 // hex(#rrggbb) 색을 흰색과 amt(0~1)만큼 혼합 — 노드 그라디언트용
 function lighten(hex: string, amt: number): string {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
@@ -129,14 +144,23 @@ export default function GraphRagView(): React.ReactElement {
   const [evidence, setEvidence] = useState<GraphRagEvidence | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [selected, setSelected] = useState<RFNode | null>(null);
-  const [reindexing, setReindexing] = useState(false);
   const [search, setSearch] = useState("");
   const [docMatches, setDocMatches] = useState<GraphDocMatch[]>([]);
   // CR-37: 검색→선택 시 그 문서 중심 포커스 서브그래프로 교체 (전체 스냅샷 상한 우회)
   const [focusDocId, setFocusDocId] = useState<string | null>(null);
   const pendingFocusRef = useRef<string | null>(null);
-  const [normalizing, setNormalizing] = useState(false);
   const [normResult, setNormResult] = useState<string>("");
+  // 기본 접힘 — 사용자가 그래프 탭에서 보고 싶은 것은 그래프다 (CR-61).
+  const [adminOpen, setAdminOpenState] = useState<boolean>(loadAdminOpen);
+  // 접힌 상태에서도 진행 상황이 보이도록 패널이 올려주는 한 줄 요약.
+  const [adminSummary, setAdminSummary] = useState<string>("");
+  const setAdminOpen = useCallback((update: (v: boolean) => boolean) => {
+    setAdminOpenState((prev) => {
+      const next = update(prev);
+      saveAdminOpen(next);
+      return next;
+    });
+  }, []);
   // CR-26: 초기화 확인 모달
   const [clearModalOpen, setClearModalOpen] = useState(false);
   const [clearConfirmText, setClearConfirmText] = useState("");
@@ -170,15 +194,6 @@ export default function GraphRagView(): React.ReactElement {
   useEffect(() => {
     if (chatTab === "graph") void load();
   }, [chatTab, load]);
-
-  // 인덱싱 진행 중이면 3초 폴링
-  const hasActiveIndexing =
-    status?.indexing.some((i) => i.state === "pending" || i.state === "running") ?? false;
-  useEffect(() => {
-    if (chatTab !== "graph" || !hasActiveIndexing) return;
-    const t = setInterval(() => void load(), 3000);
-    return () => clearInterval(t);
-  }, [chatTab, hasActiveIndexing, load]);
 
   // 근거 하이라이트 요청 (채팅 "근거 그래프" 버튼)
   useEffect(() => {
@@ -501,52 +516,6 @@ export default function GraphRagView(): React.ReactElement {
   }, [search]);
 
   // CR-22/35: 키워드 정규화 — 기본은 증분(새 키워드만), onlyNew=false면 전체 재정규화
-  const handleNormalize = useCallback(
-    (onlyNew: boolean) => {
-      const msg = onlyNew
-        ? "새로 인덱싱된 키워드의 표기 변형만 기존 대표어에 맞춰 정규화합니다. 진행할까요?"
-        : "전체 키워드를 대상으로 표기 변형을 다시 묶습니다(비용 큼). 진행할까요?";
-      if (!window.confirm(msg)) return;
-      setNormalizing(true);
-      setNormResult("");
-      void requestGraphNormalize(onlyNew)
-        .then((r) => {
-          setNormResult(
-            r.merged === 0
-              ? onlyNew
-                ? "새로 정규화할 키워드가 없습니다."
-                : "병합할 표기 변형이 없습니다."
-              : `${r.groups.length}개 그룹, ${r.merged}개 갱신: ${r.groups.map((g) => g.join("=")).join(", ")}`
-          );
-          return load();
-        })
-        .catch((e) => setNormResult(`정규화 실패: ${e instanceof Error ? e.message : String(e)}`))
-        .finally(() => setNormalizing(false));
-    },
-    [load]
-  );
-
-  // CR-35: 그래프 인덱싱 — onlyMissing=true면 그래프에 없는 문서만(증분), false면 전체
-  const handleReindex = useCallback(
-    (onlyMissing: boolean) => {
-      setReindexing(true);
-      void requestGraphReindex(undefined, onlyMissing)
-        .then((r) => {
-          setNormResult(
-            onlyMissing
-              ? r.count === 0
-                ? "새로 인덱싱할 문서가 없습니다 (모두 인덱싱됨)."
-                : `새 문서 ${r.count}건 인덱싱 시작`
-              : `전체 ${r.count}건 재인덱싱 시작`
-          );
-          return load();
-        })
-        .catch((e) => setNormResult(`인덱싱 실패: ${e instanceof Error ? e.message : String(e)}`))
-        .finally(() => setReindexing(false));
-    },
-    [load]
-  );
-
   // 선택 노드의 연결 목록 (패널용) — degree 높은 순, 문서·노트 우선
   const selectedConnections = useMemo(() => {
     if (!selected) return [];
@@ -583,8 +552,25 @@ export default function GraphRagView(): React.ReactElement {
         }}
       >
         <Network size={14} style={{ color: "var(--color-accent)" }} />
+        {/* CR-61: M_23 스키마의 키로 표시한다. 옛 키(keywords·notes)를 그대로 두면
+            Keyword 그래프를 폐기한 뒤 "과제 0 · 키워드 0"으로 보여 그래프가 비어 있는
+            것처럼 오인된다 — 실제로는 엔티티 20만 개가 들어 있다. */}
         <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>
-          과제 {stats.documents ?? 0} · 키워드 {stats.keywords ?? 0} · 노트 {stats.notes ?? 0}
+          {stats.CanonicalEntity != null ? (
+            <>
+              과제 {(stats.Project ?? 0).toLocaleString()} · 엔티티{" "}
+              {(stats.CanonicalEntity ?? 0).toLocaleString()}
+              {stats.shared_entities != null && (
+                <> (공유 {stats.shared_entities.toLocaleString()})</>
+              )}{" "}
+              · 근거 {(stats.Mention ?? 0).toLocaleString()}
+            </>
+          ) : (
+            <>
+              과제 {stats.documents ?? 0} · 키워드 {stats.keywords ?? 0} · 노트{" "}
+              {stats.notes ?? 0}
+            </>
+          )}
         </span>
 
         {ENTITY_TYPES.map((t) => {
@@ -769,79 +755,71 @@ export default function GraphRagView(): React.ReactElement {
               <PinOff size={11} />핀 {pinnedCount}개 모두 해제
             </button>
           )}
-          {hasActiveIndexing && (
-            <>
-              <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>
-                인덱싱 중…{" "}
-                {status?.indexing
-                  .filter((i) => i.state === "running")
-                  .map((i) => `${i.done_chunks}/${i.total_chunks}`)
-                  .join(" ")}
-              </span>
-              <button
-                onClick={() => {
-                  void cancelGraphIndexing()
-                    .then((r) => {
-                      setNormResult(`인덱싱 ${r.cancelled}건 중단됨`);
-                      return load();
-                    })
-                    .catch(() => undefined);
-                }}
-                title="진행·대기 중인 그래프 인덱싱 모두 중단"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 4,
-                  fontSize: "var(--fs-11)",
-                  padding: "3px 8px",
-                  borderRadius: 6,
-                  border: "1px solid #c0392b",
-                  background: "rgba(192,57,43,0.1)",
-                  color: "#c0392b",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
-              >
-                <X size={11} />
-                중단
-              </button>
-            </>
-          )}
-          {/* CR-35: 증분(새 문서만·새 키워드만) 우선, 전체는 보조 버튼 */}
+          {/* CR-61: 구버전(M_19) 버튼 4개 — 새 문서 인덱싱·전체 재인덱싱·정규화·전체
+              정규화 — 를 제거했다. 폐기한 Keyword 그래프를 되살리거나(앞의 둘, 문서마다
+              LLM 호출) 대상이 0건이라 아무 일도 안 하는(뒤의 둘) 버튼이었고, 신버전 추출
+              바로 옆에 있어 혼동을 일으켰다(사용자 지적). 백엔드
+              `/api/graphrag/reindex|normalize|cancel`은 되돌릴 여지를 위해 남겨 두었다. */}
           <button
-            onClick={() => handleReindex(true)}
-            disabled={reindexing || notConnected}
-            title="그래프에 아직 없는 문서만 인덱싱 (증분 — 이미 인덱싱된 문서는 건너뜀)"
-            style={barBtn(notConnected || reindexing, true, accent, isDark)}
+            onClick={() => setAdminOpen((v) => !v)}
+            title={adminOpen ? "관리 패널 접기" : "추출·구축·초기화 관리 패널 펼치기"}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: "var(--fs-11)",
+              padding: "3px 8px",
+              borderRadius: 6,
+              border: `1px solid ${adminOpen ? accent : "var(--color-border)"}`,
+              background: adminOpen ? accent + (isDark ? "33" : "22") : "transparent",
+              color: adminOpen ? "var(--color-text)" : "var(--color-text-muted)",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              whiteSpace: "nowrap",
+            }}
           >
-            <RefreshCw size={11} className={reindexing ? "spin" : undefined} />
-            새 문서 인덱싱
+            {adminOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+            관리
+            {adminSummary && (
+              <span style={{ color: accent, fontWeight: 600 }}>· {adminSummary}</span>
+            )}
           </button>
-          <button
-            onClick={() => handleReindex(false)}
-            disabled={reindexing || notConnected}
-            title="벡터 스토어의 모든 문서를 다시 인덱싱 (전량 재추출 — 비용 큼)"
-            style={barBtn(notConnected || reindexing, false, accent, isDark)}
-          >
-            전체 재인덱싱
-          </button>
-          <button
-            onClick={() => handleNormalize(true)}
-            disabled={normalizing || notConnected}
-            title="새로 인덱싱된 키워드의 표기 변형만 기존 대표어에 맞춰 정규화 (증분)"
-            style={barBtn(notConnected || normalizing, true, accent, isDark)}
-          >
-            <Network size={11} />
-            {normalizing ? "정규화 중…" : "정규화"}
-          </button>
-          <button
-            onClick={() => handleNormalize(false)}
-            disabled={normalizing || notConnected}
-            title="전체 키워드 표기 변형을 다시 묶음 (전체 재정규화 — 비용 큼)"
-            style={barBtn(notConnected || normalizing, false, accent, isDark)}
-          >
-            전체 정규화
-          </button>
+        </div>
+      </div>
+
+      {/* 관리 패널 — **컨트롤 바 밖의 형제**다 (CR-61).
+          예전에는 컨트롤 바 div 안에 있었는데, 그 바가 flexShrink:0이라 패널이 길어질수록
+          캔버스(flex:1)를 밀어냈다. 2단계 섹션을 더하자 그래프가 화면에서 사라졌다.
+          여기로 빼면 접었을 때 높이가 0에 가까워져 캔버스가 제 높이를 되찾는다.
+
+          display 토글이지 언마운트가 아니다 — KgExtractionPanel이 자체 폴링으로 25시간짜리
+          추출 진행률을 추적하므로 접어도 계속 돌아야 한다. */}
+      <div
+        style={{
+          display: adminOpen ? "block" : "none",
+          padding: "0 10px 10px",
+          flexShrink: 0,
+          maxHeight: "52vh",
+          overflowY: "auto",
+        }}
+      >
+        <KgExtractionPanel isDark={isDark} onSummaryChange={setAdminSummary} />
+
+        {/* 위험 작업 — 파괴적이라 관리 패널 안쪽 맨 아래에 따로 둔다. */}
+        <div
+          style={{
+            marginTop: 10,
+            paddingTop: 10,
+            borderTop: "1px solid var(--color-border)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+            위험 작업
+          </span>
           <button
             onClick={() => {
               setClearConfirmText("");
@@ -864,14 +842,11 @@ export default function GraphRagView(): React.ReactElement {
               opacity: notConnected || clearing ? 0.5 : 1,
             }}
           >
-            초기화
+            그래프 초기화
           </button>
-        </div>
-
-        {/* M_23 신규 파이프라인 — 폴더 선택·시작·중단·진행률을 이 자리에서 (CR-60).
-            위 버튼들은 기존(구 CR-30) 그래프용이라 나란히 두고 구분한다. */}
-        <div style={{ padding: "0 10px 10px" }}>
-          <KgExtractionPanel isDark={isDark} />
+          <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+            Neo4j만 비웁니다 — 추출 후보는 보존되고 2단계로 다시 만들 수 있습니다
+          </span>
         </div>
       </div>
 
@@ -1416,7 +1391,7 @@ export default function GraphRagView(): React.ReactElement {
                 ? "문서"
                 : selected.kind === "note"
                   ? "업무 노트"
-                  : `키워드 · ${ROLE_LABELS[selected.type] ?? selected.type ?? ""}`}
+                  : `엔티티 · ${ROLE_LABELS[selected.type] ?? selected.type ?? ""}`}
               {" · 연결 "}
               {selected.degree}건
               {isPinned(selected.id) && (

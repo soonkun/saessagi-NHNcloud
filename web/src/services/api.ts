@@ -348,22 +348,7 @@ export async function fetchGraphDocFocus(docId: string, limit = 40): Promise<Gra
   return apiFetch<GraphRagData>(`/api/graphrag/doc-focus?${q.toString()}`);
 }
 
-// CR-35: onlyMissing=true면 그래프에 없는 문서만 인덱싱 (증분)
-export async function requestGraphReindex(
-  docId?: string,
-  onlyMissing = false
-): Promise<{ scheduled: boolean; count: number }> {
-  return apiFetch<{ scheduled: boolean; count: number }>("/api/graphrag/reindex", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ doc_id: docId ?? null, only_missing: onlyMissing }),
-  });
-}
 
-// CR-26: 진행·대기 중 그래프 인덱싱 중단
-export async function cancelGraphIndexing(): Promise<{ cancelled: number }> {
-  return apiFetch<{ cancelled: number }>("/api/graphrag/cancel", { method: "POST" });
-}
 
 // CR-26: 그래프 전체 초기화 — confirm 문구가 정확히 일치해야 실행됨
 export async function clearGraph(confirm: string): Promise<{ ok: boolean; before: Record<string, number> }> {
@@ -390,16 +375,6 @@ export async function searchGraphDocs(q: string, limit = 12): Promise<GraphDocMa
   return data.docs;
 }
 
-// CR-35: onlyNew=true(기본)면 아직 정규화 안 된 키워드만 (증분). false면 전체 재정규화
-export async function requestGraphNormalize(
-  onlyNew = true
-): Promise<{ groups: string[][]; merged: number }> {
-  return apiFetch<{ groups: string[][]; merged: number }>("/api/graphrag/normalize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ only_new: onlyNew }),
-  });
-}
 
 export interface ContentSearchHit {
   doc_id: string;
@@ -610,10 +585,20 @@ export interface KgProgress {
   recent: string[];
 }
 
+// CandidateStore.stats() 가 내려주는 형태 (src/kg/candidates.py).
+export interface KgStoreStats {
+  documents: number;
+  entity_candidates: number;
+  doc_entities: number;
+  canonical_entities: number;
+  relation_candidates: number;
+  by_candidate_state?: Record<string, number>;
+}
+
 export interface KgStatus {
   running: boolean;
   progress: KgProgress;
-  stats: Record<string, unknown>;
+  stats: KgStoreStats;
 }
 
 export async function fetchKgFolders(): Promise<KgFolder[]> {
@@ -641,6 +626,10 @@ export async function startKgExtraction(body: {
   limit?: number;
   resume?: boolean;
   chunks_per_document?: number;
+  /** 등록된 모든 폴더를 한 작업으로 (CR-61). */
+  all_folders?: boolean;
+  /** 추출이 정상 완료되면 그래프 구축까지 자동으로 잇는다 (CR-61). */
+  build_after?: boolean;
 }): Promise<{ started: boolean; reason?: string }> {
   try {
     const res = await fetch(API_BASE + "/api/kg/start", {
@@ -652,6 +641,60 @@ export async function startKgExtraction(body: {
     return (await res.json()) as { started: boolean; reason?: string };
   } catch {
     return { started: false, reason: "연결 실패" };
+  }
+}
+
+// CR-61: 6~9단계 그래프 구축. 추출과 달리 LLM을 부르지 않아 GPU를 잡지 않는다.
+export interface KgBuildProgress {
+  job_id: string;
+  state: string;
+  scope: string;
+  stage: string;
+  done: number;
+  total: number;
+  elapsed_sec: number;
+  error: string;
+  counts: Record<string, unknown>;
+}
+
+export async function fetchKgBuildStatus(): Promise<{
+  running: boolean;
+  progress: KgBuildProgress;
+} | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/build/status");
+    if (!res.ok) return null;
+    return (await res.json()) as { running: boolean; progress: KgBuildProgress };
+  } catch {
+    return null;
+  }
+}
+
+export async function startKgBuild(body: {
+  folder_id?: string;
+  dry_run?: boolean;
+  purge_legacy?: boolean;
+}): Promise<{ started: boolean; reason?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/build", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) return { started: false, reason: `서버 오류 (${res.status})` };
+    return (await res.json()) as { started: boolean; reason?: string };
+  } catch {
+    return { started: false, reason: "연결 실패" };
+  }
+}
+
+export async function stopKgBuild(): Promise<{ stopped: boolean; reason?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/kg/build/stop", { method: "POST" });
+    if (!res.ok) return { stopped: false, reason: `서버 오류 (${res.status})` };
+    return (await res.json()) as { stopped: boolean; reason?: string };
+  } catch {
+    return { stopped: false, reason: "연결 실패" };
   }
 }
 
