@@ -11,7 +11,7 @@ import httpx
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -1074,10 +1074,6 @@ async def _save_prompt(
         "doc_query_answer",
         "work_query_answer",
         "graph_extract",
-        # CR-44: 딥 리서치 3모드 지침도 동일한 lazy 조회 방식(재초기화 불필요)
-        "deep_research_duplication",
-        "deep_research_discovery",
-        "deep_research_proposal",
     ):
         # gate_injection: agent 재초기화 없음. prompt_provider lazy 조회
         is_custom = bool(prompt.strip())
@@ -1110,9 +1106,6 @@ def _apply_path_for(key: str) -> str:
         "intent_classify": "classifier_reload",
         "meeting_minutes": "set_custom_prompt",
         "graph_extract": "gate_injection",
-        "deep_research_duplication": "gate_injection",
-        "deep_research_discovery": "gate_injection",
-        "deep_research_proposal": "gate_injection",
     }
     return _map.get(key, "unknown")
 
@@ -1165,3 +1158,76 @@ def _patch_agent_settings_provider(agent_settings: Any, provider: str) -> None:
                 val.llm_provider = provider
     except Exception:
         pass
+
+
+# ── CR-63: 자료 검색 파라미터 (지침 화면에 함께 노출) ─────────────────────────
+#
+# `agent_prompts`는 전부 문자열 필드라 숫자가 들어갈 자리가 없다. 그래서 저장 위치는
+# `app.rag_*`로 두되 **UI는 지침 관리 화면 안에** 둔다(사용자 요청).
+
+
+class RetrievalSettings(BaseModel):
+    """대화 검색 규모. 값의 의미는 config.py의 필드 설명 참조."""
+
+    top_k: int = Field(ge=1, le=50)
+    max_chunks_per_doc: int = Field(ge=0, le=20)
+
+
+_RETRIEVAL_DEFAULTS = {"top_k": 10, "max_chunks_per_doc": 3}
+
+
+@router.get("/retrieval")
+async def get_retrieval(request: Request) -> dict[str, Any]:
+    """현재 검색 파라미터와 기본값을 함께 반환한다 (CR-63)."""
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = getattr(ctx, "app_config", None) if ctx else None
+    return {
+        "top_k": int(getattr(app_cfg, "rag_top_k", _RETRIEVAL_DEFAULTS["top_k"])),
+        "max_chunks_per_doc": int(
+            getattr(app_cfg, "rag_max_chunks_per_doc", _RETRIEVAL_DEFAULTS["max_chunks_per_doc"])
+        ),
+        "defaults": dict(_RETRIEVAL_DEFAULTS),
+        "limits": {"top_k": [1, 50], "max_chunks_per_doc": [0, 20]},
+    }
+
+
+@router.post("/retrieval")
+async def set_retrieval(body: RetrievalSettings, request: Request) -> dict[str, Any]:
+    """검색 파라미터를 conf.yaml과 in-memory에 저장한다 (CR-63).
+
+    **재기동이 필요 없다** — 어댑터가 매 턴 `retrieval_params_provider`로 값을 다시 읽는다.
+    """
+    ctx = getattr(request.app.state, "service_context", None)
+    app_cfg = getattr(ctx, "app_config", None) if ctx else None
+    conf = _conf_path()
+
+    try:
+        raw = yaml.safe_load(conf.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 읽기 실패: {exc}") from exc
+
+    app_section = raw.setdefault("app", {})
+    app_section["rag_top_k"] = body.top_k
+    app_section["rag_max_chunks_per_doc"] = body.max_chunks_per_doc
+    try:
+        conf.write_text(
+            encoding="utf-8",
+            data=yaml.dump(raw, allow_unicode=True, sort_keys=False, default_flow_style=False),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"conf.yaml 쓰기 실패: {exc}") from exc
+
+    if app_cfg is not None:
+        app_cfg.rag_top_k = body.top_k
+        app_cfg.rag_max_chunks_per_doc = body.max_chunks_per_doc
+
+    logger.info(
+        f"CR-63 검색 파라미터 저장: top_k={body.top_k}, "
+        f"문서당 최대={body.max_chunks_per_doc} (재기동 불필요)"
+    )
+    return {
+        "status": "ok",
+        "top_k": body.top_k,
+        "max_chunks_per_doc": body.max_chunks_per_doc,
+        "applied": app_cfg is not None,
+    }

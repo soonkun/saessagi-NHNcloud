@@ -15,7 +15,7 @@ from collections import Counter
 from datetime import datetime
 from typing import Any
 
-from vector_search.rag import _rrf_fuse
+from vector_search.rag import _rrf_fuse, cap_per_document
 from vector_search.types import RetrievalResult, SearchHit
 
 from .extractor import EntityExtractor
@@ -686,7 +686,14 @@ class GraphRagService:
         try:
             from kg.retrieve import evidence_payload
 
-            payload = evidence_payload(query, matches, [h.chunk_id for h in hits])
+            # E-101: 그래프 핸들을 넘겨 **개요와 같은 노드 규약**으로 만들게 한다.
+            # 안 넘기면 문서 노드 id가 raw doc_id가 되어 프론트가 못 찾는다.
+            payload = evidence_payload(
+                query,
+                matches,
+                [h.chunk_id for h in hits],
+                graph=getattr(self._kg, "_graph", None),
+            )
             evidence = EvidenceSubgraph(
                 query=payload["query"],
                 created=payload["created"],
@@ -695,7 +702,16 @@ class GraphRagService:
                 chunk_ids=payload["chunk_ids"],
             )
         except Exception as exc:
-            logger.debug("M_23 근거 서브그래프 조립 실패 (무시): %s", exc)
+            # E-101: debug였다. 근거 그래프가 통째로 안 뜨는데 로그가 안 보여
+            # 원인 파악이 늦었다 — 사용자에게 기능이 고장 난 것이면 WARNING이다.
+            logger.warning("M_23 근거 서브그래프 조립 실패: %r", exc)
+        if evidence is not None:
+            logger.info(
+                "M_23 근거 서브그래프: 노드 %d (문서 %d) · 엣지 %d",
+                len(evidence.nodes),
+                sum(1 for n in evidence.nodes if getattr(n, "kind", "") == "document"),
+                len(evidence.edges),
+            )
         return hits, evidence
 
     async def hybrid_retrieve(
@@ -703,11 +719,15 @@ class GraphRagService:
         query: str,
         top_k: int = 5,
         source: str = "both",
+        max_chunks_per_doc: int = 0,
     ) -> RetrievalResult:
         """벡터 RAG + 그래프 검색 RRF 융합 (스펙 §3.4).
 
         found 판정은 벡터 결과 기준을 유지한다 (기존 계약 불변).
         그래프 저장소 미가용 시 벡터 결과를 그대로 반환한다.
+
+        `max_chunks_per_doc > 0`이면 융합 **후 · 절단 전에** 문서당 상한을 건다 (CR-63).
+        순서가 중요하다 — 절단 뒤에 걸면 결과 수만 줄고 다양성은 늘지 않는다.
         """
         loop = asyncio.get_running_loop()
         vector_result: RetrievalResult = await loop.run_in_executor(
@@ -724,14 +744,25 @@ class GraphRagService:
             del self._evidence[: -self._evidence_buffer]
 
         if not graph_hits:
-            return vector_result
+            return RetrievalResult(
+                hits=cap_per_document(vector_result.hits, max_chunks_per_doc)[:top_k],
+                found=vector_result.found,
+                no_match_reason=vector_result.no_match_reason,
+            )
 
-        fused = _rrf_fuse(vector_result.hits, graph_hits)[:top_k]
+        fused_all = _rrf_fuse(vector_result.hits, graph_hits)
+        capped = cap_per_document(fused_all, max_chunks_per_doc)
+        fused = capped[:top_k]
         logger.info(
-            "GraphRAG 하이브리드 융합: 벡터=%d + 그래프=%d → %d (query=%r)",
+            "GraphRAG 하이브리드 융합: 벡터=%d + 그래프=%d → 융합 %d → 문서상한(%s) %d → %d "
+            "(문서 %d건, query=%r)",
             len(vector_result.hits),
             len(graph_hits),
+            len(fused_all),
+            max_chunks_per_doc or "없음",
+            len(capped),
             len(fused),
+            len({h.doc_id for h in fused}),
             (query or "")[:50],
         )
         return RetrievalResult(

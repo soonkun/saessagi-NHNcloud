@@ -46,6 +46,10 @@ class WatchState:
         # 새 경로가 안정화되기까지 한 주기가 걸리는데, 그 사이 옛 경로가 이미 없어서
         # 삭제로 오판된다 — 유예 주기를 두어 이동이 먼저 해소되게 한다 (E-69).
         self._miss_counts: dict[str, int] = {}
+        # E-91: digest → 인제스트 실패 기록 {count, error, path, folder_name, first/last_failed_at}.
+        # **디스크에 저장한다** — 메모리에만 두면 재시작으로 카운터가 초기화되어 영구 실패
+        # 파일이 다시 슬롯을 잡는다. 사람이 원인을 보려면 남아 있어야 하기도 하다.
+        self._failures: dict[str, dict[str, Any]] = {}
         self._load()
 
     def _load(self) -> None:
@@ -55,20 +59,26 @@ class WatchState:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             self._files = dict(raw.get("files") or {})
             self._folders = set(raw.get("folders") or [])
+            self._failures = dict(raw.get("failures") or {})
             logger.info(
                 f"rag_watch: 상태 로드 파일 {len(self._files)}건 / "
-                f"폴더 {len(self._folders)}개 ({self._path})"
+                f"폴더 {len(self._folders)}개 / 실패 {len(self._failures)}건 ({self._path})"
             )
         except Exception as exc:
             # 상태가 깨졌다고 기능을 멈추지 않는다 — 최악의 경우 재인제스트일 뿐이다.
             logger.warning(f"rag_watch: 상태 파일 손상, 새로 시작합니다: {exc!r}")
             self._files = {}
             self._folders = set()
+            self._failures = {}
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(
-            {"files": self._files, "folders": sorted(self._folders)},
+            {
+                "files": self._files,
+                "folders": sorted(self._folders),
+                "failures": self._failures,
+            },
             ensure_ascii=False,
             indent=1,
         )
@@ -124,6 +134,56 @@ class WatchState:
 
     def forget(self, digest: str) -> None:
         self._files.pop(digest, None)
+
+    # ── 인제스트 실패 (E-91) ────────────────────────────────────────────────
+    #
+    # 실패를 기록하지 않으면 그 파일은 상태에 없으므로 **매 주기 새 파일로 다시 잡힌다.**
+    # 스캔 이미지 PDF처럼 몇 번을 다시 해도 실패하는 파일이 max_per_cycle만큼 쌓이면
+    # 슬롯이 전부 그것들로 채워져 정상 파일이 영원히 처리되지 않는다 (실제로 440건이
+    # 7시간 넘게 대기했다). 몇 번 실패했는지 세어 두고, 한도를 넘으면 건너뛴다.
+    #
+    # 키가 내용 해시이므로 사용자가 파일을 고쳐 다시 넣으면 digest가 달라져 자동으로
+    # 재시도된다 — "영구 포기"가 아니라 "이 내용은 포기"다.
+
+    def record_failure(
+        self,
+        digest: str,
+        *,
+        rel_path: str,
+        folder_name: str | None,
+        error: str,
+    ) -> int:
+        """실패를 누적하고 지금까지의 연속 실패 횟수를 돌려준다."""
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        entry = self._failures.get(digest)
+        if entry is None:
+            entry = {"count": 0, "first_failed_at": now}
+            self._failures[digest] = entry
+        entry["count"] = int(entry.get("count", 0)) + 1
+        entry["path"] = rel_path
+        entry["folder_name"] = folder_name
+        entry["error"] = error
+        entry["last_failed_at"] = now
+        return int(entry["count"])
+
+    def clear_failure(self, digest: str) -> None:
+        """성공했으면 기록을 지운다 (일시적 실패가 영구 누적되지 않게)."""
+        self._failures.pop(digest, None)
+
+    def failure_count(self, digest: str) -> int:
+        entry = self._failures.get(digest)
+        return int(entry.get("count", 0)) if entry else 0
+
+    def failures(self) -> dict[str, dict[str, Any]]:
+        """digest → 실패 기록 사본 (보고·진단용)."""
+        return {d: dict(e) for d, e in self._failures.items()}
+
+    def drop_failures(self, keep: set[str]) -> int:
+        """디스크에서 사라진 파일의 실패 기록을 정리하고 삭제 건수를 돌려준다."""
+        stale = [d for d in self._failures if d not in keep]
+        for d in stale:
+            del self._failures[d]
+        return len(stale)
 
     # ── 안정화 확인 ─────────────────────────────────────────────────────────
 

@@ -201,7 +201,9 @@ def load_graph(
             return _finish(stats, t0)
         graph.upsert_canonicals(chunk)
         stats.canonicals += len(chunk)
-        if progress and stats.canonicals % (batch * 20) == 0:
+        # 주기 눈금 + **마지막 눈금** (E-97과 같은 결함이 여기에도 있었다).
+        # 총건수가 주기의 배수가 아니면 꼬리가 보고되지 않아 `360,000/361,032`에서 끝난다.
+        if progress and (stats.canonicals % (batch * 20) == 0 or stats.canonicals >= total_canon):
             progress("load:canonicals", stats.canonicals, total_canon)
 
     # ── 청크 · Mention ───────────────────────────────────────────────────────
@@ -278,7 +280,7 @@ def load_graph(
                 return _finish(stats, t0)
             graph.upsert_mentions(group)
             stats.mentions += len(group)
-            if progress and stats.mentions % (batch * 20) == 0:
+            if progress and (stats.mentions % (batch * 20) == 0 or stats.mentions >= total_m):
                 progress("load:mentions", stats.mentions, total_m)
 
     # ── 관계 ─────────────────────────────────────────────────────────────────
@@ -290,8 +292,15 @@ def load_graph(
 
     # ── 세대 정리 ────────────────────────────────────────────────────────────
     if not stats.stopped:
+        # `Document`가 빠져 있었다 (E-100). 문서 노드는 `doc_id`가 안정적이라 해시 변경으로
+        # 고아가 되지는 않지만, **코퍼스에서 빠진 문서**는 세대 교체가 안 지워 영원히 남는다.
+        # 실제로 예전 임베딩 테스트 파일 하나가 몇 번의 재구축을 지나 그래프에 남아 있었다.
+        #
+        # 안전한 이유: 위 문서 적재는 폴더 범위와 무관하게 `documents` 전체를 매번 올리며
+        # 현재 `build_id`를 찍는다. 따라서 여기서 지워지는 것은 **SQLite에 더 이상 없는**
+        # 문서뿐이다. 이미 같은 성질인 `Chunk`가 목록에 있다.
         stats.stale_deleted = graph.delete_stale(
-            bid, ("CanonicalEntity", "Mention", "Chunk", "Project")
+            bid, ("CanonicalEntity", "Mention", "Chunk", "Project", "Document")
         )
 
     return _finish(stats, t0)

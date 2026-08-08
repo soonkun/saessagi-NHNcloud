@@ -196,7 +196,9 @@ async def ai_edit_note(request: Request) -> dict[str, Any]:
     ctx = getattr(request.app.state, "service_context", None)
     agent = getattr(ctx, "gemma_agent", None) if ctx else None
     if agent is None:
-        raise HTTPException(status_code=503, detail="LLM이 준비되지 않았습니다 (백엔드 초기화 대기).")
+        raise HTTPException(
+            status_code=503, detail="LLM이 준비되지 않았습니다 (백엔드 초기화 대기)."
+        )
 
     # 첨부 파일 → 텍스트 (격리 파서 재사용, 벡터 스토어 등록 안 함)
     attachment_text = ""
@@ -207,14 +209,19 @@ async def ai_edit_note(request: Request) -> dict[str, Any]:
         data = await upload.read()  # type: ignore[union-attr]
         try:
             segments = await _parse_isolated(str(upload.filename), data)  # type: ignore[union-attr]
-            attachment_text = "\n".join(t for t, _p in segments if t)[:_AI_EDIT_MAX_ATTACHMENT_CHARS]
+            attachment_text = "\n".join(t for t, _p in segments if t)[
+                :_AI_EDIT_MAX_ATTACHMENT_CHARS
+            ]
         except HTTPException:
             raise
         except Exception as exc:
             logger.error("노트 AI 편집 첨부 파싱 실패: %s", exc)
             raise HTTPException(status_code=422, detail="첨부 파일을 읽지 못했습니다.") from exc
 
-    parts = [f"## 노트 제목\n{title}" if title else "", f"## 현재 노트 본문\n{content or '(빈 노트)'}"]
+    parts = [
+        f"## 노트 제목\n{title}" if title else "",
+        f"## 현재 노트 본문\n{content or '(빈 노트)'}",
+    ]
     if attachment_text:
         parts.append(f"## 참고 자료 (첨부)\n{attachment_text}")
     if selection:

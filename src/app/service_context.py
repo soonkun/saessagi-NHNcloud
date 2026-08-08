@@ -64,6 +64,8 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         # M_19: GraphRagService 슬롯 (init_agent에서 조립 — 추출 LLM이 필요)
         self.graph_rag_service: Any = None  # GraphRagService | None
         self.kg_graph_store: Any = None  # CR-61: kg.graph_store.KgGraphStore | None
+        # CR-62: 딥 리서치 방(프로젝트) 저장소 — 지침·버전이력·대화
+        self.research_project_store: Any = None  # deep_research.ResearchProjectStore | None
         self._graphrag_extract_agent: Any = None  # 추출 전용 GemmaChatAgent | None (cleanup용)
         # M_20: DeepResearchService 슬롯 (init_agent에서 조립 — LLM·검색 서비스 필요)
         self.deep_research_service: Any = None  # DeepResearchService | None
@@ -582,6 +584,15 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 graphrag_cfg is not None and graphrag_cfg.auto_index
             )
 
+        # CR-63: 검색 규모를 호출 시점에 읽는다. 지침 화면에서 저장하면 in-memory
+        # app_config가 갱신되므로, 클로저로 두면 재기동 없이 다음 턴부터 반영된다.
+        def _retrieval_params() -> tuple[int, int]:
+            cfg = self.app_config
+            return (
+                int(getattr(cfg, "rag_top_k", 10) or 10),
+                int(getattr(cfg, "rag_max_chunks_per_doc", 3) or 0),
+            )
+
         # (7c) 어댑터 래핑
         self.agent_engine = BasicMemoryAgentAdapter(
             gemma_agent,
@@ -592,8 +603,12 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
             tts_brief_max_chars=self.app_config.tts_brief_max_chars if self.app_config else 80,
             tool_router=self.tool_router,  # E-45: note_save 의도 강제 저장 폴백
             graph_rag_service=self.graph_rag_service,  # M_19: 하이브리드 검색
+            retrieval_params_provider=_retrieval_params,  # CR-63
         )
-        logger.info("AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료")
+        logger.info(
+            "AppServiceContext.init_agent: BasicMemoryAgentAdapter 배선 완료 "
+            f"(CR-63 검색: top_k={_retrieval_params()[0]}, 문서당 최대={_retrieval_params()[1]})"
+        )
 
         # (8) config 동기화
         self.character_config.agent_config = agent_config
@@ -615,28 +630,17 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
                 # 모델을 물릴 수 있게 한다. 기본값(same_as_chat)이면 기존과 동일.
                 _dr_agent, _dr_label = await self._build_deep_research_agent(gemma_agent)
 
-                # CR-44: mode("duplication"/"discovery"/"proposal") → 커스텀 지침.
-                # _prompt_provider()는 M_17 dict를 lazy 조회하므로 지침 저장 즉시
-                # 다음 딥 리서치 실행부터 반영된다(agent 재초기화 불필요).
-                _dr_mode_to_key = {
-                    "duplication": "deep_research_duplication",
-                    "discovery": "deep_research_discovery",
-                    "proposal": "deep_research_proposal",
-                }
-
-                def _dr_prompt_provider(mode: str) -> str:
-                    key = _dr_mode_to_key.get(mode)
-                    return _prompt_provider().get(key, "") if key else ""
-
+                # CR-62: 지침은 더 이상 M_17 레지스트리에서 오지 않는다. 방(프로젝트)
+                # 저장소가 지침·검색설정을 갖고, 라우트가 ResearchProfile로 뽑아 넘긴다.
                 _dr_cfg = getattr(self.app_config, "deep_research", None)
                 self.deep_research_service = DeepResearchService(
                     agent=_dr_agent,
                     rag_service=self.rag_service,
                     graph_rag_service=self.graph_rag_service,
-                    prompt_provider=_dr_prompt_provider,
                     max_queue_size=getattr(_dr_cfg, "max_queue_size", 5),
                     max_queue_wait_seconds=getattr(_dr_cfg, "max_queue_wait_seconds", 900.0),
                 )
+                self._init_research_projects()
                 logger.info(
                     "AppServiceContext.init_agent: DeepResearchService 배선 완료 "
                     f"(graph={'on' if self.graph_rag_service is not None else 'off'}, "
@@ -1054,6 +1058,29 @@ class AppServiceContext(ServiceContext):  # type: ignore[misc]
         except Exception as exc:
             logger.error(f"super().close() 실패: {exc}")
 
+    def _init_research_projects(self) -> None:
+        """딥 리서치 방 저장소를 열고, 비어 있으면 예시 방 3개를 만든다 (CR-62).
+
+        **conf.yaml에 저장돼 있던 딥 리서치 커스텀 지침을 여기서 이관한다.** 설정에서
+        손봐 둔 지침이 전환 과정에 사라지면 안 된다 — 사용자가 그걸 만드는 데 시간을 썼다.
+        조립 실패는 치명적이지 않다(방 없이도 앱은 뜬다).
+        """
+        try:
+            from deep_research.seeds import build_seeds
+            from deep_research.store import ResearchProjectStore
+
+            root = Path(os.environ.get("SAESSAGI_ROOT", "."))
+            store = ResearchProjectStore(root / "data" / "research_projects.db")
+            made = store.seed_if_empty(build_seeds(getattr(self.app_config, "agent_prompts", None)))
+            self.research_project_store = store
+            logger.info(
+                f"CR-62: 딥 리서치 방 저장소 배선 완료 (예시 방 {made}개 생성, "
+                f"현황={store.stats()})"
+            )
+        except Exception as exc:
+            logger.warning(f"딥 리서치 방 저장소 조립 실패 (딥 리서치 비활성): {exc!r}")
+            self.research_project_store = None
+
 
 def _make_prompt_provider(
     app_config: "AppConfig | None",
@@ -1079,17 +1106,12 @@ def _make_prompt_provider(
             doc = (getattr(ap, "doc_query_answer", "") or "").strip()
             work = (getattr(ap, "work_query_answer", "") or "").strip()
             note = (getattr(ap, "knowledge_note", "") or "").strip()
-            # CR-44: 딥 리서치 3모드 지침도 같은 클로저로 lazy 조회한다.
-            dr_dup = (getattr(ap, "deep_research_duplication", "") or "").strip()
-            dr_disc = (getattr(ap, "deep_research_discovery", "") or "").strip()
-            dr_prop = (getattr(ap, "deep_research_proposal", "") or "").strip()
+            # CR-62: 딥 리서치 3키를 뺐다. 방마다 지침이 다르므로 전역 클로저로는
+            # 조회할 수 없고, 방 저장소가 대신한다.
             return {
                 "doc_query_answer": doc,
                 "work_query_answer": work,
                 "knowledge_note": note,
-                "deep_research_duplication": dr_dup,
-                "deep_research_discovery": dr_disc,
-                "deep_research_proposal": dr_prop,
             }
         except Exception as _exc:
             logger.debug(f"prompt_provider 조회 실패 (무시): {_exc!r}")

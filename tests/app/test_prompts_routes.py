@@ -121,10 +121,7 @@ def test_N1_get_prompts_returns_all_keys(client: TestClient) -> None:
         "intent_classify",
         "meeting_minutes",
         "graph_extract",
-        # CR-44
-        "deep_research_duplication",
-        "deep_research_discovery",
-        "deep_research_proposal",
+        # CR-62: 딥 리서치 3키는 방 지침으로 옮겨져 여기 없다.
     }
     assert set(prompts.keys()) == expected_keys
     for key, info in prompts.items():

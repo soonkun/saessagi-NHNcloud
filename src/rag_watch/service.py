@@ -36,6 +36,7 @@ class RagWatchService:
         delete_policy: str = "ignore",
         unindex_guard_ratio: float = 0.25,
         unindex_guard_min: int = 5,
+        max_ingest_failures: int = 3,
     ) -> None:
         self._root = root
         self._ctx = service_context
@@ -43,9 +44,12 @@ class RagWatchService:
         self._delete_policy = delete_policy
         self._guard_ratio = unindex_guard_ratio
         self._guard_min = unindex_guard_min
+        self._max_failures = max_ingest_failures
         self._state = WatchState(state_path)
         self._lock = asyncio.Lock()
         self._cycles = 0
+        # 직전에 보고한 포기 목록 (같은 내용을 매 주기 반복해 찍지 않기 위해).
+        self._reported_quarantine: set[str] = set()
 
     @property
     def state(self) -> WatchState:
@@ -154,6 +158,7 @@ class RagWatchService:
                 self._state,
                 app_folder_names=app_folders,
                 max_per_cycle=self._max,
+                max_ingest_failures=self._max_failures,
             )
 
             known_next, deleted_folders = await self._apply_folders(plan, known_before)
@@ -174,12 +179,38 @@ class RagWatchService:
                     f"rag_watch: 인제스트 {len(plan.to_ingest)} / 이동 {len(plan.to_move)} / "
                     f"보류 {len(plan.unstable)} / 다음주기 {len(plan.deferred)} / "
                     f"변화없음 {plan.skipped}"
+                    + (f" / 포기 {len(plan.quarantined)}" if plan.quarantined else "")
                     + (f" / 삭제유예 {len(plan.grace_digests)}" if plan.grace_digests else "")
                     + f" (누적 {len(self._state)}건)"
                 )
 
+            # 포기 목록은 **바뀔 때만** 한 번 자세히 남긴다 (E-91).
+            # 매 주기 찍으면 로그가 묻히고, 아예 안 찍으면 계획이 빈 조용한 상태에서
+            # 무엇이 왜 빠졌는지 알 길이 없다 — 원래 사고에서 발견이 늦은 이유가 그것이다.
+            self._report_quarantine(plan)
+
             self._cycles += 1
             return plan
+
+    # ── 포기 목록 보고 (E-91) ───────────────────────────────────────────────
+
+    def _report_quarantine(self, plan: ScanPlan) -> None:
+        """포기한 파일 목록을 목록이 바뀐 주기에만 남긴다."""
+        current = {cand.rel_path for cand in plan.quarantined}
+        if current == self._reported_quarantine:
+            return
+        self._reported_quarantine = current
+        if not current:
+            logger.info("rag_watch: 포기했던 파일이 모두 해소되었습니다")
+            return
+
+        failures = self._state.failures()
+        by_path = {str(e.get("path") or ""): str(e.get("error") or "") for e in failures.values()}
+        lines = "\n".join(f"  · {p} — {by_path.get(p, '사유 미상')}" for p in sorted(current))
+        logger.warning(
+            f"rag_watch: 인제스트를 포기한 파일 {len(current)}건 "
+            f"({self._max_failures}회 연속 실패). 내용이 바뀌면 자동으로 다시 시도합니다:\n{lines}"
+        )
 
     # ── 폴더 ────────────────────────────────────────────────────────────────
 
@@ -362,11 +393,16 @@ class RagWatchService:
                     f"— 폴더 '{cand.folder_name}'가 이번 주기에 삭제됨"
                 )
                 continue
+            # 해시를 먼저 구한다 — 실패해도 어떤 내용이 실패했는지 기록해야 하기 때문이다.
+            # (읽기 자체가 실패하면 기록할 키가 없으므로 그때는 예외 처리로만 넘긴다.)
+            try:
+                digest = await asyncio.to_thread(file_digest, cand.path)
+            except OSError as exc:
+                logger.warning(f"rag_watch: 인제스트 실패 {cand.rel_path}: 해시 계산 불가 {exc!r}")
+                continue
+
             try:
                 data = await asyncio.to_thread(cand.path.read_bytes)
-                # 해시는 읽은 내용에서 다시 계산한다 — 스캔 시점과 다르면 그 사이 바뀐 것이라
-                # 다음 주기에 처리하도록 넘긴다.
-                digest = await asyncio.to_thread(file_digest, cand.path)
                 folder_id = await asyncio.to_thread(
                     partial(
                         self._folder_id_for, cand.folder_name, reason=f"인제스트 {cand.rel_path}"
@@ -379,6 +415,9 @@ class RagWatchService:
                     data=data,
                     folder_id=folder_id,
                 )
+                # 성공했으니 과거 실패 흔적을 지운다 — 일시적 오류(GPU 점유·잠금)가
+                # 영구 누적돼 멀쩡한 파일이 격리되면 안 된다.
+                self._state.clear_failure(digest)
                 self._state.record(
                     digest,
                     rel_path=cand.rel_path,
@@ -397,8 +436,29 @@ class RagWatchService:
                     f"(doc_id={res.doc_id}, 청크 {res.chunk_count})"
                 )
             except Exception as exc:
-                # 한 파일이 실패해도 나머지는 계속한다. 상태에 기록하지 않으므로 다음 주기에 재시도.
-                logger.warning(f"rag_watch: 인제스트 실패 {cand.rel_path}: {exc!r}")
+                # 한 파일이 실패해도 나머지는 계속한다.
+                #
+                # E-91: 실패를 **반드시 기록한다.** 예전에는 아무것도 남기지 않아 다음 주기에
+                # 신규 파일로 되돌아왔고, 영구 실패 파일이 max_per_cycle개 모이자 정원을 전부
+                # 차지해 나머지 440건이 무기한 멈췄다.
+                count = self._state.record_failure(
+                    digest,
+                    rel_path=cand.rel_path,
+                    folder_name=cand.folder_name,
+                    error=repr(exc),
+                )
+                await asyncio.to_thread(self._state.save)
+                if count >= self._max_failures > 0:
+                    logger.error(
+                        f"rag_watch: 인제스트 포기 {cand.rel_path} — {count}회 연속 실패: {exc!r}. "
+                        "파일 내용이 바뀌기 전까지 재시도하지 않습니다 "
+                        "(목록: 상태 파일의 failures)"
+                    )
+                else:
+                    logger.warning(
+                        f"rag_watch: 인제스트 실패 {cand.rel_path} "
+                        f"({count}/{self._max_failures}회): {exc!r}"
+                    )
 
     # ── 폴더 이동 ───────────────────────────────────────────────────────────
 

@@ -5,7 +5,13 @@
 // 표시 직전에 다듬되, **본문에 실제로 쓰인 금액 표기 같은 것은 건드리면 안 된다.**
 
 import { describe, it, expect } from "vitest";
-import { cleanReportMarkdown, safeFileStem, escapeHtml } from "../reportDoc";
+import {
+  cleanReportMarkdown,
+  safeFileStem,
+  escapeHtml,
+  researchTitle,
+  extractProjectTitle,
+} from "../reportDoc";
 
 describe("cleanReportMarkdown — LaTeX 흔적", () => {
   it("인라인 수식으로 감싼 화살표를 유니코드로 바꾼다", () => {
@@ -93,5 +99,70 @@ describe("파일 이름·이스케이프", () => {
 
   it("HTML 특수문자를 이스케이프한다", () => {
     expect(escapeHtml('<b>"x" & y</b>')).toBe("&lt;b&gt;&quot;x&quot; &amp; y&lt;/b&gt;");
+  });
+});
+
+describe("researchTitle — 딥 리서치 결과 제목 (CR-62)", () => {
+  const REPORT = [
+    "## 과제 중복성 및 개선방향 검토 보고서",
+    "",
+    "### 1. 검토 대상 요약",
+    "- **과제명**: 마른논 써레질 직파 재배기술 확립 및 전과정 평가",
+    "- **연구목표**: 기술체계를 확립하고 …",
+  ].join("\n");
+
+  it("보고서의 과제명을 제목으로 쓴다", () => {
+    expect(researchTitle("duplication", REPORT, "")).toBe(
+      "(중복성검토)마른논 써레질 직파 재배기술 확립 및 전과정 평가",
+    );
+  });
+
+  it("모드마다 앞머리가 다르다", () => {
+    expect(researchTitle("discovery", REPORT, "")).toMatch(/^\(신규과제발굴\)/);
+    expect(researchTitle("proposal", REPORT, "")).toMatch(/^\(계획서초안\)/);
+  });
+
+  it("표기가 흔들려도 뽑는다", () => {
+    for (const line of [
+      "과제명 : 사과 육종시스템 개발",
+      "○ 연구과제명: 사과 육종시스템 개발",
+      "**과제명**：사과 육종시스템 개발",
+    ]) {
+      expect(extractProjectTitle(line)).toBe("사과 육종시스템 개발");
+    }
+  });
+
+  it("과제명이 없으면 첨부 파일명으로 물러선다", () => {
+    expect(researchTitle("duplication", "본문에 과제명이 없다", "", "벼 재배기술.pdf")).toBe(
+      "(중복성검토)벼 재배기술",
+    );
+  });
+
+  it("파일도 없으면 요청 문구를 쓴다", () => {
+    expect(researchTitle("duplication", "없음", "스마트팜 데이터 표준화")).toBe(
+      "(중복성검토)스마트팜 데이터 표준화",
+    );
+  });
+
+  it("아무 단서가 없으면 날짜·시각으로 서로 달라진다", () => {
+    const a = researchTitle("duplication", "", "", "", new Date(2026, 7, 4, 13, 53));
+    const b = researchTitle("duplication", "", "", "", new Date(2026, 7, 4, 14, 10));
+    expect(a).not.toBe(b);
+    expect(a).toContain("2026-08-04 13:53");
+  });
+
+  it("같은 모드라도 과제가 다르면 제목이 다르다 — 목록 구분이 목적이다", () => {
+    const r1 = "**과제명**: 사과 육종시스템 개발";
+    const r2 = "**과제명**: 복숭아 육종시스템 개발";
+    expect(researchTitle("duplication", r1, "")).not.toBe(researchTitle("duplication", r2, ""));
+  });
+
+  it("너무 긴 과제명은 자른다", () => {
+    const long = "**과제명**: " + "가".repeat(120);
+    expect(researchTitle("duplication", long, "").length).toBeLessThanOrEqual(70);
+  });
+
+  it("과제명이 없는 보고서에서 엉뚱한 줄을 잡지 않는다", () => {
+    expect(extractProjectTitle("## 검토 결과\n연구목표: 무언가")).toBe("");
   });
 });

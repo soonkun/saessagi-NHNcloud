@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from vector_search.types import SearchHit
@@ -25,9 +26,49 @@ from .prompts import (
 
 logger = logging.getLogger(__name__)
 
-RESEARCH_MODES = ("duplication", "discovery", "proposal")
+# CR-62: 모드 상수를 없앴다. 무엇을 어떤 관점으로 쓰는지는 방(프로젝트)의 지침이 정하고,
+# 검색 예산도 방마다 다르다. 서비스는 방의 존재를 모른 채 아래 프로필만 받는다.
 
-# 근거 예산 (스펙 §3)
+
+@dataclass(frozen=True)
+class ResearchProfile:
+    """한 번의 실행에 필요한 모든 것. 방에서 뽑아 넘긴다.
+
+    이 dataclass가 있어서 서비스가 저장소·모드·레지스트리를 전혀 몰라도 된다.
+    테스트에서도 방을 만들 필요 없이 프로필만 지어 넣으면 된다.
+    """
+
+    project_id: str = "adhoc"
+    name: str = ""
+    instructions: str = ""
+    planner_hint: str = ""
+    sub_queries: int = 6
+    top_k_per_query: int = 5
+    gap_rounds: int = 1
+    max_evidence_chunks: int = 24
+
+
+# 근거 소스 — **문서만. 업무 노트는 제외한다** (E-96).
+#
+# 딥 리서치 보고서는 "업무노트로 저장"으로 노트가 되고, 그 노트는 벡터 스토어에 들어간다.
+# 노트를 검색하면 자기 출력이 자기 근거가 되는 순환이 생긴다 — LLM이 지어낸 문장이 다음
+# 보고서에서 `[3]`으로 인용된 사실이 된다. 실측으로 노트 4건이 전부 딥 리서치 산출물이었다.
+_EVIDENCE_SOURCE = "docs"
+
+# 노트를 가려내는 카테고리 마커 (`knowledge.service.KNOWLEDGE_CATEGORY`와 같은 값).
+# 여기서 그 모듈을 import하지 않는 이유는 딥 리서치가 지식노트 모듈에 의존할 이유가
+# 없어서다 — 값이 바뀌면 이 상수도 같이 고친다.
+_NOTE_CATEGORY = "__knowledge__"
+
+
+def _is_note(hit: SearchHit) -> bool:
+    """업무 노트에서 온 근거인가."""
+    return (hit.category or "") == _NOTE_CATEGORY or str(hit.doc_id or "").startswith(
+        f"{_NOTE_CATEGORY}:"
+    )
+
+
+# 근거 예산 기본값 (스펙 §3). 방 설정이 없을 때의 폴백이자 상한 계산의 기준.
 _TOP_K_PER_QUERY = 5
 _MAX_EVIDENCE_CHUNKS = 24
 _MAX_EVIDENCE_CHARS = 14_000
@@ -79,7 +120,6 @@ class DeepResearchService:
         agent: _CompletionAgent,
         rag_service: Any,  # vector_search.RagService (순환 의존 회피용 Any)
         graph_rag_service: Any = None,  # GraphRagService | None
-        prompt_provider: "Callable[[str], str] | None" = None,
         max_queue_size: int = 5,
         max_queue_wait_seconds: float = 900.0,
     ) -> None:
@@ -92,16 +132,14 @@ class DeepResearchService:
         self._waiting = 0
         self._max_queue_size = max_queue_size
         self._max_queue_wait = max_queue_wait_seconds
-        # M_17 연동 (CR-44): mode("duplication"/"discovery"/"proposal") → 커스텀 지침
-        # raw 텍스트(빈 문자열 = 미설정). 호출 시점 lazy 조회라 지침 저장 즉시 다음
-        # 실행부터 반영되고, agent 재초기화가 필요 없다.
-        self._prompt_provider = prompt_provider
+        # CR-62: prompt_provider(M_17 mode→지침 조회)를 제거했다. 지침은 방에서 오고
+        # 호출자가 ResearchProfile에 담아 넘긴다 — 서비스가 레지스트리를 알 필요가 없다.
 
     # ── 파이프라인 ────────────────────────────────────────────────────────────
 
     async def run(
         self,
-        mode: str,
+        profile: ResearchProfile,
         prompt: str,
         attachment_text: str = "",
         scope_doc_ids: list[str] | None = None,
@@ -114,12 +152,12 @@ class DeepResearchService:
         from rag_watch.activity import conversation_active
 
         with conversation_active():
-            async for _ev in self._run_inner(mode, prompt, attachment_text, scope_doc_ids):
+            async for _ev in self._run_inner(profile, prompt, attachment_text, scope_doc_ids):
                 yield _ev
 
     async def _run_inner(
         self,
-        mode: str,
+        profile: ResearchProfile,
         prompt: str,
         attachment_text: str = "",
         scope_doc_ids: list[str] | None = None,
@@ -131,10 +169,6 @@ class DeepResearchService:
         마지막 이벤트는 {stage:"done", report, sources, sub_queries} 또는
         {stage:"error", message}.
         """
-        if mode not in RESEARCH_MODES:
-            yield {"stage": "error", "message": f"알 수 없는 모드: {mode!r}"}
-            return
-
         user_input = self._build_user_input(prompt, attachment_text)
         if not user_input.strip():
             yield {"stage": "error", "message": "요청 내용이 비어 있습니다."}
@@ -218,18 +252,18 @@ class DeepResearchService:
             # 기존 이벤트 순서(planning이 첫 이벤트)가 깨진다.
             if position > 1:
                 yield {"stage": "notice", "message": "차례가 되어 시작합니다."}
-            async for event in self._run_pipeline(mode, user_input, scope or None):
+            async for event in self._run_pipeline(profile, user_input, scope or None):
                 yield event
         finally:
             if acquired:
                 self._lock.release()
 
     async def _run_pipeline(
-        self, mode: str, user_input: str, scope: set[str] | None = None
+        self, profile: ResearchProfile, user_input: str, scope: set[str] | None = None
     ) -> AsyncIterator[dict[str, Any]]:
         # 1. 계획
         yield {"stage": "planning", "message": "검색 계획 수립 중..."}
-        sub_queries = await self._plan(mode, user_input)
+        sub_queries = await self._plan(profile, user_input)
         yield {
             "stage": "planned",
             "message": f"하위 질의 {len(sub_queries)}개 생성",
@@ -246,33 +280,47 @@ class DeepResearchService:
         pool: dict[str, SearchHit] = {}  # chunk_id → hit (중복 제거)
         for i, q in enumerate(sub_queries, 1):
             yield {"stage": "searching", "message": f"자료 검색 {i}/{len(sub_queries)}: {q}"}
-            hits = await self._retrieve(q, scope)
+            hits = await self._retrieve(q, scope, profile.top_k_per_query)
             new = self._merge_hits(pool, hits)
             yield {
                 "stage": "searched",
                 "message": f"'{q}' → {len(hits)}건 (신규 {new}건, 누적 {len(pool)}건)",
             }
 
-        # 3. 격차 분석 (1라운드, 실패 시 스킵)
+        # 3. 격차 분석 — 방 설정만큼 반복 (CR-62. 예전에는 1회가 코드에 펼쳐져 있었다).
+        #    새 근거가 하나도 안 늘면 더 돌 이유가 없으므로 조기 종료한다.
         gap_queries: list[str] = []
-        if pool:
-            yield {"stage": "gap_analysis", "message": "수집 근거 검토·보완 질의 생성 중..."}
-            gap_queries = await self._gap_queries(mode, user_input, pool)
-            for i, q in enumerate(gap_queries, 1):
-                yield {"stage": "searching", "message": f"보완 검색 {i}/{len(gap_queries)}: {q}"}
-                hits = await self._retrieve(q, scope)
+        for round_no in range(1, max(0, profile.gap_rounds) + 1):
+            if not pool:
+                break
+            label = f" ({round_no}/{profile.gap_rounds})" if profile.gap_rounds > 1 else ""
+            yield {
+                "stage": "gap_analysis",
+                "message": f"수집 근거 검토·보완 질의 생성 중...{label}",
+            }
+            queries = await self._gap_queries(profile, user_input, pool)
+            if not queries:
+                break
+            gap_queries.extend(queries)
+            added = 0
+            for i, q in enumerate(queries, 1):
+                yield {"stage": "searching", "message": f"보완 검색{label} {i}/{len(queries)}: {q}"}
+                hits = await self._retrieve(q, scope, profile.top_k_per_query)
                 new = self._merge_hits(pool, hits)
+                added += new
                 yield {
                     "stage": "searched",
                     "message": f"'{q}' → {len(hits)}건 (신규 {new}건, 누적 {len(pool)}건)",
                 }
+            if added == 0:
+                break
 
         all_queries = sub_queries + gap_queries
 
         # 4. 종합
-        sources = self._rank_sources(pool)
+        sources = self._rank_sources(pool, profile.max_evidence_chunks)
         if not sources:
-            logger.info("DeepResearch: 근거 0건 — 보고서 생성 생략 (mode=%s)", mode)
+            logger.info("DeepResearch: 근거 0건 — 보고서 생성 생략 (방=%s)", profile.project_id)
             yield {
                 "stage": "done",
                 "report": NO_EVIDENCE_REPORT,
@@ -286,13 +334,7 @@ class DeepResearchService:
             "message": f"근거 {len(sources)}건으로 보고서 작성 중... (수 분 소요될 수 있음)",
         }
         evidence_block = self._evidence_block(sources)
-        custom_instructions = ""
-        if self._prompt_provider is not None:
-            try:
-                custom_instructions = (self._prompt_provider(mode) or "").strip()
-            except Exception as exc:
-                logger.warning("DeepResearch 커스텀 지침 조회 실패 (기본값 사용): %s", exc)
-        system, user = synthesis_prompts(mode, user_input, evidence_block, custom_instructions)
+        system, user = synthesis_prompts(profile.instructions, user_input, evidence_block)
         # 보고서 생성은 수 분짜리 단일 호출이라, 그냥 await하면 그동안 스트림에 아무것도
         # 흐르지 않는다. 화면에서는 진행 중인지 서버가 죽은 것인지 구분할 수 없다
         # (사용자 지적). 살아 있다는 신호를 주기적으로 보낸다 (CR-57).
@@ -323,8 +365,8 @@ class DeepResearchService:
             return
 
         logger.info(
-            "DeepResearch 완료: mode=%s, 질의=%d, 근거=%d청크, 보고서=%d자",
-            mode,
+            "DeepResearch 완료: 방=%s, 질의=%d, 근거=%d청크, 보고서=%d자",
+            profile.project_id,
             len(all_queries),
             len(sources),
             len(report),
@@ -338,9 +380,9 @@ class DeepResearchService:
 
     # ── 단계 구현 ─────────────────────────────────────────────────────────────
 
-    async def _plan(self, mode: str, user_input: str) -> list[str]:
+    async def _plan(self, profile: ResearchProfile, user_input: str) -> list[str]:
         """하위 질의 생성. 실패 시 사용자 입력 앞부분을 단일 질의로 폴백."""
-        system, user = planner_prompts(mode, user_input)
+        system, user = planner_prompts(profile.planner_hint, user_input)
         try:
             raw = await self._agent.complete_json(
                 system,
@@ -352,38 +394,57 @@ class DeepResearchService:
             )
             queries = _clean_queries(raw.get("sub_queries"))
             if queries:
-                return queries[:_MAX_SUB_QUERIES]
+                return queries[: max(1, profile.sub_queries)]
         except Exception as exc:
             logger.warning("DeepResearch 계획 실패 (단일 질의 폴백): %s", exc)
         return [user_input[:200].strip()]
 
-    async def _retrieve(self, query: str, scope: set[str] | None = None) -> list[SearchHit]:
+    async def _retrieve(
+        self, query: str, scope: set[str] | None = None, top_k_per_query: int = _TOP_K_PER_QUERY
+    ) -> list[SearchHit]:
         """하이브리드 검색 (그래프 미가용 시 벡터-only). 실패 시 빈 목록.
 
         scope가 있으면 넉넉히 검색한 뒤 doc_id로 사후 필터링해 top_k를 채운다.
+
+        **업무 노트는 근거로 쓰지 않는다** (`source="docs"`, E-96).
+        딥 리서치 보고서는 "업무노트로 저장" 버튼으로 노트가 되고, 그 노트가 다시
+        벡터 스토어에 들어간다. 노트를 검색하면 **자기 출력이 자기 근거가 되는 순환**이
+        생긴다 — LLM이 지어낸 문장이 다음 보고서에서 인용된 사실로 승격된다.
+        실측으로 벡터 스토어의 노트 4건이 전부 딥 리서치 산출물이었다
+        (`__knowledge__:중복성검토…`).
+
+        사내 문서만 근거로 삼는다는 것이 이 기능의 전제(스펙 §1)이기도 하다.
         """
-        top_k = _TOP_K_PER_QUERY * 4 if scope else _TOP_K_PER_QUERY
+        top_k = top_k_per_query * 4 if scope else top_k_per_query
         try:
             if self._graph_rag is not None:
-                result = await self._graph_rag.hybrid_retrieve(query, top_k=top_k)
+                result = await self._graph_rag.hybrid_retrieve(
+                    query, top_k=top_k, source=_EVIDENCE_SOURCE
+                )
                 hits = list(result.hits)
             else:
                 loop = asyncio.get_running_loop()
-                result = await loop.run_in_executor(None, lambda: self._rag.retrieve(query, top_k))
+                result = await loop.run_in_executor(
+                    None, lambda: self._rag.retrieve(query, top_k, source=_EVIDENCE_SOURCE)
+                )
                 hits = list(result.hits)
         except Exception as exc:
             logger.warning("DeepResearch 검색 실패 (query=%r): %s", query[:50], exc)
             return []
         if scope:
             hits = [h for h in hits if h.doc_id in scope]
-        return hits[:_TOP_K_PER_QUERY]
+        # 그래프 경로가 노트를 섞어 올 여지를 마지막으로 한 번 더 막는다.
+        # 지금 지식그래프에는 노트가 0건이지만, 나중에 노트를 넣게 되면 이 한 줄이
+        # 없을 때 순환이 조용히 되살아난다.
+        hits = [h for h in hits if not _is_note(h)]
+        return hits[:top_k_per_query]
 
     async def _gap_queries(
-        self, mode: str, user_input: str, pool: dict[str, SearchHit]
+        self, profile: ResearchProfile, user_input: str, pool: dict[str, SearchHit]
     ) -> list[str]:
         """수집 근거를 보여주고 보완 질의 생성. 실패·불필요 시 빈 목록."""
         digest = "\n".join(f"- {h.doc_name}: {h.text[:80]}" for h in list(pool.values())[:20])
-        system, user = gap_prompts(mode, user_input, digest)
+        system, user = gap_prompts(profile.name, user_input, digest)
         try:
             raw = await self._agent.complete_json(
                 system,
@@ -414,7 +475,9 @@ class DeepResearchService:
         return added
 
     @staticmethod
-    def _rank_sources(pool: dict[str, SearchHit]) -> list[SearchHit]:
+    def _rank_sources(
+        pool: dict[str, SearchHit], max_chunks: int = _MAX_EVIDENCE_CHUNKS
+    ) -> list[SearchHit]:
         """문서(doc_id)별 최고 score 청크 1개로 중복 제거 → score 내림차순 + 상한.
 
         같은 문서의 여러 청크가 각각 참고자료 번호를 차지해 중복 표시되던 문제 방지
@@ -425,7 +488,7 @@ class DeepResearchService:
             if cur is None or h.score > cur.score:
                 best[h.doc_id] = h
         ranked = sorted(best.values(), key=lambda h: h.score, reverse=True)
-        return ranked[:_MAX_EVIDENCE_CHUNKS]
+        return ranked[: max(1, max_chunks)]
 
     @staticmethod
     def _evidence_block(sources: list[SearchHit]) -> str:

@@ -14,8 +14,8 @@ from agent_prompts.registry import get_label, get_risk
 
 
 def test_N1_prompt_keys_entries() -> None:
-    """N-1: PROMPT_KEYS는 10개의 키를 가진다 (CR-44: 딥 리서치 3모드 추가)."""
-    assert len(PROMPT_KEYS) == 10
+    """N-1: PROMPT_KEYS는 7개의 키를 가진다 (CR-62: 딥 리서치 3키가 방 지침으로 이동)."""
+    assert len(PROMPT_KEYS) == 7
     expected = {
         "persona",
         "knowledge_note",
@@ -24,9 +24,6 @@ def test_N1_prompt_keys_entries() -> None:
         "intent_classify",
         "meeting_minutes",
         "graph_extract",
-        "deep_research_duplication",
-        "deep_research_discovery",
-        "deep_research_proposal",
     }
     assert set(PROMPT_KEYS) == expected
 
@@ -140,36 +137,23 @@ def test_E3_intent_classify_default_contains_required_tokens() -> None:
         assert token in default, f"토큰 '{token}'이 intent_classify default에 없음"
 
 
-# ── CR-44: 딥 리서치 3모드 지침 ────────────────────────────────────────────────
+# ── CR-62: 딥 리서치 지침은 이 레지스트리를 떠났다 ──────────────────────────────
 
 
-def test_D1_deep_research_keys_have_string_defaults() -> None:
-    """D-1: 딥 리서치 3키 모두 비어있지 않은 기본 지침 문자열을 반환한다."""
+def test_D1_deep_research_keys_are_gone() -> None:
+    """D-1: 딥 리서치 3키가 레지스트리에서 빠졌다.
+
+    지침이 방(프로젝트)마다 다르고 버전으로 관리되므로 "전역 단일값 + 코드 기본값"인
+    이 레지스트리로는 표현할 수 없다. data/research_projects.db가 대신한다.
+    설정 화면의 지침 목록에도 더 이상 나오지 않는다.
+    """
     for key in ("deep_research_duplication", "deep_research_discovery", "deep_research_proposal"):
-        default = get_default(key)  # type: ignore[arg-type]
-        assert isinstance(default, str) and len(default) > 0, f"{key} default 비어있음"
+        assert key not in PROMPT_KEYS
+        assert get_default(key) is None, f"{key}: 레지스트리에 기본값이 남아 있다"  # type: ignore[arg-type]
 
 
-def test_D2_deep_research_risk_is_medium() -> None:
-    """D-2: 결과물 품질에 직접 영향을 주므로 medium — high(재초기화 필요)는 아니다."""
-    for key in ("deep_research_duplication", "deep_research_discovery", "deep_research_proposal"):
-        assert get_risk(key) == "medium"  # type: ignore[arg-type]
-
-
-def test_D3_deep_research_defaults_are_distinct() -> None:
-    """D-3: 세 모드가 실수로 같은 기본값을 공유하면 안 된다(복붙 실수 방지)."""
-    dup = get_default("deep_research_duplication")
-    disc = get_default("deep_research_discovery")
-    prop = get_default("deep_research_proposal")
-    assert len({dup, disc, prop}) == 3
-
-
-def test_D4_deep_research_effective_prompt_custom_override() -> None:
-    """D-4: 다른 키들과 동일하게 커스텀 우선 → 기본값 폴백이 성립한다."""
-    from agent_prompts.registry import effective_prompt
-
-    mock_app_cfg = MagicMock()
-    mock_app_cfg.agent_prompts = MagicMock()
-    mock_app_cfg.agent_prompts.deep_research_proposal = "커스텀 계획서 지침"
-
-    assert effective_prompt("deep_research_proposal", mock_app_cfg, None) == "커스텀 계획서 지침"
+def test_D2_remaining_keys_are_untouched() -> None:
+    """D-2: 나머지 7개는 그대로 설정에서 편집된다 — 딥 리서치만 옮겼다."""
+    assert len(PROMPT_KEYS) == 7
+    assert get_risk("graph_extract") == "medium"
+    assert isinstance(get_default("meeting_minutes"), str)

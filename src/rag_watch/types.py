@@ -32,6 +32,9 @@ class WatchDecision(str, Enum):
     DEFERRED = "deferred"
     """max_per_cycle 초과 — 다음 주기로."""
 
+    QUARANTINED = "quarantined"
+    """연속 실패가 한도를 넘음 — 내용이 바뀌기 전까지 시도하지 않는다 (E-91)."""
+
 
 @dataclass(frozen=True)
 class FileCandidate:
@@ -61,6 +64,14 @@ class ScanPlan:
     unstable: list[FileCandidate] = field(default_factory=list)
     deferred: list[FileCandidate] = field(default_factory=list)
     skipped: int = 0
+
+    quarantined: list[FileCandidate] = field(default_factory=list)
+    """연속 실패 한도를 넘어 이번 주기에 시도하지 않은 파일 (E-91).
+
+    `to_ingest` 정원을 잡아먹지 않는다 — 이게 핵심이다. 실패 파일이 정원을 채워 정상 파일이
+    영원히 밀리는 것이 원래 사고였다. 계획이 비었는지 판단할 때는 세지 않는다(할 일이 아니라
+    "하지 않기로 한 것"이므로, 매 주기 저장·로그를 유발하면 안 된다).
+    """
 
     folders_to_create_in_app: list[str] = field(default_factory=list)
     folders_to_create_on_disk: list[str] = field(default_factory=list)

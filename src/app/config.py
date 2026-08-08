@@ -424,15 +424,19 @@ class AgentPromptsConfig(BaseModel):
         default="",
         description="지식그래프 엔티티·관계 추출 지침. 빈값이면 EXTRACT_SYSTEM_PROMPT 사용.",
     )
-    # CR-44: 딥 리서치 3모드 종합 지침. 빈값이면 각 모드의 코드 기본값 사용.
+    # CR-62 이후 **deprecated** — 딥 리서치 지침은 방(프로젝트)마다 다르고 버전으로
+    # 관리되므로 data/research_projects.db로 옮겼다. 이 세 필드는 두 가지 이유로 남긴다:
+    #   (1) 기존 conf.yaml이 그대로 파싱돼야 한다 (값이 있는 사용자가 있다)
+    #   (2) 예시 방을 처음 만들 때 이 값을 **버전 1로 이관**한다 (deep_research/seeds.py)
+    # 이관이 끝난 뒤에는 아무도 읽지 않는다. 설정 화면의 지침 목록에서도 빠졌다.
     deep_research_duplication: str = Field(
-        default="", description="딥 리서치 '과제 중복성 검토' 지침. 빈값이면 기본값 사용."
+        default="", description="[deprecated] CR-62에서 방 지침으로 이관. 시드 시 1회만 읽는다."
     )
     deep_research_discovery: str = Field(
-        default="", description="딥 리서치 '신규과제 발굴' 지침. 빈값이면 기본값 사용."
+        default="", description="[deprecated] CR-62에서 방 지침으로 이관. 시드 시 1회만 읽는다."
     )
     deep_research_proposal: str = Field(
-        default="", description="딥 리서치 '과제 계획서 초안' 지침. 빈값이면 기본값 사용."
+        default="", description="[deprecated] CR-62에서 방 지침으로 이관. 시드 시 1회만 읽는다."
     )
 
 
@@ -527,6 +531,33 @@ class AppConfig(BaseModel):
     rag_hybrid_enabled: bool = Field(
         default=True,
         description="M_18 하이브리드 검색(FTS BM25 + RRF 융합) 사용 여부.",
+    )
+    # CR-63: 대화 검색 규모. 예전엔 `upstream_adapter`에 5가 박혀 있었다.
+    #
+    # RFP만 올리던 시절에는 문서당 청크가 적어 5청크가 자연히 여러 문서로 흩어졌는데,
+    # 청크 50~60개짜리 완결보고서가 들어오면서 **한 문서가 top_k를 독차지**하게 됐다.
+    # 실측: `기후변화 대응방안…` 질의에서 5청크가 문서 **2건**에서 나왔다(3+2).
+    # 같은 랭킹으로 k=10이면 문서 6건이 된다.
+    rag_top_k: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description=(
+            "대화에서 한 번에 가져올 청크 수. 크면 근거 문서가 다양해지지만 "
+            "컨텍스트와 GPU를 더 쓴다."
+        ),
+    )
+    # 융합·리랭크가 끝난 **뒤에** 적용한다 — 랭킹 자체는 건드리지 않고 편중만 깎는다.
+    # 실측 문서 분포 `[5,2,2,2,2,2,1,1,1,1,1]`처럼 한 보고서가 상위를 쓸어가는 것을 막는다.
+    # 0이면 제한 없음.
+    rag_max_chunks_per_doc: int = Field(
+        default=3,
+        ge=0,
+        le=20,
+        description=(
+            "한 문서가 검색 결과에서 차지할 수 있는 최대 청크 수. "
+            "내용은 부실한데 분량만 긴 보고서가 근거를 독차지하는 것을 막는다. 0=제한 없음."
+        ),
     )
     tts_brief_enabled: bool = Field(
         default=True,

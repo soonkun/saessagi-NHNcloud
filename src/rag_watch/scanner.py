@@ -85,6 +85,7 @@ def build_plan(
     app_folder_names: set[str],
     max_per_cycle: int,
     delete_grace_cycles: int = 2,
+    max_ingest_failures: int = 3,
 ) -> ScanPlan:
     """한 주기 실행 계획을 세운다."""
     plan = ScanPlan()
@@ -135,6 +136,12 @@ def build_plan(
         entry = state.get(digest)
 
         if entry is None:
+            # E-91: 같은 내용으로 계속 실패한 파일은 정원을 쓰지 않는다.
+            # 실패는 상태의 files에 남지 않으므로 매 주기 "신규"로 되돌아온다. 정렬 순서상
+            # 앞쪽에 있으면 max_per_cycle을 통째로 차지해 뒤 파일이 영원히 밀린다.
+            if max_ingest_failures > 0 and state.failure_count(digest) >= max_ingest_failures:
+                plan.quarantined.append(cand)
+                continue
             if len(plan.to_ingest) >= max_per_cycle:
                 plan.deferred.append(cand)
             else:
@@ -172,6 +179,19 @@ def build_plan(
     state.clear_all_misses(set(vanished))
 
     state.drop_seen(seen_rel)
+
+    # E-91: 사라진 파일의 실패 기록 정리.
+    #
+    # live_digests로 판단하면 안 된다 — 재시작 직후에는 모든 파일이 "안정화 대기"라 해시를
+    # 계산하지 않아 live_digests가 비고, 그러면 **매 재시작마다 실패 기록이 전부 지워져**
+    # 문제 파일이 다시 정원을 차지한다. 기록해 둔 경로가 실제로 남아 있는지로 판단한다.
+    still_present = {
+        digest
+        for digest, entry in state.failures().items()
+        if (rel := str(entry.get("path") or "")) and (root / rel).exists()
+    }
+    state.drop_failures(still_present)
+
     return plan
 
 

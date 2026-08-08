@@ -218,3 +218,74 @@ export function safeFileStem(text: string, max = 40): string {
     .trim()
     .slice(0, max);
 }
+
+// ── 딥 리서치 결과 제목 (CR-62) ──────────────────────────────────────────────
+
+/** 모드 → 제목에 쓸 짧은 이름. 화면 라벨("과제 중복성 검토")은 목록에서 너무 길다. */
+// CR-62: 모드 3개가 방(프로젝트)으로 바뀌었다. 시드 방 이름은 짧게 줄여 쓰고,
+// 사용자가 만든 방은 이름을 그대로 쓴다 — 임의로 줄이면 오히려 못 알아본다.
+export const RESEARCH_MODE_SHORT: Record<string, string> = {
+  duplication: "중복성검토",
+  discovery: "신규과제발굴",
+  proposal: "계획서초안",
+};
+
+/**
+ * 보고서 본문에서 과제명을 뽑는다.
+ *
+ * 딥 리서치 결과를 노트로 옮기면 제목이 전부
+ * `[딥리서치·과제 중복성 검토] 첨부 기반`으로 똑같아져 목록에서 구분이 안 됐다
+ * (파일만 첨부하고 프롬프트를 비우면 늘 "첨부 기반"이 된다 — 사용자 지적).
+ * 보고서 첫머리에 과제명이 적혀 있으므로 그것을 쓴다.
+ */
+export function extractProjectTitle(report: string): string {
+  if (!report) return "";
+  // "**과제명**: ○○○" / "과제명 : ○○○" / "- 과제명: ○○○" 등 표기 흔들림을 흡수한다.
+  const patterns = [
+    /(?:^|\n)[\s*\-•○·]*\*{0,2}(?:신규\s*)?과제\s*명\*{0,2}\s*[:：]\s*(.+)/,
+    /(?:^|\n)[\s*\-•○·]*\*{0,2}연구\s*과제\s*명\*{0,2}\s*[:：]\s*(.+)/,
+    /(?:^|\n)[\s*\-•○·]*\*{0,2}사업\s*명\*{0,2}\s*[:：]\s*(.+)/,
+  ];
+  for (const re of patterns) {
+    const m = re.exec(report);
+    if (m) {
+      const title = m[1]
+        .replace(/\*\*/g, "")
+        .replace(/\(가칭\)/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/[.,·]+$/, "");
+      if (title.length >= 4) return title;
+    }
+  }
+  return "";
+}
+
+/**
+ * 노트·PDF에 쓸 제목. `(중복성검토)과제명` 형태.
+ *
+ * 과제명을 못 찾으면 순서대로 물러선다: 첨부 파일명 → 사용자가 쓴 요청 → 날짜.
+ * 어느 경우에도 **서로 다른 리서치가 같은 제목을 갖지 않게** 하는 것이 목적이다.
+ */
+export function researchTitle(
+  mode: string,
+  report: string,
+  prompt: string,
+  fileName = "",
+  now: Date = new Date(),
+): string {
+  const short = RESEARCH_MODE_SHORT[mode] ?? mode;  // 방 이름은 그대로
+  const fromReport = extractProjectTitle(report);
+  const fromFile = fileName.replace(/\.[^.]+$/, "").trim();
+  const fromPrompt = prompt.trim().replace(/\s+/g, " ");
+  const subject =
+    fromReport ||
+    fromFile ||
+    fromPrompt ||
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate(),
+    ).padStart(2, "0")} ${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes(),
+    ).padStart(2, "0")}`;
+  return `(${short})${subject.slice(0, 60)}`;
+}

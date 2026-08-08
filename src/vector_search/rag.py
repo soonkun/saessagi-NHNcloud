@@ -37,6 +37,33 @@ def _rrf_fuse(vec_hits: list[SearchHit], fts_hits: list[SearchHit]) -> list[Sear
     return [keep[cid] for cid, _ in ordered]
 
 
+def cap_per_document(hits: list[SearchHit], max_per_doc: int) -> list[SearchHit]:
+    """한 문서가 검색 결과를 독차지하지 못하게 상한을 건다 (CR-63).
+
+    **순위는 건드리지 않는다.** 이미 정해진 순서대로 훑으면서 같은 `doc_id`가
+    `max_per_doc`을 넘으면 건너뛸 뿐이다 — 재정렬이 아니라 걸러내기다.
+
+    왜 필요한가: RFP만 올리던 시절에는 문서당 청크가 적어 top_k가 자연히 여러 문서로
+    흩어졌다. 청크 50~60개짜리 완결보고서가 들어오면서 **한 문서가 상위를 쓸어간다.**
+    실측 문서 분포 `[5,2,2,2,2,2,1,1,1,1,1]` — 1위 문서 혼자 5청크.
+    내용이 부실해도 분량만 길면 과대표되는 구조라, 근거의 다양성이 조용히 무너진다.
+
+    `max_per_doc <= 0`이면 제한 없음(그대로 반환).
+    """
+    if max_per_doc <= 0:
+        return hits
+    seen: dict[str, int] = {}
+    out: list[SearchHit] = []
+    for h in hits:
+        key = h.doc_id or ""
+        n = seen.get(key, 0)
+        if n >= max_per_doc:
+            continue
+        seen[key] = n + 1
+        out.append(h)
+    return out
+
+
 class RagService:
     """Embedder + VectorStore 파사드. sync API.
 

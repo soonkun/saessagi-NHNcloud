@@ -263,3 +263,42 @@ def test_clear_derived_preserves_candidates(
     assert store.stats()["canonical_entities"] == 0
     # 후보 상태도 PENDING으로 되돌아야 다시 돌릴 수 있다
     assert store.candidates_for_document("D1")[0].state == "PENDING"
+
+
+# ── 진행률 보고 (E-97) ────────────────────────────────────────────────────────
+
+
+def test_progress_reports_final_tick(store: CandidateStore, config: KnowledgeGraphConfig) -> None:
+    """총건수가 보고 주기의 배수가 아니어도 마지막 눈금을 찍는다 (E-97).
+
+    실제 사고: 363,235건인데 2만 배수에서만 보고해 화면이 `360,000/363,235`에
+    영원히 머물렀다. 사용자가 "왜 멈춰 있냐"고 물었다.
+    """
+    _doc(store, "D1")
+    # 7건 — 어떤 보고 주기의 배수도 아니다
+    _put(store, "D1", [_cand(f"c{i}", "D1", f"기술{i}") for i in range(7)])
+    consolidate_documents(store, config)
+
+    seen: list[tuple[str, int, int]] = []
+    normalize_global(store, config, progress=lambda s, d, t: seen.append((s, d, t)))
+
+    assert seen, "진행률 보고가 하나도 없다"
+    # 마지막 보고는 반드시 완료(done == total)여야 한다 — 그래야 화면이 안 얼어붙는다
+    last = seen[-1]
+    assert last[1] == last[2], f"마지막 눈금이 완료가 아니다: {last}"
+
+
+def test_fuzzy_pass_reports_progress(store: CandidateStore, config: KnowledgeGraphConfig) -> None:
+    """가장 오래 걸리는 퍼지 구간도 진행률을 낸다 (E-97).
+
+    여기가 조용하면 8분간 죽은 것처럼 보인다 — 실제로 그렇게 보였다.
+    """
+    config.normalization.fuzzy_enabled = True
+    _doc(store, "D1")
+    _put(store, "D1", [_cand(f"c{i}", "D1", f"서로다른기술{i}") for i in range(5)])
+    consolidate_documents(store, config)
+
+    stages: list[str] = []
+    normalize_global(store, config, progress=lambda s, d, t: stages.append(s))
+
+    assert "normalize:fuzzy" in stages, f"퍼지 진행률이 없다: {set(stages)}"

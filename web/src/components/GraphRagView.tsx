@@ -149,7 +149,16 @@ export default function GraphRagView(): React.ReactElement {
   // CR-37: 검색→선택 시 그 문서 중심 포커스 서브그래프로 교체 (전체 스냅샷 상한 우회)
   const [focusDocId, setFocusDocId] = useState<string | null>(null);
   const pendingFocusRef = useRef<string | null>(null);
-  const [normResult, setNormResult] = useState<string>("");
+  // 상단 알림 배너. 예전엔 정규화 전용(`normResult`)이라 라벨이 "정규화"로 박혀 있었는데,
+  // 그래프 초기화·문서 열기 실패까지 여기로 들어오면서 **오류가 초록색 "정규화"로** 떴다.
+  // 라벨과 색을 호출자가 정하게 바꾼다.
+  const [notice, setNotice] = useState<{ label: string; text: string; error?: boolean } | null>(
+    null
+  );
+  const notifyError = useCallback(
+    (label: string) => (text: string) => setNotice({ label, text, error: true }),
+    []
+  );
   // 기본 접힘 — 사용자가 그래프 탭에서 보고 싶은 것은 그래프다 (CR-61).
   const [adminOpen, setAdminOpenState] = useState<boolean>(loadAdminOpen);
   // 접힌 상태에서도 진행 상황이 보이도록 패널이 올려주는 한 줄 요약.
@@ -206,11 +215,17 @@ export default function GraphRagView(): React.ReactElement {
 
   // ── 그래프 데이터 변환 ─────────────────────────────────────────────────────
   const { graphData, neighbors, byId } = useMemo(() => {
-    const nodes: RFNode[] = (data?.nodes ?? []).map((n) => ({ ...n, degree: 0 }));
+    // E-101: 근거 모드에서는 **근거 서브그래프 자체를 그린다.**
+    // 예전에는 개요를 그린 뒤 근거 노드를 하이라이트하려 했는데, 개요는 361,032개 중
+    // 500개를 뽑은 표본이라 인용된 노드가 거기 있을 확률이 사실상 0이었다
+    // (실측: 근거 52엔티티 중 개요에 0건, 문서 42건 중 0건). 하이라이트할 대상이
+    // 없으니 버튼을 눌러도 아무 일이 안 일어났다.
+    const source = evidence ? { nodes: evidence.nodes, edges: evidence.edges } : data;
+    const nodes: RFNode[] = (source?.nodes ?? []).map((n) => ({ ...n, degree: 0 }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const links: RFLink[] = [];
     const neighbors = new Map<string, Set<string>>();
-    for (const e of data?.edges ?? []) {
+    for (const e of source?.edges ?? []) {
       if (!byId.has(e.source) || !byId.has(e.target)) continue;
       links.push({ source: e.source, target: e.target, kind: e.kind, weight: e.weight });
       byId.get(e.source)!.degree += 1;
@@ -231,7 +246,7 @@ export default function GraphRagView(): React.ReactElement {
       }
     }
     return { graphData: { nodes, links }, neighbors, byId };
-  }, [data]);
+  }, [data, evidence]);
 
   const evidenceIds = useMemo(() => {
     if (!evidence) return null;
@@ -337,6 +352,32 @@ export default function GraphRagView(): React.ReactElement {
     pinnedRef.current.delete(n.id);
     setPinnedVersion((v) => v + 1);
   }, []);
+
+  // E-101: 근거 그래프를 열면 **참조 문서에 핀이 꽂힌 상태**로 보여야 한다
+  // (사용자 요청: "참조한 문서가 핀이 꼽히면서 보여줘야 할 것 같은데").
+  // 레이아웃이 좌표를 잡은 뒤에야 핀을 꽂을 수 있어 한 틱 늦게 실행한다.
+  useEffect(() => {
+    if (!evidence) return;
+    const docIds = new Set(
+      evidence.nodes.filter((n) => n.kind === "document").map((n) => n.id)
+    );
+    if (docIds.size === 0) return;
+    pinnedRef.current.clear();
+    const t = setTimeout(() => {
+      let pinned = 0;
+      for (const n of graphData.nodes) {
+        if (!docIds.has(n.id) || n.x === undefined || n.y === undefined) continue;
+        n.fx = n.x;
+        n.fy = n.y;
+        pinnedRef.current.set(n.id, { x: n.x, y: n.y });
+        pinned += 1;
+      }
+      if (pinned > 0) setPinnedVersion((v) => v + 1);
+    }, 900);
+    return () => clearTimeout(t);
+    // graphData는 evidence가 바뀔 때 함께 재생성된다 — evidence만 보면 충분하다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evidence]);
 
   const unpinAll = useCallback(() => {
     pinnedRef.current.clear();
@@ -931,15 +972,22 @@ export default function GraphRagView(): React.ReactElement {
                   void clearGraph(clearConfirmText.trim())
                     .then((r) => {
                       setClearModalOpen(false);
-                      setNormResult(
-                        `그래프 초기화 완료 — 엔티티 ${r.before.entities ?? 0} · 관계 ${r.before.relations ?? 0} 삭제됨`
-                      );
+                      setNotice({
+                        label: "초기화",
+                        text: `그래프 초기화 완료 — 엔티티 ${r.before.entities ?? 0} · 관계 ${r.before.relations ?? 0} 삭제됨`,
+                      });
                       pinnedRef.current.clear();
                       setPinnedVersion((v) => v + 1);
                       setSelected(null);
                       return load();
                     })
-                    .catch((e) => setNormResult(`초기화 실패: ${e instanceof Error ? e.message : String(e)}`))
+                    .catch((e) =>
+                      setNotice({
+                        label: "초기화",
+                        text: `실패: ${e instanceof Error ? e.message : String(e)}`,
+                        error: true,
+                      })
+                    )
                     .finally(() => setClearing(false));
                 }}
                 style={{
@@ -962,26 +1010,28 @@ export default function GraphRagView(): React.ReactElement {
         </div>
       )}
 
-      {/* 정규화 결과 배너 */}
-      {normResult && (
+      {/* 알림 배너 — 라벨·색은 호출자가 정한다 (오류를 초록 "정규화"로 띄우던 것 수정) */}
+      {notice && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: 8,
             padding: "6px 10px",
-            background: "rgba(86,179,128,0.1)",
+            background: notice.error ? "rgba(192,57,43,0.1)" : "rgba(86,179,128,0.1)",
             borderBottom: "1px solid var(--color-border)",
             fontSize: "var(--fs-12)",
             flexShrink: 0,
           }}
         >
-          <span style={{ color: "#3d9668", fontWeight: 600, flexShrink: 0 }}>정규화</span>
+          <span style={{ color: notice.error ? "#c0392b" : "#3d9668", fontWeight: 600, flexShrink: 0 }}>
+            {notice.label}
+          </span>
           <span style={{ color: "var(--color-text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {normResult}
+            {notice.text}
           </span>
           <button
-            onClick={() => setNormResult("")}
+            onClick={() => setNotice(null)}
             style={{ border: "none", background: "transparent", color: "var(--color-text-muted)", cursor: "pointer", display: "flex" }}
           >
             <X size={12} />
@@ -1403,13 +1453,18 @@ export default function GraphRagView(): React.ReactElement {
             <div style={{ display: "flex", gap: 6, marginBottom: 10, flexWrap: "wrap" }}>
               {selected.kind === "document" && (
                 <>
-                  <PanelBtn
-                    onClick={() => openDocument(selected.id, selected.label)}
-                    accent={accent}
-                    primary
-                  >
-                    <FileText size={11} /> 열어보기
-                  </PanelBtn>
+                  {/* E-93: 노드 id는 project_id라 열기에 못 쓴다. doc_id가 있을 때만 연다. */}
+                  {selected.doc_id ? (
+                    <PanelBtn
+                      onClick={() =>
+                        openDocument(selected.doc_id!, selected.label, notifyError("문서 열기"))
+                      }
+                      accent={accent}
+                      primary
+                    >
+                      <FileText size={11} /> 열어보기
+                    </PanelBtn>
+                  ) : null}
                   <PanelBtn onClick={() => setChatTab("documents")} accent={accent}>
                     <ExternalLink size={11} /> 문서 탭
                   </PanelBtn>
@@ -1541,14 +1596,15 @@ export default function GraphRagView(): React.ReactElement {
             pointerEvents: "none",
           }}
         >
+          {/* CR-61에서 그래프가 엔티티 기반으로 바뀌었는데 범례만 옛 키워드 문구로
+              남아 있었다(E-93). 지금 그래프에 노트 노드는 없고 연결선은 공유 엔티티다. */}
           <div style={{ display: "flex", gap: 10 }}>
-            <span>● 키워드</span>
+            <span>● 엔티티</span>
             <span>▤ 과제(문서)</span>
-            <span>◪ 노트</span>
-            <span style={{ color: isDark ? "#9fb3d1" : "#5b7396" }}>— 공유 키워드 연관</span>
+            <span style={{ color: isDark ? "#9fb3d1" : "#5b7396" }}>— 공유 엔티티 연관</span>
           </div>
           <div style={{ opacity: 0.8 }}>
-            선 = 공유 키워드로 이어진 과제 · 핀·검색 하면 그 과제와 연관만 표시 · 클릭 = 핀 · 호버 = 라벨
+            선 = 같은 엔티티를 쓰는 과제 · 핀·검색 하면 그 과제와 연관만 표시 · 클릭 = 핀 · 호버 = 라벨
           </div>
         </div>
       </div>

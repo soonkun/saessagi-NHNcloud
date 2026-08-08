@@ -21,6 +21,40 @@ from .service_context import AppServiceContext
 from .ws_route import init_app_ws_route
 
 
+def _register_utf8_error_handler(app: FastAPI) -> None:
+    """오류 응답에 `charset=utf-8`을 붙인다 (E-93).
+
+    Starlette는 media type이 `text/`로 시작할 때만 charset을 붙인다
+    (`starlette/responses.py:79`). `application/json`에는 안 붙으므로, 오류 JSON이
+    **브라우저에 문서로 직접 렌더될 때** 브라우저가 시스템 로케일(한국어 Windows =
+    CP949)로 폴백해 한글이 깨진다 — 사용자가 `?맠낮 ?뜻씩??` 를 봤다.
+
+    앱 내부 `apiFetch`는 `res.json()`이 항상 UTF-8이라 멀쩡했고, 그래서
+    `window.open()`으로 파일을 여는 경로에서만 드러났다. 근본 원인은 전역이므로
+    여기 한 곳에서 고친다.
+    """
+    from fastapi import HTTPException
+    from fastapi.exception_handlers import http_exception_handler
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, Response
+
+    async def _handler(request: Request, exc: Exception) -> Response:
+        if not isinstance(exc, StarletteHTTPException):
+            return await http_exception_handler(request, exc)  # type: ignore[arg-type]
+        if exc.status_code in (204, 304) or exc.status_code < 200:
+            return await http_exception_handler(request, exc)
+        return JSONResponse(
+            {"detail": exc.detail},
+            status_code=exc.status_code,
+            headers=getattr(exc, "headers", None),
+            media_type="application/json; charset=utf-8",
+        )
+
+    app.add_exception_handler(StarletteHTTPException, _handler)
+    app.add_exception_handler(HTTPException, _handler)
+
+
 class _SaessagiAvatarFiles(AvatarStaticFiles):
     """아바타 정적 파일 — 영상(webm)도 허용한다 (E-77).
 
@@ -59,6 +93,7 @@ class AppWebSocketServer:
     ) -> None:
         # FastAPI 앱을 내부 속성으로 보유 (upstream WebSocketServer.app 패턴과 동일)
         self.app: FastAPI = FastAPI(title="새싹이 AI 비서", lifespan=lifespan)
+        _register_utf8_error_handler(self.app)
         self.full_config: FullConfig = config
         self.config = config.upstream  # upstream 호환용 — Config 객체
         self.default_context_cache = default_context_cache

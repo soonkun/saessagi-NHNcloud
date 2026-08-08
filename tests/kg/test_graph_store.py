@@ -175,3 +175,20 @@ def test_snapshot_caps_projects_per_entity() -> None:
     proj_q = [q for q in store.queries if "<-[r]-(p:Project)" in q]
     assert proj_q, "과제 엣지를 안 가져온다"
     assert "collect({pid:" in proj_q[0] and "[0..$cap]" in proj_q[0], "엔티티별 과제 상한이 없다"
+
+
+def test_stale_cleanup_covers_document_label() -> None:
+    """세대 정리가 Document도 대상으로 삼는지 (E-100).
+
+    문서 노드는 `doc_id`가 안정적이라 해시 변경으로 고아가 되지는 않지만,
+    **코퍼스에서 빠진 문서**는 세대 교체가 안 지우면 영원히 남는다. 실제로 예전
+    임베딩 테스트 파일 하나가 몇 번의 재구축을 지나 그래프에 남아 있었다.
+    """
+    import inspect
+
+    from kg import neo4j_load
+
+    src = inspect.getsource(neo4j_load.load_graph)
+    call = src[src.index("delete_stale") :]
+    for label in ("CanonicalEntity", "Mention", "Chunk", "Project", "Document"):
+        assert f'"{label}"' in call[:400], f"세대 정리에서 {label}이 빠졌다"

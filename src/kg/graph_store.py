@@ -337,21 +337,33 @@ class KgGraphStore:
             return {"nodes": [], "edges": []}
 
         # 엔티티마다 대표 과제 몇 개만 — collect()[0..n]으로 엔티티별 상한을 건다.
+        # **문서 노드에는 반드시 doc_id를 함께 실어 보낸다** (E-93).
+        # 노드 id는 Project.project_id인데, 과제번호가 없으면 `doc:<doc_id>` 대체키다.
+        # 프론트가 그 id로 문서를 열려다 404를 받았다 — 옛 계약("문서 노드 id == doc_id",
+        # graph_rag/neo4j_store.py:307)을 CR-61이 깬 것이다. 억지로 id를 doc_id로 되돌리면
+        # 다문서 과제(377개)를 표현할 수 없으므로, 여는 데 쓸 값을 별도 필드로 준다.
         for row in self._run(
             "UNWIND $ids AS cid "
             "MATCH (c:CanonicalEntity {canonical_id: cid})<-[r]-(p:Project) "
+            "OPTIONAL MATCH (p)-[:HAS_DOCUMENT]->(d:Document) "
+            "WITH cid, p, r, collect(d.doc_id)[0] AS did "
             "WITH cid, collect({pid: p.project_id, "
             "                   label: coalesce(p.title, p.project_id), "
-            "                   rel: type(r)})[0..$cap] AS ps "
+            "                   did: did, rel: type(r)})[0..$cap] AS ps "
             "UNWIND ps AS x "
-            "RETURN cid, x.pid AS pid, x.label AS plabel, x.rel AS rel",
+            "RETURN cid, x.pid AS pid, x.label AS plabel, x.did AS did, x.rel AS rel",
             ids=ent_ids,
             cap=projects_per_entity,
         ):
             cid = str(row["cid"])
             pid = str(row["pid"])
             if pid not in nodes:
-                nodes[pid] = {"id": pid, "label": str(row["plabel"] or pid), "kind": "document"}
+                nodes[pid] = {
+                    "id": pid,
+                    "label": str(row["plabel"] or pid),
+                    "kind": "document",
+                    "doc_id": str(row["did"] or ""),
+                }
             edges.append(
                 {
                     "source": pid,
@@ -401,6 +413,75 @@ class KgGraphStore:
                 )
         return {"nodes": list(nodes.values()), "edges": edges}
 
+    def evidence_snapshot(
+        self, canonical_ids: Sequence[str], projects_per_entity: int = 8
+    ) -> dict[str, Any]:
+        """근거 서브그래프 — 답변에 인용된 엔티티와 그 엔티티를 쓴 과제들 (E-101).
+
+        **개요(`snapshot`)와 노드 id 규약이 반드시 같아야 한다.** 예전 근거 payload는
+        문서 노드 id에 raw `doc_id`를 넣었는데 개요는 `Project.project_id`를 쓴다.
+        그래서 프론트가 근거 노드를 개요에서 찾지 못해 핀이 **한 개도** 안 꽂혔다
+        (실측: 근거 노드 94건 중 개요에 존재 0건).
+
+        라벨도 여기서 과제 제목으로 채운다 — 예전에는 `label = doc_id` 라서
+        `TRKO202500017741_….pdf_afbc4f63` 가 노드 이름으로 그려졌다.
+        """
+        nodes: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, Any]] = []
+        ids = [str(c) for c in canonical_ids if c]
+        if not ids:
+            return {"nodes": [], "edges": []}
+
+        for row in self._run(
+            "UNWIND $ids AS cid "
+            "MATCH (c:CanonicalEntity {canonical_id: cid}) "
+            "RETURN cid, c.canonical_name AS name, c.entity_type AS etype",
+            ids=ids,
+        ):
+            cid = str(row["cid"])
+            nodes[cid] = {
+                "id": cid,
+                "label": str(row["name"] or cid),
+                "kind": "entity",
+                "type": str(row["etype"] or ""),
+                "doc_id": "",
+            }
+
+        # 개요와 **같은 쿼리 형태**를 쓴다 — 두 곳이 갈라지면 또 id가 어긋난다.
+        for row in self._run(
+            "UNWIND $ids AS cid "
+            "MATCH (c:CanonicalEntity {canonical_id: cid})<-[r]-(p:Project) "
+            "OPTIONAL MATCH (p)-[:HAS_DOCUMENT]->(d:Document) "
+            "WITH cid, p, r, collect(d.doc_id)[0] AS did "
+            "WITH cid, collect({pid: p.project_id, "
+            "                   label: coalesce(p.title, p.project_id), "
+            "                   did: did, rel: type(r)})[0..$cap] AS ps "
+            "UNWIND ps AS x "
+            "RETURN cid, x.pid AS pid, x.label AS plabel, x.did AS did, x.rel AS rel",
+            ids=ids,
+            cap=projects_per_entity,
+        ):
+            cid = str(row["cid"])
+            pid = str(row["pid"])
+            if cid not in nodes:
+                continue
+            if pid not in nodes:
+                nodes[pid] = {
+                    "id": pid,
+                    "label": str(row["plabel"] or pid),
+                    "kind": "document",
+                    "doc_id": str(row["did"] or ""),
+                }
+            edges.append(
+                {
+                    "source": pid,
+                    "target": cid,
+                    "kind": str(row["rel"] or "rel").lower(),
+                    "weight": 1.0,
+                }
+            )
+        return {"nodes": list(nodes.values()), "edges": edges}
+
     def doc_focus_snapshot(self, doc_id: str, limit: int = 60) -> dict[str, Any]:
         """문서 하나를 중심으로 — 그 과제의 엔티티 전부(df 하한 없음)와 겹치는 과제들.
 
@@ -424,7 +505,12 @@ class KgGraphStore:
         ):
             did = str(row["did"])
             if did not in nodes:
-                nodes[did] = {"id": did, "label": str(row["dlabel"] or did), "kind": "document"}
+                nodes[did] = {
+                    "id": did,
+                    "label": str(row["dlabel"] or did),
+                    "kind": "document",
+                    "doc_id": did,  # 여긴 노드 id가 곧 doc_id다
+                }
             cid = str(row["cid"])
             if cid not in nodes:
                 nodes[cid] = {
@@ -451,7 +537,12 @@ class KgGraphStore:
         ):
             did = str(row["did"])
             if did not in nodes:
-                nodes[did] = {"id": did, "label": str(row["dlabel"] or did), "kind": "document"}
+                nodes[did] = {
+                    "id": did,
+                    "label": str(row["dlabel"] or did),
+                    "kind": "document",
+                    "doc_id": did,
+                }
             edges.append(
                 {
                     "source": doc_id,

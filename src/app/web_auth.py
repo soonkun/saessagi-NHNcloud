@@ -34,9 +34,7 @@ COOKIE_NAME = "saessagi_session"
 # 인증 없이 통과시킬 경로 — 로그인 자체에 필요한 것만.
 # /api/auth/status는 "인증이 켜져 있나"만 알려준다(비밀정보 아님). UI가 로그아웃 버튼을
 # 보일지 판단하는 데 쓰며, 미인증 상태에서도 답해야 하므로 면제 대상이다.
-EXEMPT_PATHS = frozenset(
-    {"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status"}
-)
+EXEMPT_PATHS = frozenset({"/login", "/api/auth/login", "/api/auth/logout", "/api/auth/status"})
 
 # 실패 응답 지연(초). 비밀번호 1개짜리라 무차별 대입을 늦추는 정도만 한다.
 _FAILURE_DELAY_SEC = 0.5

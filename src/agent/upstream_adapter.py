@@ -201,11 +201,15 @@ def _make_adapter_class() -> type:
             tts_brief_max_chars: int = 80,
             tool_router: Any = None,  # ToolRouter | None — note_save 강제 폴백용 (E-45)
             graph_rag_service: Any = None,  # GraphRagService | None (M_19 하이브리드)
+            # CR-63: 검색 규모를 **호출 시점에** 읽는다. `prompt_provider`와 같은 lazy
+            # 패턴 — 지침 화면에서 값을 바꾸면 재기동 없이 다음 턴부터 먹어야 한다.
+            retrieval_params_provider: Callable[[], tuple[int, int]] | None = None,
         ) -> None:
             super().__init__()
             self._agent = agent
             self._rag_service = rag_service  # vector_search.RagService | None
             self._graph_rag = graph_rag_service  # M_19: 있으면 hybrid_retrieve 사용
+            self._retrieval_params_provider = retrieval_params_provider
             self._intent_classifier = intent_classifier  # M_16: IntentClassifier | None
             # M_17: lazy 지침 조회 클로저. None이면 {} 취급 → M_16 기존 동작과 동일
             self._prompt_provider = prompt_provider
@@ -268,6 +272,35 @@ def _make_adapter_class() -> type:
                         }
                     )
             return chunks
+
+        def _resolve_retrieval_params(self) -> tuple[int, int]:
+            """(top_k, 문서당 최대 청크)를 지금 읽는다 (CR-63).
+
+            provider가 없거나 터지면 예전 동작(5, 상한 없음)으로 되돌아간다 — 설정 조회
+            실패로 대화가 죽는 것이 값이 조금 다른 것보다 나쁘다.
+            """
+            if self._retrieval_params_provider is None:
+                return 5, 0
+            try:
+                top_k, max_per_doc = self._retrieval_params_provider()
+                return max(1, int(top_k)), max(0, int(max_per_doc))
+            except Exception as exc:  # pragma: no cover — 설정 조회 실패
+                logger.warning("CR-63 검색 파라미터 조회 실패, 기본값 사용: %r", exc)
+                return 5, 0
+
+        def _retrieve_vector_only(self, query: str, top_k: int, source: str) -> Any:
+            """그래프가 꺼져 있을 때의 벡터 단독 경로 + 문서당 상한 (CR-63)."""
+            from vector_search.rag import cap_per_document
+            from vector_search.types import RetrievalResult
+
+            _, max_per_doc = self._resolve_retrieval_params()
+            # 상한에 걸려 버려지는 몫이 있으니 넉넉히 받아 top_k를 채운다.
+            over = top_k if max_per_doc <= 0 else min(top_k * 3, 50)
+            result = self._rag_service.retrieve(query, over, source=source)
+            capped = cap_per_document(list(result.hits), max_per_doc)[:top_k]
+            return RetrievalResult(
+                hits=capped, found=result.found, no_match_reason=result.no_match_reason
+            )
 
         async def _augment_with_rag(self, input_data: BatchInput) -> BatchInput:
             """사용자 메시지를 RAG 결과로 증강.
@@ -392,13 +425,23 @@ def _make_adapter_class() -> type:
                 # 첨부 있어도 검색은 트리거 키워드 있을 때만
                 retrieval = None
                 if should_search:
+                    # CR-63: 예전엔 여기 `5`가 박혀 있었다. 청크 50~60개짜리 보고서가
+                    # 들어오면서 한 문서가 5자리를 독차지해 근거 문서가 2건까지 줄었다.
+                    top_k, max_per_doc = self._resolve_retrieval_params()
                     # M_19: GraphRAG 활성 시 하이브리드(벡터+그래프 RRF), 아니면 기존 벡터 경로
                     if self._graph_rag is not None and self._graph_rag.available:
-                        search = self._graph_rag.hybrid_retrieve(user_text, 5, source=rag_source)
+                        search = self._graph_rag.hybrid_retrieve(
+                            user_text,
+                            top_k,
+                            source=rag_source,
+                            max_chunks_per_doc=max_per_doc,
+                        )
                     else:
+                        # 벡터 단독 경로에도 같은 상한을 건다 — 그래프가 꺼져 있을 때만
+                        # 편중이 되살아나면 원인 추적이 어렵다.
                         search = asyncio.get_event_loop().run_in_executor(
                             None,
-                            lambda: self._rag_service.retrieve(user_text, 5, source=rag_source),
+                            lambda: self._retrieve_vector_only(user_text, top_k, rag_source),
                         )
                     # 검색에 반드시 시한을 둔다 (E-80).
                     # 예전에는 제한이 없어서, GPU가 대형 모델 적재로 바쁘거나 Neo4j가

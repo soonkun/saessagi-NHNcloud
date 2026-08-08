@@ -88,15 +88,22 @@ class BuildReq(BaseModel):
 
 
 def _graph_store_factory(request: Request) -> Any:
-    """graphrag 설정의 Neo4j 접속 정보를 그대로 쓴다 — 같은 인스턴스에 적재한다."""
+    """graphrag 설정의 Neo4j 접속 정보를 그대로 쓴다 — 같은 인스턴스에 적재한다.
+
+    **`ctx.config`가 아니라 `ctx.app_config`다 (E-98).** `ctx.config`는 벤더링된
+    upstream `Config`라 최상위 필드가 `system_config/character_config/live_config`뿐이고
+    `.app`이 없다. 새싹이의 `app:` 블록은 별도 `AppConfig`로 파싱돼 `ctx.app_config`에
+    실린다. 예전 코드는 `cfg.app.graphrag`를 봐서 **언제나 None**을 반환했고, 그 결과
+    "구축 시작" 버튼이 24분을 돌고 Neo4j에는 아무것도 쓰지 않은 채 COMPLETED가 됐다.
+    """
     import os
 
     from kg.graph_store import KgGraphStore
 
     ctx = getattr(request.app.state, "service_context", None)
-    cfg = getattr(ctx, "config", None)
-    g = getattr(getattr(cfg, "app", None), "graphrag", None) if cfg else None
+    g = getattr(getattr(ctx, "app_config", None), "graphrag", None)
     if g is None:
+        logger.warning("KG 구축: graphrag 설정이 없어 Neo4j 스토어를 만들 수 없습니다")
         return None
 
     def make() -> KgGraphStore:

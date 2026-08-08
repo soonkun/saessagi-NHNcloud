@@ -56,6 +56,9 @@ class GraphNode:
     label: str
     kind: str
     type: str = ""
+    # E-101: 문서 노드의 `id`는 Project.project_id라 파일을 여는 데 못 쓴다.
+    # 개요(`GraphNodeResp`)와 같은 규약으로 여는 데 쓸 값을 따로 실어 보낸다.
+    doc_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -120,9 +123,7 @@ class ExtractionResult:
 # ── CR-30: Project + 역할 키워드 스키마 ──────────────────────────────────────
 
 # 키워드 역할 화이트리스트 — 이 외의 값은 폐기 (기타 강등 없음, 보수적)
-KEYWORD_ROLES: frozenset[str] = frozenset(
-    {"research_target", "technology", "problem", "outcome"}
-)
+KEYWORD_ROLES: frozenset[str] = frozenset({"research_target", "technology", "problem", "outcome"})
 
 KEYWORD_ROLE_LABELS: dict[str, str] = {
     "research_target": "연구대상",

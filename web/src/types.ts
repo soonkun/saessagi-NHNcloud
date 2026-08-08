@@ -30,8 +30,15 @@ export interface GraphRagNode {
   id: string;
   label: string;
   kind: "entity" | "document" | "note" | "keyword";
-  // CR-30: keyword의 type = 역할 (research_target|technology|problem|outcome), 비키워드는 ""
+  // CR-61: entity의 type = 엔티티 유형 7종 (RESEARCH_TARGET|TECHNOLOGY|…), 그 외는 ""
   type: string;
+  /**
+   * 문서를 여는 데 쓸 실제 doc_id (E-93).
+   *
+   * 문서 노드의 `id`는 `Project.project_id`(`doc:`/`pj:` 접두사)라 그대로 열면 404다.
+   * 비어 있으면 열 수 있는 원본이 없다는 뜻 — 버튼을 감춘다.
+   */
+  doc_id?: string;
 }
 
 export interface GraphRagEdge {

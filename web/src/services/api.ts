@@ -237,10 +237,22 @@ export function getDocumentDownloadUrl(docId: string): string {
  * Electron에서는 임시 폴더로 받아 shell.openPath로 열고,
  * 비-Electron(웹) 환경에서는 새 탭으로 연다(폴백).
  */
-export function openDocument(docId: string, filename: string): void {
+export function openDocument(
+  docId: string,
+  filename: string,
+  /**
+   * 파일이 없을 때 호출된다 (E-93). 주지 않으면 예전처럼 새 탭을 연다.
+   *
+   * 예전에는 404가 나면 `{"detail":"원본 파일이 없습니다: …"}` JSON이 **새 탭에 날것으로**
+   * 떴다. 사용자가 그걸 보고 "이상한 JSON"이라고 했다. 호출자가 이 콜백을 주면
+   * 앱 안에서 안내할 수 있다.
+   */
+  onError?: (message: string) => void
+): void {
   const url = getDocumentDownloadUrl(docId);
   const shellApi = window.shell;
   if (shellApi?.openDocument) {
+    // Electron 경로는 건드리지 않는다 — 자체 폴백이 이미 있다.
     void shellApi
       .openDocument(url, filename)
       .then((err) => {
@@ -248,9 +260,26 @@ export function openDocument(docId: string, filename: string): void {
         if (err) window.open(url, "_blank");
       })
       .catch(() => window.open(url, "_blank"));
-  } else {
-    window.open(url, "_blank");
+    return;
   }
+  if (!onError) {
+    window.open(url, "_blank");
+    return;
+  }
+  // 브라우저 경로 — 먼저 존재를 확인해 날 JSON을 띄우지 않는다.
+  void fetch(url, { method: "HEAD" })
+    .then((res) => {
+      if (res.ok) {
+        window.open(url, "_blank");
+      } else {
+        onError(
+          res.status === 404
+            ? `원본 파일을 찾을 수 없습니다: ${filename}`
+            : `문서를 열지 못했습니다 (${res.status})`
+        );
+      }
+    })
+    .catch(() => onError("문서를 열지 못했습니다 (연결 실패)"));
 }
 
 // ────────────────────────────────────────────────────────────
@@ -706,4 +735,127 @@ export async function stopKgExtraction(): Promise<{ stopped: boolean; reason?: s
   } catch {
     return { stopped: false, reason: "연결 실패" };
   }
+}
+
+// ────────────────────────────────────────────────────────────
+// 딥 리서치 방(프로젝트) — CR-62
+//
+// 모드 3개 고정을 없애고 사용자가 방을 만들어 쓴다. 지침은 방마다 다르고 버전으로
+// 관리되므로 설정의 전역 지침 목록(/api/settings/prompts)이 아니라 여기로 온다.
+// ────────────────────────────────────────────────────────────
+
+export interface ResearchProject {
+  project_id: string;
+  name: string;
+  description: string;
+  icon: string;
+  planner_hint: string;
+  sub_queries: number;
+  top_k_per_query: number;
+  gap_rounds: number;
+  max_evidence_chunks: number;
+  is_seed: boolean;
+  instructions: string;
+  version_no: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InstructionVersionInfo {
+  version_id: string;
+  version_no: number;
+  note: string;
+  created_at: string;
+  chars: number;
+  preview: string;
+}
+
+export interface ResearchTurn {
+  turn_id: string;
+  role: "user" | "assistant";
+  content: string;
+  sources: { n: number; doc_id: string; doc_name: string; page?: number | null; score?: number }[];
+  attachments: string[];
+  created_at: string;
+}
+
+const DR = "/api/deep-research";
+
+export async function fetchResearchProjects(): Promise<ResearchProject[]> {
+  try {
+    const res = await fetch(API_BASE + DR + "/projects");
+    if (!res.ok) return [];
+    return ((await res.json()) as { projects?: ResearchProject[] }).projects ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function createResearchProject(
+  body: Partial<ResearchProject> & { name: string }
+): Promise<ResearchProject> {
+  return apiFetch<ResearchProject>(DR + "/projects", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function updateResearchProject(
+  projectId: string,
+  body: Partial<ResearchProject>
+): Promise<ResearchProject> {
+  return apiFetch<ResearchProject>(`${DR}/projects/${encodeURIComponent(projectId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteResearchProject(projectId: string): Promise<void> {
+  await apiFetch<unknown>(`${DR}/projects/${encodeURIComponent(projectId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchInstructions(
+  projectId: string
+): Promise<{ instructions: string; version_no: number; versions: InstructionVersionInfo[] }> {
+  return apiFetch(`${DR}/projects/${encodeURIComponent(projectId)}/instructions`);
+}
+
+export async function saveInstructions(
+  projectId: string,
+  instructions: string,
+  note = ""
+): Promise<{ version_no: number }> {
+  return apiFetch(`${DR}/projects/${encodeURIComponent(projectId)}/instructions`, {
+    method: "POST",
+    body: JSON.stringify({ instructions, note }),
+  });
+}
+
+/** 옛 버전을 **새 버전으로** 복원한다 — 이력이 잘리지 않는다. */
+export async function restoreInstructions(
+  projectId: string,
+  versionNo: number
+): Promise<{ version_no: number; content: string }> {
+  return apiFetch(`${DR}/projects/${encodeURIComponent(projectId)}/instructions/restore`, {
+    method: "POST",
+    body: JSON.stringify({ version_no: versionNo }),
+  });
+}
+
+export async function fetchResearchTurns(projectId: string): Promise<ResearchTurn[]> {
+  try {
+    const res = await fetch(`${API_BASE}${DR}/projects/${encodeURIComponent(projectId)}/turns`);
+    if (!res.ok) return [];
+    return ((await res.json()) as { turns?: ResearchTurn[] }).turns ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function clearResearchTurns(projectId: string): Promise<void> {
+  await apiFetch<unknown>(`${DR}/projects/${encodeURIComponent(projectId)}/turns`, {
+    method: "DELETE",
+  });
 }

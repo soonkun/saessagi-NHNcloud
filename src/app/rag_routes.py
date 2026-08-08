@@ -228,7 +228,7 @@ def _require_rag(ctx: Any) -> Any:
 async def search_content(
     request: Request,
     q: str = Query(..., min_length=1, max_length=500),
-    top_k: int = Query(5, ge=1, le=20),
+    top_k: int = Query(10, ge=1, le=50),
 ) -> dict[str, Any]:
     """CR-22: 내용 기반 문서 검색 (그래프 탭 검색창 등 프론트 직접 호출용).
 
@@ -658,11 +658,17 @@ async def get_document_chunks(request: Request, doc_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/documents/{doc_id}/download")
+@router.api_route("/documents/{doc_id}/download", methods=["GET", "HEAD"])
 async def download_document(doc_id: str) -> FileResponse:
     """업로드 시 보관한 원본 파일을 그대로 반환.
 
     저장 위치는 폴더별 버킷(__no_folder__ 또는 folder_id) 하위의 doc_id 디렉토리.
+
+    **HEAD도 받는다** (E-94). 프론트가 새 탭을 열기 전에 존재를 확인하는데,
+    FastAPI의 `@router.get()`은 Starlette의 평범한 `Route`와 달리 HEAD를 자동으로
+    붙여 주지 않는다. 그래서 HEAD가 라우트에 안 걸리고 정적 파일 마운트로 흘러가
+    **모든 문서가 404**가 났다. `FileResponse`는 HEAD면 헤더만 보내므로
+    (`starlette/responses.py` — `send_header_only`) 본문 낭비도 없다.
     """
     doc_dir = _find_doc_dir(doc_id)
     if doc_dir is None:

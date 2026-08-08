@@ -180,6 +180,46 @@ interface PromptsState {
   [key: string]: PromptInfo;
 }
 
+// CR-63: 자료 검색 파라미터. 지침 목록 안의 한 항목으로 들어가지만 저장 위치는
+// agent_prompts(문자열 전용)가 아니라 app.rag_* 라서 API가 따로 있다.
+const RETRIEVAL_KEY = "__retrieval__";
+
+interface RetrievalState {
+  top_k: number;
+  max_chunks_per_doc: number;
+  defaults: { top_k: number; max_chunks_per_doc: number };
+}
+
+async function fetchRetrieval(): Promise<RetrievalState | null> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/retrieval");
+    if (!res.ok) return null;
+    return (await res.json()) as RetrievalState;
+  } catch {
+    return null;
+  }
+}
+
+async function saveRetrieval(
+  top_k: number,
+  max_chunks_per_doc: number
+): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const res = await fetch(API_BASE + "/api/settings/retrieval", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ top_k, max_chunks_per_doc }),
+    });
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { detail?: string };
+      return { ok: false, detail: typeof err.detail === "string" ? err.detail : "저장 실패" };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, detail: "서버에 연결할 수 없습니다" };
+  }
+}
+
 async function fetchAgentPrompts(): Promise<PromptsState | null> {
   try {
     const res = await fetch(API_BASE + "/api/settings/prompts");
@@ -458,6 +498,9 @@ export function SettingsView({
   const [promptSavingKey, setPromptSavingKey] = useState<string | null>(null);
   const [promptSavedKey, setPromptSavedKey] = useState<string | null>(null);
   const [promptErrors, setPromptErrors] = useState<Record<string, string>>({});
+  // CR-63: 자료 검색 파라미터 (지침 목록의 한 항목)
+  const [retrieval, setRetrieval] = useState<RetrievalState | null>(null);
+  const [retrievalDraft, setRetrievalDraft] = useState<{ top_k: number; max: number } | null>(null);
   // 펫 모드에서만 사용하는 접이식 토글
   const [promptsOpen, setPromptsOpen] = useState(false);
   // CR-44: 지침 관리 — 목록에서 하나를 고르면 그 지침만 편집 화면에 뜬다.
@@ -652,7 +695,33 @@ export function SettingsView({
       }
       setPromptDrafts(drafts);
     });
+    // CR-63
+    void fetchRetrieval().then((r) => {
+      if (!r) return;
+      setRetrieval(r);
+      setRetrievalDraft({ top_k: r.top_k, max: r.max_chunks_per_doc });
+    });
   }, []);
+
+  // CR-63: 검색 파라미터 저장. 재기동이 필요 없다 — 백엔드가 매 턴 값을 다시 읽는다.
+  async function handleRetrievalSave(): Promise<void> {
+    if (!retrievalDraft || promptSavingKey) return;
+    setPromptSavingKey(RETRIEVAL_KEY);
+    setPromptErrors((p) => ({ ...p, [RETRIEVAL_KEY]: "" }));
+    const r = await saveRetrieval(retrievalDraft.top_k, retrievalDraft.max);
+    setPromptSavingKey(null);
+    if (!r.ok) {
+      setPromptErrors((p) => ({ ...p, [RETRIEVAL_KEY]: r.detail ?? "저장 실패" }));
+      return;
+    }
+    setRetrieval((prev) =>
+      prev
+        ? { ...prev, top_k: retrievalDraft.top_k, max_chunks_per_doc: retrievalDraft.max }
+        : prev
+    );
+    setPromptSavedKey(RETRIEVAL_KEY);
+    setTimeout(() => setPromptSavedKey(null), 2000);
+  }
 
   async function handlePromptSave(key: string): Promise<void> {
     if (promptSavingKey) return;
@@ -1601,15 +1670,145 @@ export function SettingsView({
         "meeting_minutes",
       ],
     },
-    {
-      title: "딥 리서치",
-      keys: [
-        "deep_research_duplication",
-        "deep_research_discovery",
-        "deep_research_proposal",
-      ],
-    },
+    // CR-62에서 딥 리서치 지침은 **방(프로젝트)마다** 갖고 버전으로 관리하도록 옮겼다
+    // (딥 리서치 탭 → 방 → 지침). 여기 있던 3개 그룹을 지운다 — 백엔드가 이미 그 키를
+    // 반환하지 않아 항목은 안 그려지는데 **그룹 제목만 남아** 빈 칸이 떠 있었다.
+    // CR-63: 지침이 아니라 숫자 설정이지만, 사용자가 "지침에서 조정"을 원해 여기 둔다.
+    { title: "자료 검색", keys: [RETRIEVAL_KEY] },
   ];
+
+  // CR-63: 검색 범위 편집 화면. 지침 목록 안에 있지만 내용은 숫자 두 개다.
+  function renderRetrievalEditor(): React.ReactElement {
+    const d = retrievalDraft;
+    const saving = promptSavingKey === RETRIEVAL_KEY;
+    const saved = promptSavedKey === RETRIEVAL_KEY;
+    const err = promptErrors[RETRIEVAL_KEY] ?? "";
+    const numField = (
+      label: string,
+      hint: string,
+      value: number,
+      min: number,
+      max: number,
+      onChange: (n: number) => void
+    ): React.ReactElement => (
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: "var(--fs-13)", fontWeight: 600, marginBottom: 4 }}>{label}</div>
+        <p
+          style={{
+            fontSize: "var(--fs-11)",
+            color: "var(--color-text-muted)",
+            lineHeight: 1.6,
+            marginBottom: 8,
+          }}
+        >
+          {hint}
+        </p>
+        <input
+          type="number"
+          min={min}
+          max={max}
+          value={value}
+          onChange={(e) => {
+            const n = Number.parseInt(e.target.value, 10);
+            if (!Number.isNaN(n)) onChange(Math.min(max, Math.max(min, n)));
+          }}
+          style={{
+            width: 110,
+            padding: "8px 10px",
+            fontSize: "var(--fs-13)",
+            fontFamily: "inherit",
+            border: "1px solid var(--color-border)",
+            borderRadius: 8,
+            background: "var(--color-bg)",
+            color: "var(--color-text)",
+          }}
+        />
+        <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginLeft: 8 }}>
+          ({min}~{max})
+        </span>
+      </div>
+    );
+
+    return (
+      <div>
+        <button
+          onClick={() => setSelectedPromptKey(null)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "transparent",
+            border: "none",
+            color: "var(--color-text-muted)",
+            cursor: "pointer",
+            padding: "4px 0",
+            marginBottom: 14,
+            fontSize: "var(--fs-12)",
+          }}
+        >
+          <ChevronLeft size={14} /> 지침 목록으로
+        </button>
+        <div style={{ fontWeight: 600, fontSize: "var(--fs-14)", marginBottom: 10 }}>
+          검색 범위 (top-k · 문서당 상한)
+        </div>
+        {d === null ? (
+          <p style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>불러오는 중…</p>
+        ) : (
+          <>
+            {numField(
+              "한 번에 가져올 청크 수 (top-k)",
+              "크면 근거 문서가 다양해지지만 컨텍스트와 GPU를 더 씁니다. " +
+                "실측: 5에서는 근거가 문서 2건, 10에서는 6건이었습니다.",
+              d.top_k,
+              1,
+              50,
+              (n) => setRetrievalDraft({ ...d, top_k: n })
+            )}
+            {numField(
+              "한 문서가 차지할 수 있는 최대 청크 수",
+              "분량만 길고 내용은 부실한 보고서가 근거를 독차지하는 것을 막습니다. " +
+                "0을 넣으면 제한하지 않습니다.",
+              d.max,
+              0,
+              20,
+              (n) => setRetrievalDraft({ ...d, max: n })
+            )}
+            {err && (
+              <p style={{ fontSize: "var(--fs-12)", color: "#c0392b", marginBottom: 10 }}>{err}</p>
+            )}
+            <button
+              onClick={() => void handleRetrievalSave()}
+              disabled={saving}
+              style={{
+                background: saved ? "#3d9668" : "var(--color-accent)",
+                border: "none",
+                borderRadius: 8,
+                color: "#fff",
+                cursor: saving ? "not-allowed" : "pointer",
+                padding: "8px 16px",
+                fontSize: "var(--fs-12)",
+                fontWeight: 600,
+                fontFamily: "inherit",
+                opacity: saving ? 0.6 : 1,
+              }}
+            >
+              {saving ? "적용 중..." : saved ? "저장됨 ✓" : "저장"}
+            </button>
+            <p
+              style={{
+                fontSize: "var(--fs-11)",
+                color: "var(--color-text-muted)",
+                marginTop: 10,
+                lineHeight: 1.6,
+              }}
+            >
+              저장하면 다음 질문부터 바로 적용됩니다 — 재기동이 필요 없습니다.
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
 
   // isDesktop: textarea 크기·폰트 차별화용. 목록→상세 2단 구성 —
   // 이전엔 10개에 가까운 지침이 한 화면에 전부 펼쳐져 있어 찾기 어려웠다.
@@ -1630,7 +1829,12 @@ export function SettingsView({
     if (!selectedPromptKey) {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {PROMPT_GROUPS.map(({ title, keys }) => (
+          {PROMPT_GROUPS.filter(
+            // 그릴 항목이 하나도 없는 그룹은 제목도 띄우지 않는다. 예전에 딥 리서치
+            // 지침이 방으로 옮겨간 뒤 **제목만 남아** 빈 칸이 떠 있었다 — 백엔드가 키를
+            // 안 주면 프론트에서 조용히 사라지게 해 둔다.
+            ({ keys }) => keys.some((k) => k === RETRIEVAL_KEY || agentPrompts[k])
+          ).map(({ title, keys }) => (
             <div key={title}>
               <div
                 style={{
@@ -1651,7 +1855,18 @@ export function SettingsView({
                 }}
               >
                 {keys.map((key, i) => {
-                  const info = agentPrompts[key];
+                  // CR-63: 검색 항목은 agentPrompts에 없다 (문자열 지침이 아니다).
+                  const info =
+                    key === RETRIEVAL_KEY
+                      ? {
+                          label: "검색 범위 (top-k · 문서당 상한)",
+                          is_custom: retrieval
+                            ? retrieval.top_k !== retrieval.defaults.top_k ||
+                              retrieval.max_chunks_per_doc !== retrieval.defaults.max_chunks_per_doc
+                            : false,
+                          risk: "low",
+                        }
+                      : agentPrompts[key];
                   if (!info) return null;
                   const isHigh = info.risk === "high";
                   return (
@@ -1702,6 +1917,8 @@ export function SettingsView({
 
     // ── 상세(편집) 화면 ────────────────────────────────────────────────────
     const key = selectedPromptKey;
+    // CR-63: 검색 항목은 textarea가 아니라 숫자 입력이라 별도 화면으로 간다.
+    if (key === RETRIEVAL_KEY) return renderRetrievalEditor();
     const info = agentPrompts[key];
     if (!info) {
       // 알 수 없는 키로 진입한 경우(구버전 캐시 등) — 목록으로 돌려보낸다.

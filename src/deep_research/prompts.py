@@ -46,16 +46,12 @@ _PLANNER_BASE = """당신은 사내 지식 기반(과거 연구 문서·업무 �
 - 질의는 한국어 명사구 중심 8~40자 (검색 엔진 질의처럼)
 - 출력: {"sub_queries": ["질의1", "질의2", ...]}"""
 
-_PLANNER_MODE_HINTS = {
-    "duplication": "관점 예시: 핵심 주제어, 유사 기술/방법, 같은 대상(축종·작물·제도 등), 선행 사업명, 관련 실험 방법.",
-    "discovery": "관점 예시: 해당 분야 과거 수행 과제, 최근 동향/이슈, 미해결 문제, 인접 분야 기술, 반복 등장하는 조직·사업.",
-    "proposal": "관점 예시: RFP 핵심 요구사항별 관련 연구, 유사 과제의 실험 방법, 대상(축종·작물 등) 관련 축적 자료, 제도·규정.",
-}
 
-
-def planner_prompts(mode: str, user_input: str) -> tuple[str, str]:
-    """(system, user) 플래너 프롬프트."""
-    hint = _PLANNER_MODE_HINTS.get(mode, "")
+# CR-62: 모드별 힌트 딕셔너리를 없앴다. 힌트는 방(프로젝트)의 `planner_hint` 컬럼에서
+# 온다 — 예시 방 3개의 기본 힌트는 seeds.py에 있다.
+def planner_prompts(planner_hint: str, user_input: str) -> tuple[str, str]:
+    """(system, user) 플래너 프롬프트. `planner_hint`는 비어 있어도 된다."""
+    hint = (planner_hint or "").strip()
     system = _PLANNER_BASE + ("\n- " + hint if hint else "")
     return system, user_input
 
@@ -67,11 +63,10 @@ GAP_SYSTEM = """당신은 리서치 진행 상황을 점검하는 검토자입�
 충분하다면 빈 배열을 반환하세요. JSON으로만 답하세요: {"sub_queries": [...]}"""
 
 
-def gap_prompts(mode: str, user_input: str, evidence_digest: str) -> tuple[str, str]:
-    user = (
-        f"## 사용자 요청 (모드: {mode})\n{user_input}\n\n"
-        f"## 지금까지 수집된 근거 (문서명·요지)\n{evidence_digest}"
-    )
+def gap_prompts(project_name: str, user_input: str, evidence_digest: str) -> tuple[str, str]:
+    label = (project_name or "").strip()
+    header = f"## 사용자 요청{f' ({label})' if label else ''}"
+    user = f"{header}\n{user_input}\n\n## 지금까지 수집된 근거 (문서명·요지)\n{evidence_digest}"
     return GAP_SYSTEM, user
 
 
@@ -125,37 +120,35 @@ RFP(제안요청) 내용과 사내 기존 연구 자료를 근거로 과제 계�
 주의: 실험 방법은 해당 분야에서 실제 실행 가능한 수준으로 구체적으로. RFP에 없는
 요구사항을 임의로 추가하지 않는다."""
 
-_SYNTHESIS_BY_MODE = {
+# 방 지침이 비었을 때 쓰는 범용 기본값. 특정 분야를 가정하지 않는다 (CR-62).
+GENERIC_SYNTHESIS = """당신은 사내 자료를 근거로 조사 보고서를 쓰는 분석가입니다.
+사용자의 요청에 대해 아래 근거 자료에서 확인되는 사실을 정리해 보고서를 작성하세요.
+
+## 보고서 구성
+1. ## 요청 요약 — 무엇을 묻고 있는지 (2~3줄)
+2. ## 확인된 내용 — 근거에서 확인되는 사실을 주제별로 정리 (인용 필수)
+3. ## 한계 — 근거로 답하지 못한 부분을 솔직히 명시
+4. ## 요약"""
+
+# 예시 방 3개의 기본 지침. seeds.py가 참조한다.
+SEED_INSTRUCTIONS = {
     "duplication": _SYNTHESIS_DUPLICATION,
     "discovery": _SYNTHESIS_DISCOVERY,
     "proposal": _SYNTHESIS_PROPOSAL,
 }
 
-# CR-44: agent_prompts 레지스트리 키 → 이 모듈의 기본 지침 상수.
-# registry.get_default()가 이 딕셔너리를 통해 조회한다(순환 임포트 회피용 단방향 의존).
-MODE_TO_PROMPT_KEY = {
-    "duplication": "deep_research_duplication",
-    "discovery": "deep_research_discovery",
-    "proposal": "deep_research_proposal",
-}
-SYNTHESIS_DEFAULTS_BY_KEY = {
-    "deep_research_duplication": _SYNTHESIS_DUPLICATION,
-    "deep_research_discovery": _SYNTHESIS_DISCOVERY,
-    "deep_research_proposal": _SYNTHESIS_PROPOSAL,
-}
 
-
-def synthesis_prompts(
-    mode: str, user_input: str, evidence_block: str, custom_instructions: str = ""
-) -> tuple[str, str]:
+def synthesis_prompts(instructions: str, user_input: str, evidence_block: str) -> tuple[str, str]:
     """(system, user) 종합 프롬프트.
 
-    custom_instructions(M_17 커스텀 지침, 비어있지 않을 때만)가 있으면 모드별 기본
-    지침(_SYNTHESIS_BY_MODE) 대신 그것을 "무엇을·어떤 관점으로 쓰는가" 부분으로 쓴다.
-    EVIDENCE_RULES(근거 인용 강제)와 OUTPUT_FORMAT_RULES(출력 형식)는 사용자가 지침을
-    비워도 항상 붙는다 — 환각 억제 안전장치라 편집 대상이 아니다.
+    `instructions`는 방(프로젝트)의 지침이다 — "무엇을·어떤 관점으로 쓰는가".
+    비어 있으면 분야를 가정하지 않는 범용 기본값으로 폴백한다. **KeyError 경로는 없다**
+    (CR-62 이전에는 미등록 모드에서 터졌다).
+
+    EVIDENCE_RULES(근거 인용 강제)와 OUTPUT_FORMAT_RULES(출력 형식)는 지침을 비워도
+    항상 붙는다 — 환각 억제 안전장치라 방별 편집 대상이 아니다.
     """
-    base = custom_instructions.strip() or _SYNTHESIS_BY_MODE[mode]
+    base = (instructions or "").strip() or GENERIC_SYNTHESIS
     system = f"{base}\n\n{EVIDENCE_RULES}\n\n{OUTPUT_FORMAT_RULES}"
     user = f"## 사용자 요청\n{user_input}\n\n## 근거 자료\n{evidence_block}"
     return system, user

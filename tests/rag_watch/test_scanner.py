@@ -37,12 +37,14 @@ def plan_twice(root: Path, state: WatchState, **kw):
         state,
         app_folder_names=kw.get("app_folder_names", set()),
         max_per_cycle=kw.get("max_per_cycle", 20),
+        max_ingest_failures=kw.get("max_ingest_failures", 3),
     )
     return build_plan(
         root,
         state,
         app_folder_names=kw.get("app_folder_names", set()),
         max_per_cycle=kw.get("max_per_cycle", 20),
+        max_ingest_failures=kw.get("max_ingest_failures", 3),
     )
 
 
@@ -234,3 +236,93 @@ class TestPlan:
 
     def test_p11_empty_plan_detected(self, root: Path, state: WatchState) -> None:
         assert build_plan(root, state, app_folder_names=set(), max_per_cycle=20).is_empty()
+
+
+# ────────────────────────────────────────────────────────────
+# 인제스트 실패 격리 (E-91)
+# ────────────────────────────────────────────────────────────
+
+
+class TestFailureQuarantine:
+    def _fail(self, state: WatchState, path: Path, rel: str, times: int) -> str:
+        digest = file_digest(path)
+        for _ in range(times):
+            state.record_failure(
+                digest, rel_path=rel, folder_name="f", error="422 텍스트 추출 불가"
+            )
+        return digest
+
+    def test_q1_below_limit_still_retried(self, root: Path, state: WatchState) -> None:
+        p = write(root / "f" / "a.md")
+        self._fail(state, p, "f/a.md", 2)
+        plan = plan_twice(root, state, app_folder_names={"f"}, max_ingest_failures=3)
+        assert [c.rel_path for c in plan.to_ingest] == ["f/a.md"]
+        assert plan.quarantined == []
+
+    def test_q2_at_limit_quarantined(self, root: Path, state: WatchState) -> None:
+        p = write(root / "f" / "a.md")
+        self._fail(state, p, "f/a.md", 3)
+        plan = plan_twice(root, state, app_folder_names={"f"}, max_ingest_failures=3)
+        assert plan.to_ingest == []
+        assert [c.rel_path for c in plan.quarantined] == ["f/a.md"]
+
+    def test_q3_quarantined_does_not_consume_cycle_budget(
+        self, root: Path, state: WatchState
+    ) -> None:
+        """이 사고의 핵심 — 정렬상 앞선 실패 파일이 정원을 먹어 뒤 파일이 굶으면 안 된다."""
+        # 'a'가 'b'보다 먼저 정렬된다. 정원은 2건.
+        for i in range(2):
+            p = write(root / "f" / f"a{i}.md", f"실패{i}")
+            self._fail(state, p, f"f/a{i}.md", 3)
+        for i in range(2):
+            write(root / "f" / f"b{i}.md", f"정상{i}")
+
+        plan = plan_twice(root, state, app_folder_names={"f"}, max_per_cycle=2)
+
+        assert [c.rel_path for c in plan.quarantined] == ["f/a0.md", "f/a1.md"]
+        # 정원 2건이 온전히 정상 파일에 돌아가야 한다 (예전에는 여기가 비었다).
+        assert [c.rel_path for c in plan.to_ingest] == ["f/b0.md", "f/b1.md"]
+        assert plan.deferred == []
+
+    def test_q4_edited_file_is_retried(self, root: Path, state: WatchState) -> None:
+        """키가 내용 해시이므로 사용자가 파일을 고치면 자동으로 다시 시도된다."""
+        p = write(root / "f" / "a.md", "깨진 내용")
+        self._fail(state, p, "f/a.md", 5)
+        assert plan_twice(root, state, app_folder_names={"f"}).to_ingest == []
+
+        write(root / "f" / "a.md", "고친 내용")
+        plan = plan_twice(root, state, app_folder_names={"f"})
+        assert [c.rel_path for c in plan.to_ingest] == ["f/a.md"]
+
+    def test_q5_failure_survives_restart_stabilization(self, root: Path, state: WatchState) -> None:
+        """재시작 직후엔 전 파일이 '안정화 대기'다 — 그때 기록이 지워지면 안 된다.
+
+        지워지면 매 재시작마다 문제 파일이 다시 정원을 차지해 사고가 재발한다.
+        """
+        p = write(root / "f" / "a.md")
+        digest = self._fail(state, p, "f/a.md", 3)
+
+        # _seen이 빈 새 스캔 = 재시작 직후. 이 주기엔 해시조차 계산하지 않는다.
+        build_plan(root, state, app_folder_names={"f"}, max_per_cycle=20)
+        assert state.failure_count(digest) == 3
+
+    def test_q6_vanished_file_failure_pruned(self, root: Path, state: WatchState) -> None:
+        p = write(root / "f" / "a.md")
+        digest = self._fail(state, p, "f/a.md", 3)
+        p.unlink()
+
+        build_plan(root, state, app_folder_names={"f"}, max_per_cycle=20)
+        assert state.failure_count(digest) == 0
+
+    def test_q7_limit_zero_disables_quarantine(self, root: Path, state: WatchState) -> None:
+        p = write(root / "f" / "a.md")
+        self._fail(state, p, "f/a.md", 99)
+        plan = plan_twice(root, state, app_folder_names={"f"}, max_ingest_failures=0)
+        assert [c.rel_path for c in plan.to_ingest] == ["f/a.md"]
+
+    def test_q8_quarantine_alone_is_not_work(self, root: Path, state: WatchState) -> None:
+        """포기 목록만 있는 주기는 '할 일 없음'이어야 한다 — 매 주기 저장·로그를 막는다."""
+        p = write(root / "f" / "a.md")
+        self._fail(state, p, "f/a.md", 3)
+        plan = plan_twice(root, state, app_folder_names={"f"})
+        assert plan.quarantined and plan.is_empty()

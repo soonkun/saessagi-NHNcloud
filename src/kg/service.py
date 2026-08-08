@@ -413,7 +413,18 @@ class KnowledgeGraphService:
                 "추출 완료 — 그래프 구축을 자동으로 이어서 시작합니다 (후보 %d건)", p.accepted
             )
             try:
-                await self.start_build(graph_store_factory=self._graph_store_factory)
+                result = await self.start_build(
+                    graph_store_factory=self._graph_store_factory,
+                    after_extraction=True,
+                )
+                # **반환값을 반드시 본다** (E-95). start_build는 예외를 던지지 않고
+                # {"started": False, "reason": ...}를 돌려준다. 이걸 안 보면 거부당해도
+                # "시작합니다" 로그만 남고 아무 일도 안 일어난다 — 실제로 그랬다.
+                if not result.get("started"):
+                    logger.error(
+                        "자동 그래프 구축이 시작되지 않았다 (수동으로 눌러야 합니다): %s",
+                        result.get("reason", "사유 불명"),
+                    )
             except Exception as exc:  # 구축 실패가 추출 결과를 무효화하지는 않는다
                 logger.error("자동 그래프 구축 시작 실패 (수동으로 눌러야 합니다): %s", exc)
         elif self._build_after:
@@ -453,15 +464,38 @@ class KnowledgeGraphService:
         dry_run: bool = False,
         purge_legacy: bool = False,
         graph_store_factory: Any = None,
+        after_extraction: bool = False,
     ) -> dict[str, Any]:
-        """6~9단계를 백그라운드로 돌린다."""
+        """6~9단계를 백그라운드로 돌린다.
+
+        `after_extraction=True`는 **추출 작업 자신이** 끝나면서 부르는 경우다 (E-95).
+        그때는 `self.running`이 아직 True다 — 호출 지점이 추출 태스크 안이라 태스크가
+        아직 done이 아니기 때문이다. 그래서 동시 실행 방지 가드를 건너뛴다.
+        """
         async with self._build_lock:
             if self.build_running:
                 return {"started": False, "reason": "구축이 이미 진행 중입니다."}
-            if self.running:
+            if self.running and not after_extraction:
                 return {
                     "started": False,
                     "reason": "추출이 진행 중입니다. 끝난 뒤에 구축하세요.",
+                }
+
+            # 호출자가 팩토리를 안 주면 배선 때 받아 둔 것을 쓴다 (E-98). 라우트가 자기
+            # 팩토리를 따로 만들다 조용히 None을 넘기는 사고가 있었다 — 진실을 한 곳에 둔다.
+            if graph_store_factory is None and not dry_run:
+                graph_store_factory = self._graph_store_factory
+
+            # **아무것도 안 쓰면서 COMPLETED라고 하지 않는다.** 실사용 구축은 24분이 걸리고,
+            # 끝나고 나서야 "Neo4j에 안 썼다"를 알게 되면 그 시간이 통째로 날아간다.
+            # 설정 문제는 누르는 즉시 알려 준다.
+            if not dry_run and graph_store_factory is None:
+                return {
+                    "started": False,
+                    "reason": (
+                        "Neo4j 접속 설정(app.graphrag)이 없어 그래프에 쓸 수 없습니다. "
+                        "설정을 확인하거나 미리보기(dry-run)로 실행하세요."
+                    ),
                 }
 
             scope = "전체"
@@ -535,7 +569,18 @@ class KnowledgeGraphService:
 
             if dry_run or graph_store_factory is None:
                 p.counts["load_preview"] = load_summary(store)
-                p.counts["note"] = "dry-run — Neo4j에 쓰지 않음"
+                # 왜 안 썼는지를 구분해 남긴다 (E-98). 예전엔 팩토리 누락도 "dry-run"으로
+                # 뭉뚱그려져, 설정 사고가 사용자 선택처럼 보였다.
+                p.counts["note"] = (
+                    "dry-run — Neo4j에 쓰지 않음"
+                    if dry_run
+                    else "Neo4j 스토어 없음 — 그래프에 쓰지 못했습니다(설정 확인 필요)"
+                )
+                if not dry_run:
+                    logger.error(
+                        "KG 구축: graph_store_factory가 없어 Neo4j 적재를 건너뛴다 — "
+                        "SQLite 단계만 반영됐다"
+                    )
             else:
                 p.stage = "load"
                 graph = graph_store_factory()

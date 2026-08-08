@@ -38,6 +38,97 @@ _YEAR_RANGE = re.compile(r"(19|20)(\d{2})\s*[~\-–—]\s*(19|20)?(\d{2})")
 _TITLE_MIN = 6
 _TITLE_MAX = 200
 
+# 서식 안내문·양식 라벨 (E-93).
+#
+# `과제명: (해당 시 작성)` 처럼 **채우라고 비워 둔 칸**을 과제명으로 잡아 왔다.
+# 실측 663건이 제목 `(해당 시 작성)`, 서식 문구 제목 합계 686/11,276(6.1%).
+# 그래프 화면에 `(해당 시 작성)` 노드가 여럿 떠서 사용자가 "저건 뭐냐"고 물었다.
+#
+# 여기 넣는 것은 **도메인 지식이 아니라 서식 어휘**다 — 작물명 같은 내용어를 넣지 않는다.
+# 목록에서 빠뜨려도 안전한 쪽으로 실패한다(제목이 그냥 남을 뿐).
+_PLACEHOLDER_EXACT: frozenset[str] = frozenset(
+    {
+        "해당 시 작성",
+        "해당시 작성",
+        "해당없음",
+        "해당 없음",
+        "내역사업명",
+        "단위사업명",
+        "사업명",
+        "과제명",
+        "세부과제명",
+        "연구과제명",
+        "자유 제안 과제",
+        "미정",
+        "없음",
+    }
+)
+
+# 제목 전체가 이 라벨로만 이루어졌으면 값이 아니라 양식 자체다.
+_LABEL_ONLY = re.compile(
+    r"^[\s(（\[]*(?:단위|내역|세부)?\s*(?:사업|과제|연구과제)\s*명[\s:：)）\]]*$"
+)
+
+
+def strip_placeholder_prefix(title: str) -> str:
+    """제목 앞에 붙은 서식 안내문을 떼어 낸다 (E-93).
+
+    표지에서 두 칸이 한 줄로 붙는 경우가 있다:
+        `총괄 연구개발과제명 (해당 시 작성) 연구개발과제명 지열히트펌프를 이용한…`
+    → 정규식이 둘 다 잡아 `(해당 시 작성) 지열히트펌프를 이용한…`이 된다.
+    앞의 안내문만 떼면 **뒤에 진짜 과제명이 그대로 남는다.**
+
+    **안내문 없이 라벨만 앞에 붙는 경우도 뗀다 (E-99).** E-93에서는 `해당 시 작성`이
+    앞에 있는 형태만 봤는데, 실측하니 라벨 단독 접두가 훨씬 많았다:
+        주관과제명 2,595 · 단위사업명 154 · 내역사업명 73 · 연구개발과제명 18
+        → 제목 12,070건의 23.6%
+    `주관과제명 무잔량 곡물건조기 개발` 같은 것이 그래프에 그대로 노드 이름으로 떴다.
+
+    떼고 남은 것이 알맹이가 아니면(목차 점선 등) 호출자가 판정해 파일명으로 넘어간다.
+    """
+    t = re.sub(r"\s+", " ", title or "").strip()
+    # 라벨 한 조각 — `주관과제명`·`단위사업명`·`연구개발과제명`·`사업명` 등.
+    # 여기 넣는 것은 **서식 어휘**지 내용어가 아니다. 빠뜨려도 안전한 쪽으로 실패한다.
+    label = r"(?:총괄|주관|세부|위탁|협동|공동|단위|내역)?\s*(?:연구개발)?\s*(?:과제|사업)\s*명"
+    for _ in range(3):  # `(해당 시 작성) 연구개발과제명 …` 처럼 두 겹인 경우
+        m = re.match(
+            # (a) 안내문 [+ 뒤따르는 라벨]  또는  (b) 라벨 단독
+            rf"^[\s(（\[]*(?:해당\s*시\s*작성|내역사업명|단위사업명|해당\s*없음)[\s)）\]]*"
+            rf"(?:{label}[\s:：]*)?"
+            rf"|^[\s(（\[]*{label}[\s)）\]]*[\s:：]*",
+            t,
+        )
+        if not m or not m.group(0).strip():
+            break
+        rest = t[m.end() :].strip()
+        # 떼고 나면 아무것도 안 남는 경우(제목이 라벨뿐)는 원본을 지킨다 —
+        # 그건 `is_placeholder_title`이 판정할 몫이지 여기서 빈 문자열로 만들 일이 아니다.
+        if not rest:
+            break
+        t = rest
+    return t
+
+
+def is_placeholder_title(title: str) -> bool:
+    """제목이 실제 과제명이 아니라 서식 안내문인지 (E-93).
+
+    `identity`(추출 시점)와 `projects`(표시 시점)가 **같은 판정을 써야 한다.**
+    목록을 두 곳에 복사하면 한쪽만 고쳐지는 사고가 난다.
+    """
+    t = re.sub(r"\s+", " ", title or "").strip()
+    if not t:
+        return True
+    # 괄호를 벗겨 본다: "(해당 시 작성)" → "해당 시 작성"
+    bare = t.strip("()（）[]{}<>· \t").strip()
+    if bare in _PLACEHOLDER_EXACT or t in _PLACEHOLDER_EXACT:
+        return True
+    if _LABEL_ONLY.match(t):
+        return True
+    # 괄호만 벗기면 안내문인 경우: "(내역사업명)" 등
+    if bare and bare in _PLACEHOLDER_EXACT:
+        return True
+    return False
+
 
 @dataclass(frozen=True)
 class ProjectIdentity:
@@ -82,12 +173,18 @@ def extract_identity(text: str) -> ProjectIdentity:
 
     title = ""
     for pattern in _TITLE_PATTERNS:
-        m = pattern.search(body)
-        if m:
+        # 패턴마다 첫 매치만 보면 `과제명: (해당 시 작성)`에서 멈춘다. 같은 문서 뒤쪽에
+        # 진짜 과제명이 또 나오는 경우가 있어 안내문이면 다음 매치를 계속 본다 (E-93).
+        for m in pattern.finditer(body):
             candidate = _clean_title(m.group(1))
-            if _TITLE_MIN <= len(candidate) <= _TITLE_MAX:
-                title = candidate
-                break
+            if not (_TITLE_MIN <= len(candidate) <= _TITLE_MAX):
+                continue
+            if is_placeholder_title(candidate):
+                continue
+            title = candidate
+            break
+        if title:
+            break
 
     start_year: int | None = None
     end_year: int | None = None

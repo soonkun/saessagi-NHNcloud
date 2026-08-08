@@ -24,10 +24,53 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+import re
+
 from .candidates import CandidateStore, DocumentMeta
+from .identity import is_placeholder_title, strip_placeholder_prefix
 from .merge import normalize_name
 
 logger = logging.getLogger(__name__)
+
+# 파일명 앞의 수집기관 일련번호. 과제명이 아니라 식별자라 제목에서 뗀다.
+_DOCNAME_PREFIX = re.compile(r"^(?:TRKO|KAR)\d+[_\-\s]*", re.I)
+
+
+def title_from_doc_name(doc_name: str) -> str:
+    """파일명에서 과제명을 만든다 (E-93 폴백).
+
+    추출된 제목이 서식 안내문(`(해당 시 작성)` 등)일 때 쓴다. 실측상 이 문서들의
+    파일명은 **전부**(663/663) 진짜 과제명이었다:
+        `TRKO202100010370_한우이유시기와단백질수준에따른대사생리및탄소저감연구.pdf`
+        → `한우이유시기와단백질수준에따른대사생리및탄소저감연구`
+
+    이 폴백이 **읽기 시점**에 있기 때문에 이미 저장된 문서 663건이 재추출 없이 고쳐진다.
+    """
+    name = (doc_name or "").strip()
+    if not name:
+        return ""
+    name = re.sub(r"\.[^.]+$", "", name)  # 확장자
+    name = _DOCNAME_PREFIX.sub("", name)
+    name = re.sub(r"[_]+", " ", name).strip()
+    return name
+
+
+def _looks_like_title(text: str) -> bool:
+    """제목다운가 — 목차 점선·반복 문자 같은 파싱 쓰레기를 거른다 (E-93).
+
+    실측 사례: `(해당 시 작성) 1 ......................`, `(해당 시 작성) m m m m m m`.
+    """
+    t = (text or "").strip()
+    if len(t) < 6:
+        return False
+    # 한글·영문 낱말이 실제로 들어 있어야 한다
+    letters = re.findall(r"[가-힣A-Za-z]{2,}", t)
+    if not letters:
+        return False
+    # 같은 한 글자가 반복되는 패턴(`m m m m`)이나 점선이 대부분이면 버린다
+    meaningful = sum(len(w) for w in letters)
+    return meaningful >= max(6, len(t) * 0.3)
+
 
 SOURCE_PROJECT_NO = "PROJECT_NO"
 SOURCE_DOC_SURROGATE = "DOCUMENT_SURROGATE"
@@ -77,10 +120,23 @@ def resolve_projects(store: CandidateStore, persist: bool = True) -> list[Projec
             )
             grouped[pid] = proj
         proj.doc_ids.append(meta.doc_id)
+        # 제목이 서식 안내문이면 파일명에서 만든다 (E-93). 추출을 다시 돌리지 않고
+        # 이미 저장된 663건을 고치는 경로다.
+        doc_title = (meta.title or "").strip()
+        if is_placeholder_title(doc_title):
+            doc_title = title_from_doc_name(meta.doc_name)
+        else:
+            # 안내문이 **앞에 붙은** 경우 그것만 떼면 뒤에 진짜 과제명이 남는다.
+            # 떼고 남은 것이 알맹이가 아니면(목차 점선 등) 파일명으로 간다.
+            stripped = strip_placeholder_prefix(doc_title)
+            if stripped != doc_title:
+                doc_title = (
+                    stripped if _looks_like_title(stripped) else title_from_doc_name(meta.doc_name)
+                )
         # 대표 제목은 완결보고서 것을 우선한다 — RFP 제목은 공고문 제목이라 과제명과 다를 수 있다.
         is_final = meta.document_type == "FINAL_REPORT"
-        if meta.title and (not proj.title or (is_final and not proj.title_from_final_report)):
-            proj.title = meta.title
+        if doc_title and (not proj.title or (is_final and not proj.title_from_final_report)):
+            proj.title = doc_title
             proj.title_from_final_report = is_final
         # 과제 시작연도로는 가장 이른 문서 연도를 쓴다 (RFP가 완결보고서보다 앞선다).
         if meta.year and (proj.year is None or meta.year < proj.year):

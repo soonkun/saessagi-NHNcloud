@@ -18,6 +18,9 @@ class GraphNodeResp(BaseModel):
     label: str
     kind: str
     type: str = ""
+    # CR-61 회귀(E-93) 대응: 문서 노드의 id는 Project.project_id라 문서를 여는 데 못 쓴다.
+    # 여는 데 쓸 실제 doc_id를 따로 싣는다. 빈 값이면 프론트가 열기 버튼을 감춘다.
+    doc_id: str = ""
 
 
 class GraphEdgeResp(BaseModel):
@@ -103,7 +106,11 @@ def _dict_to_resp(snap: dict[str, Any], stats: dict[str, int]) -> GraphResp:
     return GraphResp(
         nodes=[
             GraphNodeResp(
-                id=n["id"], label=n["label"], kind=n["kind"], type=str(n.get("type") or "")
+                id=n["id"],
+                label=n["label"],
+                kind=n["kind"],
+                type=str(n.get("type") or ""),
+                doc_id=str(n.get("doc_id") or ""),
             )
             for n in snap.get("nodes", [])
         ],
@@ -122,7 +129,17 @@ def _dict_to_resp(snap: dict[str, Any], stats: dict[str, int]) -> GraphResp:
 
 def _snapshot_to_resp(snap: Any, stats: dict[str, int]) -> GraphResp:
     return GraphResp(
-        nodes=[GraphNodeResp(id=n.id, label=n.label, kind=n.kind, type=n.type) for n in snap.nodes],
+        nodes=[
+            GraphNodeResp(
+                id=n.id,
+                label=n.label,
+                kind=n.kind,
+                type=n.type,
+                # M_19 경로는 옛 계약대로 노드 id == doc_id
+                doc_id=n.id if n.kind == "document" else "",
+            )
+            for n in snap.nodes
+        ],
         edges=[
             GraphEdgeResp(source=e.source, target=e.target, kind=e.kind, weight=e.weight)
             for e in snap.edges
@@ -349,7 +366,17 @@ async def latest_evidence(request: Request) -> EvidenceResp:
     return EvidenceResp(
         query=ev.query,
         created=ev.created,
-        nodes=[GraphNodeResp(id=n.id, label=n.label, kind=n.kind, type=n.type) for n in ev.nodes],
+        # E-101: doc_id를 빠뜨리면 근거 노드에서 문서를 열 수 없다.
+        nodes=[
+            GraphNodeResp(
+                id=n.id,
+                label=n.label,
+                kind=n.kind,
+                type=n.type,
+                doc_id=getattr(n, "doc_id", ""),
+            )
+            for n in ev.nodes
+        ],
         edges=[
             GraphEdgeResp(source=e.source, target=e.target, kind=e.kind, weight=e.weight)
             for e in ev.edges

@@ -326,14 +326,18 @@ def normalize_global(
             protos.append(p)
             buckets[key].append(len(protos) - 1)
 
-        if progress is not None and idx % 20000 == 0:
-            progress("normalize", idx, len(entries))
+        # 마지막 눈금을 반드시 찍는다 (E-97). `enumerate`가 0부터라 `% 20000`만 보면
+        # 총건수가 2만 배수가 아닌 한 꼬리가 남아, 화면이 영원히 `360,000/363,235`에서
+        # 멈춘 것처럼 보인다. 6단계(:201)는 `i == total`을 함께 보는데 여기만 빠졌었다.
+        done = idx + 1
+        if progress is not None and (done % 20000 == 0 or done == len(entries)):
+            progress("normalize", done, len(entries))
 
     logger.info("KG 7단계 정확일치 후: %d개 (doc_entities %d)", len(protos), len(entries))
 
     # ── (3) 퍼지 — 토큰 블로킹 + 대표자 비교 ────────────────────────────────
     if n.fuzzy_enabled and not stats.stopped:
-        protos = _fuzzy_pass(protos, rules, n, stats, should_stop)
+        protos = _fuzzy_pass(protos, rules, n, stats, should_stop, progress)
 
     # ── 기록 ────────────────────────────────────────────────────────────────
     canonicals: list[CanonicalEntity] = []
@@ -383,11 +387,16 @@ def _fuzzy_pass(
     n_cfg: KgNormalizationConfig,
     stats: NormalizeStats,
     should_stop: StopFn | None,
+    progress: ProgressFn | None = None,
 ) -> list[_Proto]:
     """토큰 역색인으로 후보군을 좁힌 뒤 **대표와만** 비교해 붙인다.
 
     흔한 토큰('이용한'·'통한')은 색인에서 빼야 후보군이 폭발하지 않는다. 실측상
     문서빈도 2000 초과 토큰은 단 1개뿐이라 이 필터는 싸고 효과적이다.
+
+    **진행률을 반드시 보고한다 (E-97).** 7단계에서 가장 오래 걸리는 구간인데 여기서
+    아무 신호도 안 내보내서, 사용자 화면이 직전 단계 마지막 눈금에 8분간 얼어붙어
+    "멈춘 것 아니냐"는 문의가 왔다. 조용히 오래 도는 것은 죽은 것과 구분되지 않는다.
     """
     df_max = n_cfg.blocking_max_document_frequency
     max_cand = n_cfg.max_block_candidates
@@ -405,6 +414,8 @@ def _fuzzy_pass(
         if should_stop is not None and i % 5000 == 0 and should_stop():
             stats.stopped = True
             break
+        if progress is not None and ((i + 1) % 10000 == 0 or i + 1 == len(protos)):
+            progress("normalize:fuzzy", i + 1, len(protos))
         toks = [t for t in set(p.core.split()) if df[(p.entity_type, t)] <= df_max]
         cand: Counter[int] = Counter()
         for t in toks:

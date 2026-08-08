@@ -158,9 +158,7 @@ class VectorStore:
                     vector_column_name="vector",
                 )
                 self._has_vector_index = True
-                logger.info(
-                    "벡터 인덱스(IVF-PQ) 생성 완료: rows=%d, partitions=%d", n, partitions
-                )
+                logger.info("벡터 인덱스(IVF-PQ) 생성 완료: rows=%d, partitions=%d", n, partitions)
             except Exception as exc:
                 logger.warning("벡터 인덱스 생성 실패 (전수 스캔 유지): %s", exc)
 
@@ -458,10 +456,7 @@ class VectorStore:
         try:
             escaped = ", ".join("'" + cid.replace("'", "''") + "'" for cid in chunk_ids[:200])
             rows: list[dict[str, Any]] = (
-                self._tbl.search()
-                .where(f"chunk_id IN ({escaped})")
-                .limit(len(chunk_ids))
-                .to_list()
+                self._tbl.search().where(f"chunk_id IN ({escaped})").limit(len(chunk_ids)).to_list()
             )
             return rows
         except Exception as exc:

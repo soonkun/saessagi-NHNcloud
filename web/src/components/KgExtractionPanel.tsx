@@ -35,6 +35,7 @@ function fmtDuration(sec: number): string {
 const BUILD_STAGE_LABEL: Record<string, string> = {
   consolidate: "문서 단위 통합",
   normalize: "전역 정규화",
+  "normalize:fuzzy": "전역 정규화 · 유사 병합",
   derive: "관계 유도",
   load: "그래프 적재",
   "load:documents": "그래프 적재 · 문서",

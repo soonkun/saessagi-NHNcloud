@@ -773,3 +773,173 @@ class TestGhostEntries:
         await svc.run_once()  # 안정화된 상태로 신규 인제스트
         assert ingest_calls == ["a.md"], "지워진 뒤 다시 인제스트되어야 한다"
         assert (svc.state.get(digest) or {}).get("doc_id") == "새문서"
+
+
+# ────────────────────────────────────────────────────────────
+# 인제스트 실패 기록·격리 (E-91)
+# ────────────────────────────────────────────────────────────
+
+
+class TestIngestFailure:
+    @pytest.mark.asyncio
+    async def test_f1_failure_recorded_and_stops_after_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """실패를 기록하지 않으면 매 주기 재시도되어 정원을 영구히 차지한다 (E-91)."""
+        root = tmp_path / "RAG"
+        root.mkdir()
+        svc = RagWatchService(
+            root=root,
+            state_path=tmp_path / "state.json",
+            service_context=_FakeCtx(_FakeStore()),
+            max_per_cycle=10,
+            max_ingest_failures=3,
+        )
+        p = write(root / "f" / "스캔본.md")
+        digest = file_digest(p)
+
+        attempts: list[str] = []
+
+        async def always_fails(_ctx: Any, *, filename: str, **_kw: Any) -> Any:
+            attempts.append(filename)
+            raise RuntimeError("422 문서에서 텍스트를 추출할 수 없습니다")
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", always_fails)
+        monkeypatch.setattr(rr, "_load_folders", lambda: [{"folder_id": "fid", "name": "f"}])
+
+        await svc.run_once()  # 안정화
+        for _ in range(6):
+            await svc.run_once()
+
+        assert len(attempts) == 3, "한도까지만 시도해야 한다"
+        assert svc.state.failure_count(digest) == 3
+        rec = svc.state.failures()[digest]
+        assert rec["path"] == "f/스캔본.md"
+        assert "텍스트를 추출할 수 없습니다" in rec["error"], "사유가 남아야 진단할 수 있다"
+
+    @pytest.mark.asyncio
+    async def test_f2_failure_does_not_starve_healthy_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """원래 사고 그대로 — 실패 파일이 정원을 채워도 정상 파일은 진행되어야 한다."""
+        root = tmp_path / "RAG"
+        root.mkdir()
+        svc = RagWatchService(
+            root=root,
+            state_path=tmp_path / "state.json",
+            service_context=_FakeCtx(_FakeStore()),
+            max_per_cycle=2,  # 실패 파일 수와 같게 잡아 정원을 꽉 채운다
+            max_ingest_failures=3,
+        )
+        # 'a'가 'b'보다 먼저 정렬되어 정원을 먼저 잡는다.
+        write(root / "f" / "a1.md", "깨짐1")
+        write(root / "f" / "a2.md", "깨짐2")
+        write(root / "f" / "b1.md", "정상1")
+        write(root / "f" / "b2.md", "정상2")
+
+        ingested: list[str] = []
+
+        class _Res:
+            doc_id = "doc"
+            chunk_count = 1
+
+        async def flaky(_ctx: Any, *, filename: str, **_kw: Any) -> Any:
+            if filename.startswith("a"):
+                raise RuntimeError("422 문서에서 텍스트를 추출할 수 없습니다")
+            ingested.append(filename)
+            return _Res()
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", flaky)
+        monkeypatch.setattr(rr, "_load_folders", lambda: [{"folder_id": "fid", "name": "f"}])
+
+        await svc.run_once()  # 안정화
+        for _ in range(8):
+            await svc.run_once()
+
+        assert sorted(ingested) == ["b1.md", "b2.md"], (
+            "실패 파일이 격리된 뒤 정상 파일이 전부 처리되어야 한다"
+        )
+
+    @pytest.mark.asyncio
+    async def test_f3_success_clears_earlier_failures(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """일시적 실패(GPU 점유 등)가 누적돼 멀쩡한 파일이 격리되면 안 된다."""
+        root = tmp_path / "RAG"
+        root.mkdir()
+        svc = RagWatchService(
+            root=root,
+            state_path=tmp_path / "state.json",
+            service_context=_FakeCtx(_FakeStore()),
+            max_per_cycle=10,
+            max_ingest_failures=3,
+        )
+        p = write(root / "f" / "a.md")
+        digest = file_digest(p)
+
+        calls = {"n": 0}
+
+        class _Res:
+            doc_id = "doc-1"
+            chunk_count = 2
+
+        async def fails_once(_ctx: Any, **_kw: Any) -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("일시적 오류")
+            return _Res()
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", fails_once)
+        monkeypatch.setattr(rr, "_load_folders", lambda: [{"folder_id": "fid", "name": "f"}])
+
+        await svc.run_once()  # 안정화
+        await svc.run_once()  # 실패 1회
+        assert svc.state.failure_count(digest) == 1
+
+        await svc.run_once()  # 성공
+        assert svc.state.failure_count(digest) == 0
+        assert svc.state.get(digest) is not None
+
+    @pytest.mark.asyncio
+    async def test_f4_failures_survive_restart(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """상태 파일에 남아야 재시작 후에도 격리가 유지된다."""
+        root = tmp_path / "RAG"
+        root.mkdir()
+        state_path = tmp_path / "state.json"
+
+        def make() -> RagWatchService:
+            return RagWatchService(
+                root=root,
+                state_path=state_path,
+                service_context=_FakeCtx(_FakeStore()),
+                max_per_cycle=10,
+                max_ingest_failures=2,
+            )
+
+        p = write(root / "f" / "a.md")
+        digest = file_digest(p)
+
+        async def always_fails(_ctx: Any, **_kw: Any) -> Any:
+            raise RuntimeError("422 문서에서 텍스트를 추출할 수 없습니다")
+
+        import app.rag_routes as rr
+
+        monkeypatch.setattr(rr, "ingest_document_bytes", always_fails)
+        monkeypatch.setattr(rr, "_load_folders", lambda: [{"folder_id": "fid", "name": "f"}])
+
+        svc = make()
+        await svc.run_once()
+        await svc.run_once()
+        assert svc.state.failure_count(digest) == 1
+
+        # 재기동 — 상태를 디스크에서 다시 읽는다.
+        svc2 = make()
+        assert svc2.state.failure_count(digest) == 1, "실패 기록이 재시작을 넘겨 살아남아야 한다"

@@ -86,8 +86,9 @@ class AppWebSocketHandler(WebSocketHandler):  # type: ignore[misc]
                 msgs = get_history(conf_uid, str(h.get("uid") or ""))
                 # HistoryMessage가 dataclass/객체일 수 있어 dict로 정규화한다.
                 norm = [
-                    m if isinstance(m, dict) else {"role": getattr(m, "role", ""),
-                                                   "content": getattr(m, "content", "")}
+                    m
+                    if isinstance(m, dict)
+                    else {"role": getattr(m, "role", ""), "content": getattr(m, "content", "")}
                     for m in msgs
                 ]
                 h["title"] = history_title(norm)

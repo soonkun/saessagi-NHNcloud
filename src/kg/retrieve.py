@@ -211,13 +211,38 @@ class KgRetriever:
 
 
 def evidence_payload(
-    query: str, matches: list[EntityMatch], chunk_ids: list[str]
+    query: str,
+    matches: list[EntityMatch],
+    chunk_ids: list[str],
+    graph: KgGraphStore | None = None,
 ) -> dict[str, Any]:
     """그래프 탭 근거 서브그래프용 노드/엣지 (M_19 EvidenceSubgraph와 같은 형태).
 
     형태를 맞추는 이유는 `GraphRagView.tsx`(1,636줄)를 다시 쓰지 않기 위해서다.
     `kind`만 keyword → entity로 바뀐다.
+
+    `graph`가 있으면 **개요와 같은 노드 규약**으로 만든다 (E-101) — 문서 노드 id는
+    `Project.project_id`, 라벨은 과제 제목, `doc_id`는 별도 필드. 예전에는 id에 raw
+    `doc_id`를, 라벨에도 `doc_id`를 넣어서 프론트가 개요에서 노드를 찾지 못했고
+    (근거 94건 중 0건 일치) 노드 이름도 파일명 그대로 그려졌다.
+
+    `graph`가 없으면 예전 형태로 되돌아간다 — 근거가 아예 안 뜨는 것보다는 낫다.
     """
+    if graph is not None:
+        try:
+            snap = graph.evidence_snapshot([m.canonical_id for m in matches])
+            if snap["nodes"]:
+                return {
+                    "query": query,
+                    "created": datetime.now().isoformat(timespec="seconds"),
+                    "nodes": snap["nodes"],
+                    "edges": snap["edges"],
+                    "chunk_ids": chunk_ids,
+                }
+            logger.warning("E-101 근거 서브그래프가 비었다 — 폴백 사용 (매칭 %d건)", len(matches))
+        except KgGraphStoreError as exc:
+            logger.warning("E-101 근거 서브그래프 조회 실패, 폴백 사용: %s", exc)
+
     nodes: dict[str, dict[str, Any]] = {}
     edges: list[dict[str, Any]] = []
     for m in matches:
@@ -230,7 +255,7 @@ def evidence_payload(
             }
         for did in m.doc_ids:
             if did not in nodes:
-                nodes[did] = {"id": did, "label": did, "kind": "document"}
+                nodes[did] = {"id": did, "label": did, "kind": "document", "doc_id": did}
             edges.append({"source": did, "target": m.canonical_id, "kind": "mentions"})
     return {
         "query": query,
