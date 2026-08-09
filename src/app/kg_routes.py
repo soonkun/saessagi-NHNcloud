@@ -156,3 +156,52 @@ async def review(request: Request, limit: int = 50) -> dict[str, Any]:
 async def report(request: Request) -> dict[str, Any]:
     """10단계 관찰 리포트. **품질 증명이 아니다** (스펙 §9.1)."""
     return _svc(request).report()
+
+
+# ── CR-64: doc_id → 표시용 제목 ───────────────────────────────────────────────
+#
+# 답변 본문의 인용 칩에 **파일명 대신 과제 제목**을 보여주기 위한 조회다.
+# 벡터 스토어 스키마에는 제목이 없고(doc_id·doc_name·category·page·…), M_23 후보
+# 저장소에만 있다. 실측 12,070건 전부 제목이 채워져 있다.
+#
+# 여기서 `projects` 모듈의 정제(E-93/E-99)를 그대로 태운다 — `(해당 시 작성)`,
+# `주관과제명 …` 같은 서식 문구가 칩에 뜨면 안 된다. 같은 판정을 두 곳에 복사하지
+# 않으려고 함수를 재사용한다.
+
+
+class DocTitlesReq(BaseModel):
+    doc_ids: list[str]
+
+
+@router.post("/doc-titles")
+async def doc_titles(body: DocTitlesReq, request: Request) -> dict[str, str]:
+    """doc_id 목록 → 표시용 제목. 못 찾으면 그 id는 결과에서 빠진다(호출자가 폴백)."""
+    from kg.identity import is_placeholder_title, strip_placeholder_prefix
+    from kg.projects import title_from_doc_name
+
+    ids = [d for d in dict.fromkeys(body.doc_ids) if d][:200]
+    if not ids:
+        return {}
+
+    svc = _svc(request)
+    store = svc._store  # noqa: SLF001 — 같은 앱 내부 조회
+    out: dict[str, str] = {}
+    for doc_id in ids:
+        try:
+            meta = store.get_document(doc_id)
+        except Exception:
+            meta = None
+        if meta is None:
+            continue
+        title = (meta.title or "").strip()
+        if is_placeholder_title(title):
+            title = title_from_doc_name(meta.doc_name)
+        else:
+            stripped = strip_placeholder_prefix(title)
+            if stripped:
+                title = stripped
+        if not title:
+            title = title_from_doc_name(meta.doc_name)
+        if title:
+            out[doc_id] = title
+    return out

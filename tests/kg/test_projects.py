@@ -179,3 +179,22 @@ def test_label_only_title_is_not_emptied() -> None:
 
     assert strip_placeholder_prefix("과제명") == "과제명"
     assert is_placeholder_title("과제명") is True
+
+
+def test_strips_language_label_prefix() -> None:
+    """표지의 `국문/영문 과제명` 칸 라벨을 뗀다 (CR-64).
+
+    실측 496건(4.1%)이 `국문 소기후모형 적용 …`처럼 시작해 인용 칩에 그대로 떴다.
+    """
+    from kg.identity import strip_placeholder_prefix
+
+    assert strip_placeholder_prefix("국문 소기후모형 적용 고해상도") == "소기후모형 적용 고해상도"
+    assert strip_placeholder_prefix("국문 과제명 스마트팜 확산") == "스마트팜 확산"
+
+
+def test_does_not_strip_korean_literature() -> None:
+    """`국문학`은 내용어다 — 라벨로 오인해 자르면 제목이 망가진다."""
+    from kg.identity import strip_placeholder_prefix
+
+    for t in ("국문학 연구 동향 분석", "국문학과 교육과정 개편"):
+        assert strip_placeholder_prefix(t) == t, f"내용어를 잘랐다: {t}"

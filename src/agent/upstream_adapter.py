@@ -147,16 +147,112 @@ def _marker_for_hit(h: dict[str, Any]) -> str | None:
 
 
 # LLM이 직접 만든 (정상이든 깨졌든) doc/note 마커. doc_id에는 공백·괄호·점이
-# 들어가므로 LLM이 정확히 복사하지 못해 `[[doc:xxx]`처럼 깨지기 쉽다 →
-# 백엔드가 권위 있는 마커를 따로 붙이므로, LLM이 낸 마커는 표시 전에 모두 제거.
+# 들어가므로 LLM이 정확히 복사하지 못해 `[[doc:xxx]`처럼 깨지기 쉽다.
 _LLM_MARKER_RE = re.compile(r"\[\[(?:doc|note):[^\[\]]*\]{0,2}")
+
+# **접두사를 빼먹은 마커** (E-103). 실측 저장 이력에서 이중괄호 16건 중 11건이
+# `[[TRKO2025…pdf_afbc4f63]]`처럼 `doc:` 없이 doc_id만 들어 있었다. 위 정규식이
+# 접두사를 요구해 하나도 안 걸러졌고, 화면에 **날것으로** 그대로 떴다.
+# 파일명이 깨진 것(`최종·종보고서`)도 있어 정확 매칭에 기댈 수 없다 —
+# 확장자 흔적이 보이는 이중괄호는 마커로 보고 지운다.
+_BARE_MARKER_RE = re.compile(
+    r"\[\[\s*[^\[\]]*?\.(?:pdf|hwp|hwpx|docx?|pptx?|xlsx?|txt|md)[^\[\]]*\]{0,2}",
+    re.I,
+)
+
+
+def _normalize_doc_marker(text: str) -> str:
+    """접두사 없는 `[[<doc_id>]]`를 `[[doc:<doc_id>]]`로 되살린다 (E-103).
+
+    LLM이 접두사를 빼먹었을 뿐 doc_id 자체는 맞는 경우가 많다. 지워 버리면 그 문장의
+    근거 링크가 사라지므로, **살릴 수 있으면 살리고** 못 살리면 뒤에서 지운다.
+    """
+    return _BARE_MARKER_RE.sub(
+        lambda m: "[[doc:" + m.group(0).lstrip("[").strip().rstrip("]").strip() + "]]",
+        text,
+    )
 
 
 def _strip_llm_markers(text: str) -> str:
+    """LLM이 만든 마커를 지운다 (TTS·요약용 — 화면 표시에는 쓰지 않는다)."""
     cleaned = _LLM_MARKER_RE.sub("", text)
+    cleaned = _BARE_MARKER_RE.sub("", cleaned)  # 접두사 없는 것도 (E-103)
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +\n", "\n", cleaned)
     return cleaned.strip()
+
+
+def _marker_id(marker: str) -> str:
+    """`[[doc:X]]` / `[[note:X]]` → `X`. 형식이 아니면 빈 문자열."""
+    m = re.fullmatch(r"\[\[(?:doc|note):(.+)\]\]", marker or "", re.S)
+    return m.group(1).strip() if m else ""
+
+
+def _norm_id(s: str) -> str:
+    """doc_id 비교용 정규화 — LLM이 흘린 공백·구두점을 무시한다."""
+    return re.sub(r"[\s·.,()\[\]_-]+", "", s or "").lower()
+
+
+def _resolve_inline_markers(text: str, valid_markers: list[str]) -> tuple[str, int]:
+    """본문의 인용 마커를 **제자리에서** 검증해 살린다 (CR-64).
+
+    사용자 요청: "중간중간 근거를 보여주는건 아주 좋았어." 그래서 예전처럼 전부 지우고
+    답변 끝에 몰아 붙이지 않는다. 대신 LLM이 쓴 자리를 그대로 두되,
+
+      1. 접두사 누락(`[[X.pdf]]`)을 `[[doc:X.pdf]]`로 되살리고
+      2. 실제 검색된 문서가 아닌 것(환각·오타)은 **지운다**
+      3. 파일명이 조금 깨져도(`최종·종보고서`) 정규화 비교로 후보가 **하나면** 교정한다
+
+    Returns: (본문, 살아남은 마커 수)
+    """
+    if not text:
+        return "", 0
+    valid_ids = [m[len("[[doc:") : -2] for m in valid_markers if m.startswith("[[doc:")]
+    valid_notes = [m[len("[[note:") : -2] for m in valid_markers if m.startswith("[[note:")]
+    by_norm: dict[str, str] = {}
+    for did in valid_ids:
+        by_norm.setdefault(_norm_id(did), did)
+
+    kept = 0
+    # **메시지 전체 단위로 중복을 지우지 않는다.** 한때 그렇게 했더니 한 자료가 여러
+    # 섹션의 근거여도 첫 섹션에만 남아 칩이 확 줄었다(사용자 지적). 같은 섹션 안의
+    # 중복은 프론트가 섹션별로 묶으면서 정리한다 — 거기가 맞는 자리다.
+    used: set[str] = set()
+
+    def _fix(m: re.Match[str]) -> str:
+        nonlocal kept
+        raw = m.group(0)
+        inner = raw.lstrip("[").rstrip("]").strip()
+        if inner.startswith("note:"):
+            slug = inner[5:].strip()
+            if slug in valid_notes:
+                used.add(slug)
+                kept += 1
+                return f"[[note:{slug}]]"
+            return ""
+        cand = inner[4:].strip() if inner.startswith("doc:") else inner
+        if cand not in valid_ids:
+            cand = by_norm.get(_norm_id(cand), "")
+        if not cand:
+            return ""  # 검색 결과에 없는 문서 — 환각이므로 지운다
+        used.add(cand)
+        kept += 1
+        return f"[[doc:{cand}]]"
+
+    out = re.sub(r"\[\[[^\[\]]*\]{0,2}", _fix, text)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +\n", "\n", out)
+    out = out.strip()
+
+    # 모델이 빠뜨린 자료를 **끝에 보탠다** (사용자 요청: "관련된 근거를 참고했으면 다
+    # 달아야지"). 검색된 자료는 전부 LLM 컨텍스트에 들어갔으므로 실제로 참고된 것이다.
+    # 모델은 그중 일부에만 마커를 다는데(실측 8건 중 3건), 나머지를 버리면 사용자가
+    # 그 자료에 접근할 방법이 없다. 본문 인용은 제자리에 두고 남은 것만 뒤에 붙인다.
+    leftover = [m for m in valid_markers if _marker_id(m) and _marker_id(m) not in used]
+    if leftover:
+        out = (out + "\n\n" + " ".join(leftover)).strip()
+        kept += len(leftover)
+    return out, kept
 
 
 def _extract_attached_doc_ids(text: str) -> list[str]:
@@ -801,11 +897,26 @@ def _make_adapter_class() -> type:
                 # 권위 마커를 display_text에만 부착 (tts_text는 마커 없이 깨끗하게).
                 clean_text = _strip_llm_markers(full_text)
                 markers = getattr(self, "_last_cited_markers", []) or []
-                if markers:
+                # CR-64: 인용 마커를 **본문 제자리에** 남긴다. 예전에는 전부 지우고 답변
+                # 끝에 몰아 붙여서, 어느 문장이 어느 자료 근거인지 알 수 없었다.
+                # 검증에서 살아남은 게 하나도 없을 때만 예전처럼 끝에 붙인다 —
+                # 그렇지 않으면 자료 접근 경로가 통째로 사라진다.
+                inline_text, inline_kept = _resolve_inline_markers(full_text, markers)
+                if inline_kept > 0:
+                    display = inline_text
+                elif markers:
                     marker_str = "".join(markers)
                     display = f"{clean_text} {marker_str}".strip() if clean_text else marker_str
                 else:
                     display = clean_text
+                if markers:
+                    logger.info(
+                        "인용 마커: LLM이 쓴 것 %d개 → 검증 통과 %d개 · 검색 문서 %d개 (%s)",
+                        full_text.count("[["),
+                        inline_kept,
+                        len(markers),
+                        "인라인 유지" if inline_kept else "끝에 부착(폴백)",
+                    )
                 # 의도 안내·노트 작성으로 캐릭터 상태를 바꿨다면 작업 종료 시 [neutral] 복귀.
                 # 단, 직후 강제 저장 폴백이 돌 예정이면 폴백 완료 메시지가 복귀를 담당한다.
                 if (announced or note_call_started) and not will_force_save:

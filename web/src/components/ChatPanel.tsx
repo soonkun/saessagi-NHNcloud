@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
-  BookOpen,
   FileText,
   Image as ImageIcon,
   Mic,
@@ -20,15 +19,142 @@ import { send } from "../services/websocket";
 import { startNewHistoryIfSafe } from "../services/history";
 import { invalidateDocsCache } from "../services/websocket";
 import { openDocument, uploadDocument } from "../services/api";
+import {
+  ensureDocTitles,
+  getCachedTitle,
+  shortenTitle,
+  subscribeDocTitles,
+  titleFromFilename,
+} from "../services/docTitles";
 import type { MessageAttachment, MessageImage } from "../types";
 
-// `[[note:slug]]` / `[[doc:doc_id]]` 마커는 칩으로 별도 표시되므로 본문 렌더에서는 제거.
-// 닫는 괄호가 0~2개인 깨진 부분 마커(`[[doc:xxx`, `[[doc:xxx]`)도 함께 제거해
-// 본문에 stray `]`가 남지 않도록 한다.
+// CR-64: 인용 마커를 **본문 제자리에 칩으로** 렌더한다.
+// `[[doc:<id>]]` → 마크다운 링크로 바꿔 `a` 렌더러가 칩으로 그린다.
+// 예전에는 본문에서 전부 지우고 답변 끝에 몰아 붙였는데, 그러면 어느 문장이 어느
+// 자료 근거인지 알 수 없고 재진입 시 칩이 통째로 사라졌다(런타임 상태였다).
+// 이제 마커가 **본문 텍스트에 남아** 히스토리에서 복원해도 그대로 살아난다.
+const DOC_LINK_SCHEME = "saessagi-doc:";
+const NOTE_LINK_SCHEME = "saessagi-note:";
+
+/**
+ * 마커를 마크다운 링크로. **URL에는 번호만 넣는다.**
+ *
+ * doc_id를 URL에 넣었더니 `12. (고정) 드론…` 처럼 **괄호가 든 파일명**에서 마크다운
+ * 링크 파서가 깨져 `[근거](saessagi-doc:12.%20(%EA%B3%A0…` 가 본문에 날것으로 떴다.
+ * percent-encoding으로는 못 막는다 — `encodeURIComponent`는 `()`를 그대로 둔다.
+ * 번호는 숫자뿐이라 어떤 파일명이 와도 깨지지 않는다.
+ */
+export function markersToLinks(text: string, docIds: string[], noteIds: string[] = []): string {
+  return (text || "")
+    .replace(/\[\[doc:([^[\]]+)\]\]/g, (_m, id: string) => {
+      const i = docIds.indexOf(String(id).trim());
+      return i < 0 ? "" : ` [근거](${DOC_LINK_SCHEME}${i}) `;
+    })
+    .replace(/\[\[note:([^[\]]+)\]\]/g, (_m, slug: string) => {
+      const i = noteIds.indexOf(String(slug).trim());
+      return i < 0 ? "" : ` [노트](${NOTE_LINK_SCHEME}${i}) `;
+    });
+}
+
+/**
+ * 인용 칩을 **문단·섹션 끝으로 모은다** (사용자 요청).
+ *
+ * 모델이 문장마다 마커를 달면 본문이 칩으로 끊긴다 — "그냥 '2.' 하이라키 마지막에
+ * 저 세개를 넣으면 되잖아. 문장마다 넣는건 과해."
+ * 섹션(번호 항목·제목)이 새로 시작하는 자리에서 그때까지 모인 마커를 한 줄로 낸다.
+ */
+export function groupMarkersByBlock(text: string): string {
+  const MARKER = /\[\[(?:doc|note):[^[\]]+\]\]/g;
+  // **상위 하이라키만** 경계로 본다 (사용자 요청). 예전에는 빈 줄·불릿·①까지 경계로
+  // 삼아 칩이 다시 문장 단위로 흩어졌다. 지금은 제목(`#`)과 번호 항목(`1.`)만 본다.
+  const isTopSection = (ln: string): boolean => /^\s*(?:#{1,6}\s|\d+[.)]\s)/.test(ln);
+  // 표 줄. 마커가 표 안으로 들어가면 셀에 칩이 박히고 "관련 근거" 열이 생겨 표가 깨진다.
+  const isTableRow = (ln: string): boolean => /^\s*\|/.test(ln);
+
+  const lines = (text || "").split("\n");
+  const out: string[] = [];
+  let buf: string[] = [];
+
+  const flush = (): void => {
+    if (!buf.length) return;
+    // 표 바로 뒤라면 빈 줄을 하나 두어야 마크다운이 표에 붙이지 않는다.
+    if (out.length && isTableRow(out[out.length - 1])) out.push("");
+    out.push(buf.join(" "));
+    buf = [];
+  };
+
+  for (const line of lines) {
+    const found = line.match(MARKER) ?? [];
+    const stripped = line.replace(MARKER, "").replace(/[ \t]{2,}/g, " ").trimEnd();
+    // 표 안에서는 절대 내보내지 않는다 — 표가 끝난 뒤로 미룬다.
+    if (isTopSection(stripped) && !isTableRow(stripped)) flush();
+    out.push(stripped);
+    for (const m of found) if (!buf.includes(m)) buf.push(m);
+  }
+  flush();
+  return out.join("\n");
+}
+
+/** 본문에 살아 있는 doc 마커의 id 목록 (제목 조회·프리페치용). */
+export function docIdsInText(text: string): string[] {
+  const out: string[] = [];
+  for (const m of (text || "").matchAll(/\[\[doc:([^[\]]+)\]\]/g)) {
+    const id = m[1].trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** 본문 속 인용 칩. 제목을 7낱말로 줄여 보여주고, 누르면 원문을 연다. */
+function CiteChip({ docId }: { docId: string }): React.ReactElement {
+  const [, force] = useState(0);
+  useEffect(() => {
+    void ensureDocTitles([docId]);
+    return subscribeDocTitles(() => force((v) => v + 1));
+  }, [docId]);
+
+  const full = getCachedTitle(docId) ?? titleFromFilename(docId);
+  const label = shortenTitle(full) || "근거";
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        void openDocument(docId, full);
+      }}
+      title={`원본 열기: ${full}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        margin: "0 2px",
+        padding: "0 6px",
+        fontSize: "var(--fs-11)",
+        lineHeight: 1.7,
+        borderRadius: 9,
+        background: "var(--chip-doc-bg)",
+        border: "1px solid var(--chip-doc-border)",
+        color: "var(--chip-doc-text)",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        verticalAlign: "baseline",
+        maxWidth: "100%",
+      }}
+    >
+      <ExternalLink size={10} style={{ flexShrink: 0 }} />
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
 function stripNoteMarkers(text: string): string {
   return text
     // [[note:slug]] / [[doc:id]] (정상 이중괄호, 닫힘 0~2개 깨진 것 포함)
     .replace(/\[\[(?:note|doc):[^[\]]*\]{0,2}/g, "")
+    // 접두사를 빼먹은 마커 `[[TRKO….pdf_abc]]` (E-103). 백엔드가 살릴 수 있으면
+    // 살리지만, 못 살린 것이 화면에 날것으로 뜨는 것을 여기서 막는다.
+    .replace(/\[\[[^[\]]*\.(?:pdf|hwpx?|docx?|pptx?|xlsx?|txt|md)[^[\]]*\]{0,2}/gi, "")
     // [doc:id] / [note:slug] (단일괄호 — 8B 모델이 자주 이렇게 잘못 출력)
     .replace(/\[(?:note|doc):[^[\]]*\]/g, "")
     // 모델이 임의로 끼워넣는 HTML 태그(<span style=...> 등). react-markdown은
@@ -117,8 +243,6 @@ export function ChatContent({
   const llmInfo = useStore((s) => s.llmInfo);
   const agentStatus = useStore((s) => s.agentStatus);
   const addMessage = useStore((s) => s.addMessage);
-  const setChatTab = useStore((s) => s.setChatTab);
-  const setSelectedNoteSlug = useStore((s) => s.setSelectedNoteSlug);
   const requestGraphEvidence = useStore((s) => s.requestGraphEvidence);
 
   const [input, setInput] = useState("");
@@ -558,6 +682,15 @@ export function ChatContent({
               ) : (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
+                  // react-markdown의 기본 URL 정제기는 http(s)·mailto 외의 스킴을
+                  // **지운다.** 우리 인용 링크(`saessagi-doc:`)도 지워져 href가 비고,
+                  // `a` 렌더러가 칩 대신 맨 링크를 그렸다(실측: 백엔드는 8개를 보냈는데
+                  // 화면 칩 0개). 우리 스킴만 통과시키고 나머지는 기본 정제를 유지한다.
+                  urlTransform={(url) =>
+                    url.startsWith(DOC_LINK_SCHEME) || url.startsWith(NOTE_LINK_SCHEME)
+                      ? url
+                      : defaultUrlTransform(url)
+                  }
                   components={{
                     p: ({ children }) => (
                       <p style={{ margin: "0 0 6px", whiteSpace: "pre-wrap" }}>{children}</p>
@@ -606,12 +739,37 @@ export function ChatContent({
                         {children}
                       </blockquote>
                     ),
+                    // CR-64: 인용 마커에서 만든 링크를 칩으로 그린다.
+                    a: ({ href, children }) => {
+                      const h = String(href ?? "");
+                      if (h.startsWith(DOC_LINK_SCHEME)) {
+                        const id = docIdsInText(msg.text)[Number(h.slice(DOC_LINK_SCHEME.length))];
+                        return id ? <CiteChip docId={id} /> : <></>;
+                      }
+                      if (h.startsWith(NOTE_LINK_SCHEME)) {
+                        return (
+                          <span style={{ fontSize: "var(--fs-11)", color: "var(--chip-note-text)" }}>
+                            📝 노트
+                          </span>
+                        );
+                      }
+                      return <a href={h} target="_blank" rel="noreferrer">{children}</a>;
+                    },
                   }}
                 >
-                  {stripNoteMarkers(msg.text)}
+                  {/* 순서 주의: 마커를 **먼저** 링크로 바꾼 뒤 남은 찌꺼기를 지운다.
+                      반대로 하면 stripNoteMarkers가 마커를 먼저 지워 칩이 사라진다. */}
+                  {stripNoteMarkers(
+                    markersToLinks(groupMarkersByBlock(msg.text), docIdsInText(msg.text))
+                  )}
                 </ReactMarkdown>
               )}
-              {msg.role === "ai" && ((msg.citedDocs && msg.citedDocs.length > 0) || (msg.citedNotes && msg.citedNotes.length > 0)) && (
+              {/* CR-64: 문서 칩 무더기를 없앴다 — 인용은 본문 제자리 칩으로 보여준다.
+                  맨 아래는 근거 그래프 하나만 둔다(사용자 요청). */}
+              {/* 근거가 **실제로 있는 답변에만** 붙인다. `text.length > 0`으로 두었더니
+                  "자료를 찾아볼게요!" 같은 안내 말풍선에도 붙어 엉뚱한 자리에 떴다.
+                  인용 마커가 본문에 있다는 것이 곧 "이 답변에 근거가 있다"는 신호다. */}
+              {msg.role === "ai" && docIdsInText(msg.text).length > 0 && (
                 <div
                   style={{
                     marginTop: 8,
@@ -622,67 +780,6 @@ export function ChatContent({
                     gap: 4,
                   }}
                 >
-                  {msg.citedNotes?.map((n) => (
-                    <button
-                      key={`note-${n.slug}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedNoteSlug(n.slug);
-                        setChatTab("notes");
-                      }}
-                      title={`업무 노트로 이동: ${n.title}`}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        padding: "2px 8px",
-                        fontSize: "var(--fs-11)",
-                        borderRadius: 10,
-                        background: "var(--chip-note-bg)",
-                        border: "1px solid var(--chip-note-border)",
-                        color: "var(--chip-note-text)",
-                        cursor: "pointer",
-                        maxWidth: 240,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        fontFamily: "inherit",
-                      }}
-                    >
-                      <BookOpen size={11} />
-                      노트 · {n.title}
-                    </button>
-                  ))}
-                  {msg.citedDocs?.map((c) => (
-                    <button
-                      key={`doc-${c.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openDocument(c.id, c.filename);
-                      }}
-                      title={`원본 열기: ${c.filename}`}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        padding: "2px 8px",
-                        fontSize: "var(--fs-11)",
-                        borderRadius: 10,
-                        background: "var(--chip-doc-bg)",
-                        border: "1px solid var(--chip-doc-border)",
-                        color: "var(--chip-doc-text)",
-                        cursor: "pointer",
-                        fontFamily: "inherit",
-                        maxWidth: 220,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <ExternalLink size={11} />
-                      {c.filename}
-                    </button>
-                  ))}
                   {/* M_19: 이 답변의 근거 서브그래프를 그래프 탭에서 하이라이트 */}
                   <button
                     onClick={(e) => {
