@@ -673,8 +673,22 @@ class GraphRagService:
         `_row_to_hit`을 재사용한다 — LanceDB row → SearchHit 변환이 두 곳에 생기면
         한쪽만 고쳐지는 사고가 난다.
         """
+        # E-102: 질의 임베딩을 **한 번만** 만들어 넘긴다. 그래프가 고른 문서 안에서
+        # 관련 청크를 다시 찾는 데 쓴다 — 예전엔 문서의 앞 2청크(표지·제출문)가 갔다.
+        # 임베딩이 실패해도 검색을 죽이지 않는다. 폴백은 예전 동작이다.
+        query_vec = None
         try:
-            rows, matches = await self._kg.retrieve(query, self._vstore, top_k=top_k)
+            embedder = getattr(self._rag, "embedder", None)
+            if embedder is not None:
+                loop0 = asyncio.get_running_loop()
+                query_vec = await loop0.run_in_executor(None, lambda: embedder.embed_query(query))
+        except Exception as exc:
+            logger.warning("E-102 질의 임베딩 실패 — 앞청크 폴백: %r", exc)
+
+        try:
+            rows, matches = await self._kg.retrieve(
+                query, self._vstore, top_k=top_k, query_vec=query_vec
+            )
         except Exception as exc:
             self._warn_fallback(f"M_23 그래프 질의 실패: {exc}")
             return [], None

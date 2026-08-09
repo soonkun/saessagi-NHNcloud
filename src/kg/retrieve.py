@@ -50,6 +50,26 @@ class EntityMatch:
     doc_ids: list[str]
 
 
+def _hit_to_row(hit: Any) -> dict[str, Any]:
+    """SearchHit → LanceDB row 형태 (E-102).
+
+    `GraphRagService._row_to_hit`이 row dict를 기대하므로 형태를 맞춰 돌려준다.
+    변환을 두 번 하는 셈이지만, 두 경로(문서 내 검색 · 앞청크 폴백)가 **같은 형태**를
+    내보내야 호출자가 분기 없이 처리한다.
+    """
+    return {
+        "doc_id": hit.doc_id,
+        "doc_name": hit.doc_name,
+        "category": hit.category,
+        "page": hit.page,
+        "section": hit.section,
+        "chunk_id": hit.chunk_id,
+        "text": hit.text,
+        "bbox": list(hit.bbox) if hit.bbox else None,
+        "source_path": hit.source_path,
+    }
+
+
 class KgRetriever:
     """정규 엔티티 그래프 기반 검색기."""
 
@@ -158,6 +178,7 @@ class KgRetriever:
         query: str,
         vstore: Any,
         top_k: int = 5,
+        query_vec: Any = None,
     ) -> tuple[list[dict[str, Any]], list[EntityMatch]]:
         """질의 → 엔티티 매칭 → 문서 랭킹 → 대표 청크 행.
 
@@ -182,7 +203,21 @@ class KgRetriever:
             return [], []
         max_score = ranked[0][1] or 1.0
 
+        # E-102: 문서를 골랐으면 **그 문서 안에서 질의로 다시** 청크를 고른다.
+        # 예전에는 `get_chunks_by_doc_id(doc, limit=2)`로 앞 2청크를 집어 표지·제출문이
+        # 근거로 갔다(실측 최종 근거의 28%가 1~2페이지). 문서 선별이라는 그래프의
+        # 강점을 마지막 한 줄에서 버리고 있었다.
+        # `query_vec`이 없으면(호출자가 임베더를 못 주면) 예전 방식으로 폴백한다 —
+        # 근거가 아예 없는 것보다는 낫다.
+        use_vec = query_vec is not None and hasattr(vstore, "search_in_doc")
+        fallback_used = not use_vec
+
         def _fetch(doc: str) -> list[dict[str, Any]]:
+            if use_vec:
+                hits = vstore.search_in_doc(query_vec, doc, top_k=2)
+                if hits:
+                    return [_hit_to_row(h) for h in hits]
+                # 그 문서에서 못 고르면 예전 경로로 (문서가 통째로 비는 것보다 낫다)
             result: list[dict[str, Any]] = vstore.get_chunks_by_doc_id(doc, limit=2)
             return result
 
@@ -200,11 +235,12 @@ class KgRetriever:
                 break
 
         logger.info(
-            "KG 그래프 검색: 용어=%d, 엔티티=%d, 문서=%d, hits=%d (query=%r)",
+            "KG 그래프 검색: 용어=%d, 엔티티=%d, 문서=%d, hits=%d, 청크선택=%s (query=%r)",
             len(terms),
             len(matches),
             len(ranked),
             len(rows),
+            "앞청크(폴백)" if fallback_used else "문서내검색",
             (query or "")[:50],
         )
         return rows, matches

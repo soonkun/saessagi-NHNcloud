@@ -369,6 +369,48 @@ class VectorStore:
             clauses.append(f"(category IS NULL OR category != '{escaped_kc}')")
         return " AND ".join(clauses) if clauses else None
 
+    def search_in_doc(
+        self,
+        query_vec: "np.ndarray[Any, Any]",
+        doc_id: str,
+        top_k: int = 2,
+    ) -> list[SearchHit]:
+        """문서 **안에서** 질의와 가까운 청크를 고른다 (E-102).
+
+        M_23 그래프 검색이 쓴다. 그래프는 엔티티 추론으로 **어느 문서인지**를 잘 맞히는데,
+        예전에는 그 뒤 `get_chunks_by_doc_id(doc, limit=2)`로 **문서의 앞 2청크**를
+        가져왔다. 정렬이 없어 사실상 표지와 제출문이다:
+
+            [1] p1: 완결과제 최종보고서 … (과제번호 : PJ012614) …
+            [2] p2: 제 출  농촌진흥청장 귀하 … (OCR 깨짐)
+
+        질문이 무엇이든 같은 두 청크가 갔다. 실측으로 최종 근거의 **28%**가 문서
+        1~2페이지였다. 문서 선별이라는 그래프의 강점이 마지막 한 줄에서 버려졌다.
+
+        여기서는 같은 질의 벡터로 문서 안을 다시 검색한다. 질의 임베딩은 호출자가
+        **한 번만** 계산해 재사용하므로 문서 수만큼 임베딩이 늘지는 않는다.
+        """
+        if not doc_id:
+            return []
+        if top_k <= 0:
+            return []
+        try:
+            escaped = doc_id.replace("'", "''")
+            q = (
+                self._tbl.search(query_vec.tolist(), vector_column_name="vector")
+                .metric("cosine")
+                .where(f"doc_id = '{escaped}'")
+                .limit(top_k)
+            )
+            if self._has_vector_index:
+                q = q.nprobes(self._NPROBES).refine_factor(self._REFINE_FACTOR)
+            rows: list[dict[str, Any]] = q.to_list()
+        except Exception as exc:
+            # 실패해도 그래프 검색 전체를 죽이지 않는다 — 호출자가 폴백한다.
+            logger.warning("search_in_doc 실패 (doc_id=%s): %s", doc_id, exc)
+            return []
+        return [_row_to_search_hit(row) for row in rows]
+
     def search_text(
         self,
         query: str,
