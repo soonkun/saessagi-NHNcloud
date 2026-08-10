@@ -26,7 +26,7 @@ export const CHAT_TABS: ChatTabDef[] = [
   { id: "chat", petLabel: "새 대화", desktopLabel: "새 대화", Icon: SquarePen },
   { id: "calendar", petLabel: "일정표", desktopLabel: "일정표", Icon: Calendar },
   { id: "notes", petLabel: "노트", desktopLabel: "업무 노트", Icon: BookOpen },
-  { id: "documents", petLabel: "문서", desktopLabel: "문서", Icon: FolderOpen },
+  { id: "documents", petLabel: "문서 관리", desktopLabel: "문서 관리", Icon: FolderOpen },
   { id: "graph", petLabel: "그래프", desktopLabel: "지식그래프", Icon: Network },
   { id: "research", petLabel: "리서치", desktopLabel: "딥 리서치", Icon: Telescope },
   { id: "meeting", petLabel: "회의록", desktopLabel: "회의록", Icon: FileAudio },

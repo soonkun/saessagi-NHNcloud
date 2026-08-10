@@ -95,3 +95,47 @@ def test_uncited_documents_are_appended() -> None:
     assert f"[[doc:{other}]]" in out, "인용 안 된 자료가 사라졌다"
     assert out.index(_DOC) < out.index(other), "본문 인용이 앞, 보탠 것이 뒤여야 한다"
     assert kept == 2
+
+
+# ── 재진입 (E-106) ────────────────────────────────────────────────────────────
+
+_BRACKET_DOC = "[이암허브]농식품R&BD기획지원사업 최종보고서.pdf_e3072e8b"
+
+
+def test_bracketed_filename_marker_is_matched() -> None:
+    """파일명에 대괄호가 있어도 마커로 인식한다 (E-106).
+
+    `[^\\[\\]]`로 두면 `[이암허브]`에서 매치가 끊겨 마커가 화면에 날것으로 남았다.
+    """
+    out, kept = _resolve_inline_markers(
+        f"본문. [[doc:{_BRACKET_DOC}]]", [f"[[doc:{_BRACKET_DOC}]]"]
+    )
+    assert kept == 1
+    assert "이암허브" in out and out.count("[[doc:") == 1
+
+
+def test_bracketed_marker_stripped_from_tts() -> None:
+    """음성 낭독본에는 남으면 안 된다 — 파일명을 읽어 버린다."""
+    clean = _strip_llm_markers(f"본문. [[doc:{_BRACKET_DOC}]]")
+    assert "이암허브" not in clean and "[[" not in clean
+
+
+def test_emotion_tags_removed_from_memory() -> None:
+    """감정 태그는 화면·LLM 메모리 어디에도 남으면 안 된다 (E-106).
+
+    실측: `[study] 자료를 찾아볼게요![neutral] 갈색거저리는…` 이 그대로 저장돼
+    재진입 시 사용자 화면에 떴고 LLM 자기 발화에도 들어갔다.
+    """
+    from agent.upstream_adapter import _clean_for_memory
+
+    out = _clean_for_memory("[study] 자료를 찾아볼게요![neutral] 갈색거저리는 고단백입니다.")
+    assert "[study]" not in out and "[neutral]" not in out
+    assert "갈색거저리는 고단백입니다." in out
+
+
+def test_clean_for_memory_keeps_ordinary_brackets() -> None:
+    """감정 태그가 아닌 대괄호 표현은 지우지 않는다 — 본문이 훼손된다."""
+    from agent.upstream_adapter import _clean_for_memory
+
+    text = "보고서[별지 제19호]에 따르면 수치는 48.26g입니다."
+    assert _clean_for_memory(text) == text

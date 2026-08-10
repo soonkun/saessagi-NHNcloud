@@ -389,19 +389,29 @@ export async function clearGraph(confirm: string): Promise<{ ok: boolean; before
 }
 
 // CR-31: 그래프 문서(과제) 검색 — 제목·키워드 신호로 문서만 찾는다
+/**
+ * 과제 검색 결과 한 건.
+ *
+ * **CR-61에서 백엔드가 M_23으로 교체되며 필드가 바뀌었다** (E-107). 프론트는 옛
+ * 필드(`title_match`·`matched_keywords`)를 계속 읽어서, 검색만 하면
+ * `undefined.length`로 화면이 하얘졌다. 지금 백엔드가 주는 것만 선언한다.
+ * `score`가 2.0이면 제목 일치, 1.0이면 엔티티 경유다.
+ */
 export interface GraphDocMatch {
   doc_id: string;
   title: string;
-  project_no: string;
-  title_match: boolean;
-  matched_keywords: string[];
+  doc_name?: string;
+  year?: number | null;
+  document_type?: string;
+  score?: number;
 }
 
 export async function searchGraphDocs(q: string, limit = 12): Promise<GraphDocMatch[]> {
-  const data = await apiFetch<{ docs: GraphDocMatch[] }>(
+  const data = await apiFetch<{ docs?: GraphDocMatch[] }>(
     `/api/graphrag/search-docs?q=${encodeURIComponent(q)}&limit=${limit}`
   );
-  return data.docs;
+  // 응답 형태가 바뀌어도 화면이 하얘지지 않게 한다 (E-107). 배열이 아니면 빈 목록.
+  return Array.isArray(data.docs) ? data.docs : [];
 }
 
 
@@ -776,6 +786,8 @@ export interface ResearchTurn {
   content: string;
   sources: { n: number; doc_id: string; doc_name: string; page?: number | null; score?: number }[];
   attachments: string[];
+  /** 그때의 진행 과정 로그 (CR-65). 옛 턴에는 없어 빈 배열. */
+  steps?: string[];
   created_at: string;
 }
 
@@ -858,4 +870,57 @@ export async function clearResearchTurns(projectId: string): Promise<void> {
   await apiFetch<unknown>(`${DR}/projects/${encodeURIComponent(projectId)}/turns`, {
     method: "DELETE",
   });
+}
+
+/**
+ * 보고서를 PDF로 내려받는다 (CR-67).
+ *
+ * 예전에는 브라우저 인쇄로 만들었는데 iOS Safari가 숨은 iframe이 아니라 **화면 전체**를
+ * 인쇄해 앱 UI가 찍혔다. 서버가 보고서 본문만으로 PDF를 만들어 파일로 준다.
+ */
+export async function downloadReportPdf(
+  title: string,
+  markdown: string,
+  meta: string,
+  filename: string,
+  kicker = ""
+): Promise<void> {
+  const res = await fetch(API_BASE + `${DR}/pdf`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, markdown, meta, kicker }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(err.detail ?? "PDF를 만들지 못했습니다.");
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".pdf") ? filename : `${filename}.pdf`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // 곧바로 취소하면 내려받기가 끊기는 브라우저가 있다.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** 지침 버전 하나 삭제 (CR-71). 마지막 한 개는 서버가 거부한다. */
+export async function deleteInstructionVersion(
+  projectId: string,
+  versionNo: number
+): Promise<void> {
+  await apiFetch<unknown>(
+    `${DR}/projects/${encodeURIComponent(projectId)}/instructions/${versionNo}`,
+    { method: "DELETE" }
+  );
+}
+
+/** 리서치 한 건(질문+보고서)만 삭제 (CR-66). */
+export async function deleteResearchRun(projectId: string, turnId: string): Promise<void> {
+  await apiFetch<unknown>(
+    `${DR}/projects/${encodeURIComponent(projectId)}/turns/${encodeURIComponent(turnId)}`,
+    { method: "DELETE" }
+  );
 }

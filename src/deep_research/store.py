@@ -8,9 +8,11 @@
 WAL, dataclass ↔ row 변환, 멱등 스키마. 이미 이 프로젝트에서 검증된 방식이고 새 의존성이
 없다(sqlite3는 calendar.db·kg_candidates.db가 이미 쓴다).
 
-**지침 이력은 append-only다.** 저장도 새 버전, 되돌리기도 새 버전. 이력을 덮어쓰거나
-지우는 경로는 두지 않는다 — 되돌리기가 있는 이유가 "실수로 날린 지침을 되찾는 것"인데
-되돌리기 자체가 이력을 지우면 앞뒤가 안 맞는다.
+**지침 이력은 쌓인다. 다만 복원은 포인터만 옮긴다 (CR-71).**
+저장하면 새 버전이 쌓이고, 복원은 `projects.current_version_no`가 그 버전을 가리키게만
+한다. 예전에는 복원도 새 버전을 만들어서 v2로 되돌리면 v4가 생겼고, 이력이 계속 부풀어
+어디로 돌아갈지 찾기 어려웠다(사용자 지적).
+버전 삭제도 있다 — 마지막 한 개는 남긴다(지침 0개인 방은 성립하지 않는다).
 """
 
 from __future__ import annotations
@@ -56,6 +58,9 @@ CREATE TABLE IF NOT EXISTS projects (
     gap_rounds      INTEGER NOT NULL DEFAULT 1,
     max_evidence_chunks INTEGER NOT NULL DEFAULT 24,
     is_seed         INTEGER NOT NULL DEFAULT 0,
+    -- 현재 쓰는 지침 버전 (CR-71). 0이면 "가장 높은 번호"로 해석한다.
+    -- 복원이 새 버전을 쌓지 않고 이 포인터만 옮긴다.
+    current_version_no INTEGER NOT NULL DEFAULT 0,
     sort_order      INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
@@ -80,6 +85,8 @@ CREATE TABLE IF NOT EXISTS turns (
     content         TEXT NOT NULL DEFAULT '',
     sources_json    TEXT NOT NULL DEFAULT '[]',
     attachments_json TEXT NOT NULL DEFAULT '[]',
+    -- 진행 과정 로그 (CR-65). 예전에는 브라우저 메모리에만 있어 방을 나가면 사라졌다.
+    steps_json      TEXT NOT NULL DEFAULT '[]',
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_turns_project ON turns(project_id, created_at);
@@ -155,6 +162,7 @@ class Turn:
     content: str = ""
     sources: list[dict[str, Any]] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)
+    steps: list[str] = field(default_factory=list)
     created_at: str = ""
 
     def as_dict(self) -> dict[str, Any]:
@@ -164,6 +172,7 @@ class Turn:
             "content": self.content,
             "sources": self.sources,
             "attachments": self.attachments,
+            "steps": self.steps,
             "created_at": self.created_at,
         }
 
@@ -217,6 +226,20 @@ class ResearchProjectStore:
             "INSERT OR IGNORE INTO meta(key, value) VALUES('schema_version', ?)",
             (str(_SCHEMA_VERSION),),
         )
+        # 이미 만들어진 DB에 컬럼을 더한다. `CREATE TABLE IF NOT EXISTS`는 기존 표를
+        # 건드리지 않으므로, 스키마에 필드를 추가해도 옛 파일에는 반영되지 않는다.
+        # 지난 리서치의 진행 과정을 다시 보려면 이 값이 있어야 한다 (CR-65).
+        have_p = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
+        if "current_version_no" not in have_p:
+            conn.execute(
+                "ALTER TABLE projects ADD COLUMN current_version_no INTEGER NOT NULL DEFAULT 0"
+            )
+            logger.info("deep_research: projects.current_version_no 컬럼 추가 (지침 버전 포인터)")
+
+        have = {r[1] for r in conn.execute("PRAGMA table_info(turns)")}
+        if "steps_json" not in have:
+            conn.execute("ALTER TABLE turns ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]'")
+            logger.info("deep_research: turns.steps_json 컬럼 추가 (진행 과정 보관)")
         conn.commit()
 
     def close(self) -> None:
@@ -240,11 +263,15 @@ class ResearchProjectStore:
         return self._hydrate(_row_to_project(row)) if row else None
 
     def _hydrate(self, project: ResearchProject) -> ResearchProject:
-        """최신 지침 버전을 얹는다. 지침은 별도 표라 방 조회만으로는 비어 있다."""
-        latest = self.latest_version(project.project_id)
-        if latest is not None:
-            project.instructions = latest.content
-            project.version_no = latest.version_no
+        """**지금 쓰는** 지침 버전을 얹는다 (CR-71).
+
+        예전에는 늘 최신(가장 높은 번호)이었다. 복원이 포인터를 옮기는 방식으로 바뀌어,
+        v2로 되돌리면 v3·v4가 이력에 남아 있어도 이 방은 v2를 쓴다.
+        """
+        cur = self.current_version(project.project_id)
+        if cur is not None:
+            project.instructions = cur.content
+            project.version_no = cur.version_no
         return project
 
     def create_project(
@@ -364,6 +391,30 @@ class ResearchProjectStore:
         ).fetchone()
         return _row_to_version(row) if row else None
 
+    def current_version(self, project_id: str) -> InstructionVersion | None:
+        """지금 쓰는 버전 (CR-71).
+
+        포인터(`projects.current_version_no`)가 가리키는 버전. 0이거나 그 버전이
+        지워졌으면 가장 높은 번호로 떨어진다.
+        """
+        row = self._conn.execute(
+            "SELECT current_version_no FROM projects WHERE project_id=?", (project_id,)
+        ).fetchone()
+        want = int(row["current_version_no"]) if row else 0
+        if want:
+            got = self.get_version(project_id, want)
+            if got is not None:
+                return got
+        return self.latest_version(project_id)
+
+    def _set_current(self, project_id: str, version_no: int) -> None:
+        with self._tx() as conn:
+            conn.execute(
+                "UPDATE projects SET current_version_no=?, updated_at=datetime('now')"
+                " WHERE project_id=?",
+                (int(version_no), project_id),
+            )
+
     def list_versions(self, project_id: str, limit: int = 50) -> list[InstructionVersion]:
         rows = self._conn.execute(
             "SELECT * FROM instruction_versions WHERE project_id=?"
@@ -390,6 +441,8 @@ class ResearchProjectStore:
         content = content or ""
         latest = self.latest_version(project_id)
         if latest is not None and latest.content == content:
+            # 같은 내용이면 새로 쌓지 않되, 포인터는 그 버전으로 맞춘다 (CR-71).
+            self._set_current(project_id, latest.version_no)
             return latest
         next_no = (latest.version_no if latest else 0) + 1
         version = InstructionVersion(
@@ -405,22 +458,64 @@ class ResearchProjectStore:
                 " content, note) VALUES(?,?,?,?,?)",
                 (version.version_id, project_id, next_no, content, note),
             )
+            # 저장하면 **그 버전을 쓴다** (CR-71). 포인터를 안 옮기면, v2를 쓰는 중에
+            # 편집·저장했을 때 새 버전이 쌓이기만 하고 방은 계속 v2를 써서
+            # "저장했는데 안 바뀐다"가 된다.
             conn.execute(
-                "UPDATE projects SET updated_at=datetime('now') WHERE project_id=?",
-                (project_id,),
+                "UPDATE projects SET current_version_no=?, updated_at=datetime('now')"
+                " WHERE project_id=?",
+                (next_no, project_id),
             )
         logger.info("딥 리서치 지침 저장: %s v%d (%d자)", project_id, next_no, len(content))
         return version
 
     def restore_version(self, project_id: str, version_no: int) -> InstructionVersion | None:
-        """옛 버전 내용을 **새 버전으로 복원한다.**
+        """그 버전을 **지금 쓰는 버전으로 삼는다** (CR-71).
 
-        되돌리기가 이력을 자르지 않는다 — 복원 자체도 되돌릴 수 있어야 한다.
+        예전에는 복원이 내용을 복사해 **새 버전을 쌓았다.** v2로 되돌리면 v4가 생겨
+        이력이 계속 부풀었고("복원만 해도 v4가 생겨버림"), 어디로 돌아갈지 찾기
+        어려워졌다. 이제 포인터만 옮긴다 — 이력은 그대로 남고 번호도 늘지 않는다.
+
+        같은 버전으로 복원하는 것도 허용한다. 편집 중인 내용을 버리고 저장된 상태로
+        되돌리는 유일한 경로이기 때문이다 — 예전에는 현재 버전의 복원 버튼을 숨겨
+        **v1만 있는 방에서는 되돌릴 방법이 아예 없었다.**
         """
         target = self.get_version(project_id, version_no)
         if target is None:
             return None
-        return self.save_instructions(project_id, target.content, note=f"v{version_no} 복원")
+        self._set_current(project_id, version_no)
+        return target
+
+    def delete_version(self, project_id: str, version_no: int) -> bool:
+        """지침 버전 하나를 지운다 (CR-71).
+
+        마지막 한 개는 남긴다 — 지침이 0개인 방은 성립하지 않는다.
+        지금 쓰는 버전을 지우면 남은 것 중 가장 높은 번호로 옮긴다.
+        """
+        rows = list(
+            self._conn.execute(
+                "SELECT version_no FROM instruction_versions WHERE project_id=?"
+                " ORDER BY version_no",
+                (project_id,),
+            )
+        )
+        if len(rows) <= 1:
+            return False
+        if not any(int(r["version_no"]) == version_no for r in rows):
+            return False
+        with self._tx() as conn:
+            conn.execute(
+                "DELETE FROM instruction_versions WHERE project_id=? AND version_no=?",
+                (project_id, version_no),
+            )
+        cur = self._conn.execute(
+            "SELECT current_version_no FROM projects WHERE project_id=?", (project_id,)
+        ).fetchone()
+        if cur and int(cur["current_version_no"]) == version_no:
+            left = self.latest_version(project_id)
+            self._set_current(project_id, left.version_no if left else 0)
+        logger.info("지침 버전 삭제: 방=%s v%d", project_id, version_no)
+        return True
 
     # ── 대화 ──────────────────────────────────────────────────────────────────
 
@@ -431,6 +526,7 @@ class ResearchProjectStore:
         content: str,
         sources: list[dict[str, Any]] | None = None,
         attachments: list[str] | None = None,
+        steps: list[str] | None = None,
     ) -> Turn:
         turn = Turn(
             turn_id=_new_id("t"),
@@ -439,11 +535,12 @@ class ResearchProjectStore:
             content=content,
             sources=sources or [],
             attachments=attachments or [],
+            steps=steps or [],
         )
         with self._tx() as conn:
             conn.execute(
                 "INSERT INTO turns(turn_id, project_id, role, content, sources_json,"
-                " attachments_json) VALUES(?,?,?,?,?,?)",
+                " attachments_json, steps_json) VALUES(?,?,?,?,?,?,?)",
                 (
                     turn.turn_id,
                     project_id,
@@ -451,6 +548,7 @@ class ResearchProjectStore:
                     content,
                     json.dumps(turn.sources, ensure_ascii=False),
                     json.dumps(turn.attachments, ensure_ascii=False),
+                    json.dumps(turn.steps, ensure_ascii=False),
                 ),
             )
         return turn
@@ -461,6 +559,34 @@ class ResearchProjectStore:
             (project_id, limit),
         ).fetchall()
         return [_row_to_turn(r) for r in rows]
+
+    def delete_run(self, project_id: str, turn_id: str) -> int:
+        """리서치 한 건(질문 + 보고서)을 지운다 (CR-66).
+
+        방 안의 대화는 `user`(질문) → `assistant`(보고서) 쌍으로 쌓인다. 사용자가 보는
+        단위는 **그 쌍**이므로 보고서만 지우면 질문이 유령으로 남는다. 어느 쪽 id를
+        받아도 짝을 찾아 함께 지운다.
+        """
+        rows = self._conn.execute(
+            "SELECT turn_id, role FROM turns WHERE project_id=? ORDER BY created_at, rowid",
+            (project_id,),
+        ).fetchall()
+        ids = [r["turn_id"] for r in rows]
+        if turn_id not in ids:
+            return 0
+        i = ids.index(turn_id)
+        targets = {turn_id}
+        if rows[i]["role"] == "assistant" and i > 0 and rows[i - 1]["role"] == "user":
+            targets.add(ids[i - 1])
+        elif rows[i]["role"] == "user" and i + 1 < len(rows) and rows[i + 1]["role"] == "assistant":
+            targets.add(ids[i + 1])
+        with self._tx() as conn:
+            cur = conn.execute(
+                f"DELETE FROM turns WHERE turn_id IN ({','.join('?' * len(targets))})",
+                tuple(targets),
+            )
+        logger.info("딥 리서치 기록 삭제: 방=%s 턴 %d건", project_id, cur.rowcount or 0)
+        return cur.rowcount or 0
 
     def clear_turns(self, project_id: str) -> int:
         with self._tx() as conn:
@@ -540,6 +666,8 @@ def _row_to_turn(row: sqlite3.Row) -> Turn:
         content=row["content"],
         sources=json.loads(row["sources_json"] or "[]"),
         attachments=json.loads(row["attachments_json"] or "[]"),
+        # 컬럼 추가 전에 만들어진 행에는 없다 — 없으면 빈 목록 (CR-65).
+        steps=json.loads((row["steps_json"] if "steps_json" in row.keys() else "") or "[]"),
         created_at=row["created_at"],
     )
 

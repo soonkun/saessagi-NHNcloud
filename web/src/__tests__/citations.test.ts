@@ -96,6 +96,21 @@ describe("shortenTitle", () => {
   });
 });
 
+describe("대괄호가 든 파일명 (E-106)", () => {
+  const BR = "[이암허브]농식품R&BD기획지원사업 최종보고서.pdf_e3072e8b";
+
+  it("마커로 인식하고 칩 링크를 만든다", () => {
+    expect(docIdsInText(`본문 [[doc:${BR}]]`)).toEqual([BR]);
+    expect(markersToLinks(`본문 [[doc:${BR}]]`, [BR])).toContain("[근거](saessagi-doc:0)");
+  });
+
+  it("섹션 묶기에서도 본문에 날것으로 남지 않는다", () => {
+    const out = groupMarkersByBlock(`1. 제목\n내용 [[doc:${BR}]]\n2. 다음`);
+    expect(out.split("\n").find((l) => l.startsWith("내용"))).not.toContain("이암허브");
+    expect(out).toContain(`[[doc:${BR}]]`);
+  });
+});
+
 describe("docIdsInText", () => {
   it("중복 없이 등장 순서대로 모은다", () => {
     expect(docIdsInText("[[doc:A]] x [[doc:B]] y [[doc:A]]")).toEqual(["A", "B"]);

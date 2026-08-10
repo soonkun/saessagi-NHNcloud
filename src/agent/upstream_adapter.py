@@ -148,7 +148,9 @@ def _marker_for_hit(h: dict[str, Any]) -> str | None:
 
 # LLM이 직접 만든 (정상이든 깨졌든) doc/note 마커. doc_id에는 공백·괄호·점이
 # 들어가므로 LLM이 정확히 복사하지 못해 `[[doc:xxx]`처럼 깨지기 쉽다.
-_LLM_MARKER_RE = re.compile(r"\[\[(?:doc|note):[^\[\]]*\]{0,2}")
+# `[^\[\]]`로 두면 **파일명 속 대괄호**(`[이암허브]농식품…pdf`)에서 매치가 끊겨
+# 마커가 화면에 날것으로 남는다 (E-106). 최소 매칭 + 닫는 `]]` 우선으로 바꾼다.
+_LLM_MARKER_RE = re.compile(r"\[\[(?:doc|note):.+?\]\]|\[\[(?:doc|note):[^\n]*", re.S)
 
 # **접두사를 빼먹은 마커** (E-103). 실측 저장 이력에서 이중괄호 16건 중 11건이
 # `[[TRKO2025…pdf_afbc4f63]]`처럼 `doc:` 없이 doc_id만 들어 있었다. 위 정규식이
@@ -180,6 +182,24 @@ def _strip_llm_markers(text: str) -> str:
     cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
     cleaned = re.sub(r" +\n", "\n", cleaned)
     return cleaned.strip()
+
+
+# 화면용 감정 태그 — 아바타 표정을 정하는 신호이지 대화 내용이 아니다.
+_EMOTION_TAG_RE = re.compile(r"\[(?:neutral|study|joy|sad|anger|surprise|think\w*)\]", re.I)
+
+
+def _clean_for_memory(text: str) -> str:
+    """저장된 본문에서 화면 표시용 표기를 걷어낸다 (E-106).
+
+    `[study] 자료를 찾아볼게요![neutral] 갈색거저리는…` 처럼 감정 태그가 본문에 섞여
+    저장된다. 사용자 화면에도 그대로 뜨고(스트리밍 때는 프론트가 떼지만 복원 때는
+    안 뗀다), LLM 메모리에도 들어가 자기 과거 발화가 지저분해진다.
+    """
+    out = _EMOTION_TAG_RE.sub("", text or "")
+    out = _LLM_MARKER_RE.sub("", out)
+    out = _BARE_MARKER_RE.sub("", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out.strip()
 
 
 def _marker_id(marker: str) -> str:
@@ -1100,8 +1120,51 @@ def _make_adapter_class() -> type:
                 self._agent._inner.handle_interrupt(heard_response)
 
         def set_memory_from_history(self, conf_uid: str, history_uid: str) -> None:
-            """동기 인터페이스 요구. upstream BasicMemoryAgent에 직접 위임."""
-            self._agent._inner.set_memory_from_history(conf_uid, history_uid)
+            """대화방을 다시 열 때 — LLM 메모리 + **후속 판단 문맥**을 함께 되살린다.
+
+            예전에는 upstream에 위임만 했다. 그러면 두 가지가 깨진다 (E-106).
+
+            1. **`_last_exchange`가 비어 있다.** 후속 질문 판정(`looks_like_followup` →
+               `followup_decision`)이 이 값에 의존한다. 비어 있으면 "식품 제조방법을 표로
+               정리해줘" 같은 이어지는 요청이 **새 검색**으로 처리돼, 앞서 이야기하던
+               갈색거저리와 무관한 문서(소스·드레싱·한과…)가 딸려 오고 답이 딴 데로 샌다.
+               사용자 지적: "나갔다가 다시 들어오면 이어지지가 않아."
+            2. **저장된 본문에 화면용 찌꺼기가 섞여 있다.** `[study]`·`[neutral]` 감정
+               태그와 `[[doc:…]]` 마커가 그대로 LLM 메모리에 들어간다. 자기 과거 발화가
+               지저분해지고 토큰도 낭비된다.
+            """
+            inner = self._agent._inner
+            inner.set_memory_from_history(conf_uid, history_uid)
+
+            # (2) 메모리 정리 — 화면 표시용 표기를 걷어낸다.
+            try:
+                for m in getattr(inner, "_memory", []) or []:
+                    c = m.get("content")
+                    if isinstance(c, str) and c:
+                        m["content"] = _clean_for_memory(c)
+            except Exception as exc:  # pragma: no cover — 메모리 형태가 바뀐 경우
+                logger.warning("history 메모리 정리 실패 (무시): %r", exc)
+
+            # (1) 마지막 사용자/새싹이 한 쌍으로 후속 문맥 복원.
+            try:
+                mem = [m for m in (getattr(inner, "_memory", []) or []) if m.get("content")]
+                last_user = next(
+                    (m["content"] for m in reversed(mem) if m.get("role") == "user"), ""
+                )
+                last_ai = next(
+                    (m["content"] for m in reversed(mem) if m.get("role") == "assistant"), ""
+                )
+                if last_user or last_ai:
+                    self._last_exchange = f"사용자: {last_user[:400]}\n새싹이: {last_ai[:400]}"
+                    logger.info(
+                        "대화 복원: 메시지 %d건 · 후속 문맥 복원됨 (직전 질문=%r)",
+                        len(mem),
+                        last_user[:40],
+                    )
+                else:
+                    self._last_exchange = None
+            except Exception as exc:  # pragma: no cover
+                logger.warning("후속 문맥 복원 실패 (무시): %r", exc)
 
         async def close(self) -> None:
             """GemmaChatAgent 내부 httpx 클라이언트 종료 (누수 방지)."""

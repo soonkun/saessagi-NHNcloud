@@ -3,7 +3,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
@@ -213,7 +213,20 @@ class ToolRouter:
             start_dt = start_dt.replace(tzinfo=_KST)
 
         title: str = args["title"]
-        duration_minutes: int = args["duration_minutes"]
+        # CR-70: 종료 시각 우선. 없으면 길이(분), 그것도 없으면 60분.
+        end_str = args.get("end")
+        if end_str:
+            end_dt = datetime.fromisoformat(str(end_str))
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=_KST)
+            duration_minutes = int((end_dt - start_dt).total_seconds() // 60)
+            if duration_minutes <= 0:
+                return ToolResult(
+                    ok=False,
+                    error="종료 시각이 시작 시각보다 뒤여야 합니다.",
+                )
+        else:
+            duration_minutes = int(args.get("duration_minutes") or 60)
         description: str | None = args.get("description")
 
         event = await asyncio.get_running_loop().run_in_executor(
@@ -231,6 +244,7 @@ class ToolRouter:
             "title": event.title,
             "start": start_val,
             "duration_minutes": event.duration_minutes,
+            "end": (start_dt + timedelta(minutes=duration_minutes)).isoformat(),
             "description": getattr(event, "description", None),
         }
         logger.info("add_event 성공: id=%s, title=%r", event.id, event.title)

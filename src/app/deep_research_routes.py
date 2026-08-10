@@ -12,7 +12,8 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -122,13 +123,24 @@ async def run_deep_research_stream(
                 prompt,
                 attachments=[attachment_name] if attachment_name else [],
             )
+            # CR-65: 진행 과정을 모아 보고서와 함께 저장한다. 예전에는 브라우저 메모리에만
+            # 있어 방을 나가거나 새로고침하면 사라졌다 — 어떤 질의로 무엇을 몇 건 찾았는지
+            # 나중에 되짚을 수 없었다. 사용자 요청: "지난 리서치 과정도 다시 볼 수 있게."
+            steps: list[str] = []
             async for event in service.run(profile, prompt, attachment_text, scope_doc_ids=scope):
-                if event.get("stage") == "done":
+                stage = event.get("stage")
+                msg = event.get("message")
+                if msg and stage not in ("done", "error"):
+                    # 상한을 둔다 — 한 턴의 로그가 DB 행을 무한히 키우면 안 된다.
+                    if len(steps) < 300:
+                        steps.append(str(msg))
+                if stage == "done":
                     store.add_turn(
                         project.project_id,
                         "assistant",
                         str(event.get("report") or ""),
                         sources=list(event.get("sources") or []),
+                        steps=steps,
                     )
                 yield _sse(event)
         except Exception as exc:  # 파이프라인 밖 예외 — SSE로 전달 (연결 하드 종료 방지)
@@ -310,3 +322,74 @@ async def clear_turns(project_id: str, request: Request) -> dict[str, Any]:
     store = _store(request)
     _require(store, project_id)
     return {"cleared": store.clear_turns(project_id)}
+
+
+@router.delete("/api/deep-research/projects/{project_id}/turns/{turn_id}")
+async def delete_run(project_id: str, turn_id: str, request: Request) -> dict[str, Any]:
+    """리서치 한 건(질문+보고서)만 지운다 (CR-66).
+
+    방 전체 비우기(`clear_turns`)만 있어서, 한 건이 잘못됐을 때 나머지까지 날려야 했다.
+    """
+    store = _store(request)
+    _require(store, project_id)
+    deleted = store.delete_run(project_id, turn_id)
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="해당 기록을 찾을 수 없습니다.")
+    return {"deleted": deleted}
+
+
+# ── CR-67: 보고서 PDF 내려받기 ────────────────────────────────────────────────
+
+
+class PdfReq(BaseModel):
+    title: str = ""
+    markdown: str = ""
+    meta: str = ""
+    # 제목 위 작은 분류줄 (예: "과제 중복성 및 개선방향 검토"). CR-68 머리 영역.
+    kicker: str = ""
+
+
+@router.post("/api/deep-research/pdf")
+async def report_pdf(body: PdfReq) -> Response:
+    """보고서를 PDF **파일로** 돌려준다.
+
+    예전에는 브라우저 인쇄(숨은 iframe + `window.print()`)로 만들었는데, iOS Safari가
+    iframe이 아니라 **화면 전체**를 인쇄해 앱 UI가 1페이지로 찍혔다. 인쇄 대화상자를
+    띄우는 것 자체도 요구와 달랐다 — 원하는 것은 내려받기다.
+    """
+    from deep_research.pdf import PdfUnavailable, report_to_pdf
+
+    if not (body.markdown or "").strip():
+        raise HTTPException(status_code=422, detail="내용이 비어 있습니다.")
+    try:
+        data = await run_in_threadpool(
+            report_to_pdf, body.title, body.markdown, body.meta, body.kicker
+        )
+    except PdfUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("보고서 PDF 생성 실패: %r", exc)
+        raise HTTPException(status_code=500, detail=f"PDF 생성 실패: {exc}") from exc
+
+    # 파일명은 프론트가 Content-Disposition 대신 자기 쪽에서 정한다(한글 파일명 인코딩
+    # 문제를 피한다). 여기서는 본문만 정확히 내려준다.
+    return Response(content=data, media_type="application/pdf")
+
+
+@router.delete("/api/deep-research/projects/{project_id}/instructions/{version_no}")
+async def delete_instruction_version(
+    project_id: str, version_no: int, request: Request
+) -> dict[str, Any]:
+    """지침 버전 하나를 지운다 (CR-71).
+
+    예전에는 지우는 경로가 없어, 시험하다 만든 버전이 이력에 영구히 남았다.
+    마지막 한 개는 남긴다 — 지침이 0개인 방은 성립하지 않는다.
+    """
+    store = _store(request)
+    project = _require(store, project_id)
+    if not store.delete_version(project.project_id, version_no):
+        raise HTTPException(
+            status_code=409,
+            detail="마지막 버전은 지울 수 없습니다. 없는 버전이거나 하나만 남았습니다.",
+        )
+    return {"deleted": version_no, "project": store.get_project(project_id).as_dict()}

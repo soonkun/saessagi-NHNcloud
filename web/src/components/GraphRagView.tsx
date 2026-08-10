@@ -16,6 +16,7 @@ import {
   searchGraphDocs,
   type GraphDocMatch,
 } from "../services/api";
+import { AdminGate } from "./AdminGate";
 import { useStore } from "../store";
 import { KgExtractionPanel } from "./KgExtractionPanel";
 
@@ -182,11 +183,21 @@ export default function GraphRagView(): React.ReactElement {
   const didFitRef = useRef(false);
 
   const isDark = theme === "dark";
+  const [loading, setLoading] = useState(false);
+  const [slow, setSlow] = useState(false);      // 오래 걸리는 중임을 알린다
+  const [loadedMs, setLoadedMs] = useState(0);  // 한 번이라도 받았는지 판단
   const accent = readCssVar("--color-accent") || "#c96442";
   const bg = isDark ? "#16181c" : "#fafbfd";
 
   // ── 데이터 로드 ────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
+    // 로딩 상태를 따로 둔다 (CR-69). 예전에는 이게 없어서 데이터가 도착하기 전에는
+    // 무조건 "아직 그래프가 비어 있습니다"가 떴다 — 37만 노드를 받아오는 데 몇 초가
+    // 걸리는데, 사용자에게는 **그래프가 없는 것처럼** 보였다.
+    setLoading(true);
+    setSlow(false);
+    const started = Date.now();
+    const slowTimer = window.setTimeout(() => setSlow(true), 6000);
     try {
       setError("");
       const [g, s] = await Promise.all([
@@ -195,8 +206,13 @@ export default function GraphRagView(): React.ReactElement {
       ]);
       setData(g);
       setStatus(s);
+      setLoadedMs(Date.now() - started);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      window.clearTimeout(slowTimer);
+      setLoading(false);
+      setSlow(false);
     }
   }, [typeFilter]);
 
@@ -733,13 +749,17 @@ export default function GraphRagView(): React.ReactElement {
                       <span style={{ fontWeight: 600, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {d.title}
                       </span>
-                      {d.title_match && (
+                      {(d.score ?? 0) >= 2 && (
                         <span style={{ fontSize: "var(--fs-10)", color: "var(--color-accent)", flexShrink: 0 }}>제목</span>
                       )}
                     </span>
-                    {d.matched_keywords.length > 0 && (
+                    {/* E-107: 옛 응답의 `matched_keywords`는 M_23 교체로 사라졌다.
+                        지금은 연도·문서종류로 어느 자료인지 알려 준다. */}
+                    {(d.year || d.doc_name) && (
                       <span style={{ color: "var(--color-text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", width: "100%", paddingLeft: 14 }}>
-                        키워드: {d.matched_keywords.join(", ")}
+                        {d.year ? `${d.year}년` : ""}
+                        {d.year && d.doc_name ? " · " : ""}
+                        {d.doc_name ?? ""}
                       </span>
                     )}
                   </button>
@@ -844,51 +864,55 @@ export default function GraphRagView(): React.ReactElement {
           overflowY: "auto",
         }}
       >
-        <KgExtractionPanel isDark={isDark} onSummaryChange={setAdminSummary} />
+        {/* CR-69: 관리 기능 2차 잠금. 통과하면 그대로 마운트된 채 남아 추출
+            진행률 폴링이 끊기지 않는다. */}
+        <AdminGate label="지식그래프 관리">
+          <KgExtractionPanel isDark={isDark} onSummaryChange={setAdminSummary} />
 
-        {/* 위험 작업 — 파괴적이라 관리 패널 안쪽 맨 아래에 따로 둔다. */}
-        <div
-          style={{
-            marginTop: 10,
-            paddingTop: 10,
-            borderTop: "1px solid var(--color-border)",
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            flexWrap: "wrap",
-          }}
-        >
-          <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
-            위험 작업
-          </span>
-          <button
-            onClick={() => {
-              setClearConfirmText("");
-              setClearModalOpen(true);
-            }}
-            disabled={notConnected || clearing}
-            title="그래프 전체 초기화 (확인 문구 입력 필요)"
+          {/* 위험 작업 — 파괴적이라 관리 패널 안쪽 맨 아래에 따로 둔다. */}
+          <div
             style={{
-              display: "inline-flex",
+              marginTop: 10,
+              paddingTop: 10,
+              borderTop: "1px solid var(--color-border)",
+              display: "flex",
               alignItems: "center",
-              gap: 4,
-              fontSize: "var(--fs-11)",
-              padding: "3px 8px",
-              borderRadius: 6,
-              border: "1px solid #c0392b",
-              background: "transparent",
-              color: "#c0392b",
-              cursor: notConnected || clearing ? "not-allowed" : "pointer",
-              fontFamily: "inherit",
-              opacity: notConnected || clearing ? 0.5 : 1,
+              gap: 8,
+              flexWrap: "wrap",
             }}
           >
-            그래프 초기화
-          </button>
-          <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
-            Neo4j만 비웁니다 — 추출 후보는 보존되고 2단계로 다시 만들 수 있습니다
-          </span>
-        </div>
+            <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+              위험 작업
+            </span>
+            <button
+              onClick={() => {
+                setClearConfirmText("");
+                setClearModalOpen(true);
+              }}
+              disabled={notConnected || clearing}
+              title="그래프 전체 초기화 (확인 문구 입력 필요)"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                fontSize: "var(--fs-11)",
+                padding: "3px 8px",
+                borderRadius: 6,
+                border: "1px solid #c0392b",
+                background: "transparent",
+                color: "#c0392b",
+                cursor: notConnected || clearing ? "not-allowed" : "pointer",
+                fontFamily: "inherit",
+                opacity: notConnected || clearing ? 0.5 : 1,
+              }}
+            >
+              그래프 초기화
+            </button>
+            <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+              Neo4j만 비웁니다 — 추출 후보는 보존되고 2단계로 다시 만들 수 있습니다
+            </span>
+          </div>
+        </AdminGate>
       </div>
 
       {/* CR-26: 그래프 초기화 확인 모달 — 정확한 문구 입력 필요 (GitHub 저장소 삭제 방식) */}
@@ -1094,11 +1118,31 @@ export default function GraphRagView(): React.ReactElement {
           </CenterHint>
         ) : error ? (
           <CenterHint>그래프 로드 실패: {error}</CenterHint>
+        ) : loading ? (
+          <CenterHint>
+            그래프를 불러오는 중입니다…
+            {slow && (
+              <>
+                <br />
+                노드가 많아 시간이 걸립니다. 잠시만 기다려 주세요.
+              </>
+            )}
+          </CenterHint>
         ) : graphData.nodes.length === 0 ? (
           <CenterHint>
-            아직 그래프가 비어 있습니다.
-            <br />
-            문서를 업로드하거나 우상단 ‘재인덱싱’으로 기존 문서를 분석하세요.
+            {loadedMs > 0 ? (
+              <>
+                조건에 맞는 노드가 없습니다.
+                <br />
+                위 유형 필터를 해제하거나 검색어를 지워 보세요.
+              </>
+            ) : (
+              <>
+                아직 그래프가 비어 있습니다.
+                <br />
+                문서를 업로드하거나 관리 패널에서 엔티티 추출·그래프 구축을 실행하세요.
+              </>
+            )}
           </CenterHint>
         ) : (
           <ForceGraph2D

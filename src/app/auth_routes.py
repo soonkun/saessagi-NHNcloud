@@ -81,3 +81,33 @@ async def auth_status(request: Request) -> Response:
     """
     enabled = bool(getattr(request.app.state, "web_auth_enabled", False))
     return JSONResponse({"auth_enabled": enabled})
+
+
+# ── CR-69: 관리 기능 2차 잠금 ─────────────────────────────────────────────────
+
+
+class AdminUnlockReq(BaseModel):
+    password: str = ""
+
+
+@router.post("/api/auth/admin-unlock")
+async def admin_unlock(body: AdminUnlockReq, request: Request) -> JSONResponse:
+    """문서 관리·지식그래프 관리 진입 비밀번호 확인.
+
+    로그인은 "이 앱을 쓸 수 있는가"를 가르고, 이쪽은 "문서를 지우거나 그래프를 다시
+    만들 수 있는가"를 가른다. 실수로 눌러 코퍼스를 날리는 것을 막는 것이 목적이다.
+
+    **비밀번호를 프론트에 심지 않는다** — 번들에 넣으면 누구나 읽는다. 여기서 비교한다.
+    타이밍 공격을 피하려고 `hmac.compare_digest`를 쓴다(로그인과 같은 방식).
+    """
+    import os
+
+    ctx = getattr(request.app.state, "service_context", None)
+    web = getattr(getattr(ctx, "app_config", None), "web", None)
+    expected = os.environ.get("SAESSAGI_ADMIN_PASSWORD") or getattr(web, "admin_password", "Rda123")
+    ok = bool(expected) and hmac.compare_digest(str(body.password or ""), str(expected))
+    if not ok:
+        # 비밀번호 자체는 남기지 않는다.
+        logger.warning("관리 기능 잠금 해제 실패 (경로=%s)", request.url.path)
+        await asyncio.sleep(0.4)  # 무차별 대입 완화
+    return JSONResponse({"ok": ok})

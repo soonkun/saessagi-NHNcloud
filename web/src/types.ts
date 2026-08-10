@@ -292,7 +292,9 @@ export interface CalendarEvent {
   id: number;
   title: string;
   start: string; // ISO datetime
-  duration_minutes?: number; // backend field name
+  /** 종료 시각 (CR-70). 등록 시 이 값을 보내면 서버가 길이로 환산해 저장한다. */
+  end?: string;
+  duration_minutes?: number; // backend field name (저장 형식)
   description?: string;
 }
 

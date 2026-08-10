@@ -207,14 +207,31 @@ function AddEventModal({
   const [dateStr, setDateStr] = useState(defaultDate);
   const [hour, setHour] = useState("09");
   const [minute, setMinute] = useState("00");
-  const [duration, setDuration] = useState("60");
+  // CR-70: 길이(분) 대신 **종료 시각**을 받는다. 사람은 "9시~18시"로 생각하고
+  // "540분"으로 생각하지 않는다. 서버가 종료 시각을 길이로 환산해 저장한다.
+  const [endHour, setEndHour] = useState("10");
+  const [endMinute, setEndMinute] = useState("00");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
+  // 시작을 고르면 종료를 한 시간 뒤로 맞춰 준다 — 매번 두 번 고르지 않게.
+  function pickStartHour(h: string): void {
+    setHour(h);
+    const next = String((Number(h) + 1) % 24).padStart(2, "0");
+    if (`${endHour}:${endMinute}` <= `${h}:${minute}`) {
+      setEndHour(next);
+      setEndMinute(minute);
+    }
+  }
+
   async function handleSave(): Promise<void> {
     if (!title.trim()) {
       setError("제목을 입력하세요");
+      return;
+    }
+    if (`${endHour}:${endMinute}` <= `${hour}:${minute}`) {
+      setError("종료 시각이 시작 시각보다 뒤여야 합니다");
       return;
     }
     setSaving(true);
@@ -222,7 +239,7 @@ function AddEventModal({
       await onSave({
         title: title.trim(),
         start: `${dateStr}T${hour}:${minute}`,
-        duration_minutes: duration ? Number(duration) : undefined,
+        end: `${dateStr}T${endHour}:${endMinute}`,
         description: description.trim() || undefined,
       });
       onClose();
@@ -294,7 +311,7 @@ function AddEventModal({
             <DatePicker value={dateStr} onChange={setDateStr} />
             <select
               value={hour}
-              onChange={(e) => setHour(e.target.value)}
+              onChange={(e) => pickStartHour(e.target.value)}
               style={{ ...inputStyle, width: 64, padding: "7px 6px" }}
             >
               {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => (
@@ -313,17 +330,32 @@ function AddEventModal({
           </div>
         </div>
 
-        <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>기간 (분)</span>
-          <input
-            type="number"
-            value={duration}
-            onChange={(e) => setDuration(e.target.value)}
-            onClick={() => window.electronAPI?.restoreFocus()}
-            style={inputStyle}
-            min={1}
-          />
-        </label>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>종료 시각</span>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <select
+              value={endHour}
+              onChange={(e) => setEndHour(e.target.value)}
+              style={{ ...inputStyle, width: 64, padding: "7px 6px" }}
+            >
+              {Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map((h) => (
+                <option key={h} value={h}>{h}시</option>
+              ))}
+            </select>
+            <select
+              value={endMinute}
+              onChange={(e) => setEndMinute(e.target.value)}
+              style={{ ...inputStyle, width: 64, padding: "7px 6px" }}
+            >
+              {["00", "10", "20", "30", "40", "50"].map((m) => (
+                <option key={m} value={m}>{m}분</option>
+              ))}
+            </select>
+            <span style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+              {hour}:{minute} – {endHour}:{endMinute}
+            </span>
+          </div>
+        </div>
 
         <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <span style={{ fontSize: "var(--fs-12)", color: "var(--color-text-muted)" }}>설명</span>
@@ -382,6 +414,24 @@ const saveBtnStyle: React.CSSProperties = {
 // ────────────────────────────────────────────────────────────
 // CalendarView
 // ────────────────────────────────────────────────────────────
+
+/**
+ * 일정 시각을 `9:00 – 18:00`으로 (CR-70).
+ *
+ * 예전에는 `9:00 · 540분`으로 보여 줬다 — 언제 끝나는지 머릿속으로 계산해야 했다.
+ * 서버가 `end`를 주면 그것을 쓰고, 없으면 길이로 계산한다(옛 응답 호환).
+ */
+export function timeRange(event: { start: string; end?: string; duration_minutes?: number }): string {
+  const hm = (iso: string): string => iso.slice(11, 16);
+  const start = hm(event.start);
+  if (event.end) return `${start} – ${hm(event.end)}`;
+  if (!event.duration_minutes) return start;
+  const d = new Date(event.start);
+  if (Number.isNaN(d.getTime())) return start;
+  d.setMinutes(d.getMinutes() + event.duration_minutes);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${start} – ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 export function CalendarView(): React.ReactElement {
   // CR-43: 좁은 화면(태블릿)에서는 조밀한 레이아웃을 쓴다.
@@ -725,8 +775,7 @@ export function CalendarView(): React.ReactElement {
                   {event.title}
                 </div>
                 <div style={{ color: "var(--color-text-muted)", fontSize: isDesktop ? 13 : 12 }}>
-                  🕐 {event.start.slice(11, 16)}
-                  {event.duration_minutes ? ` · ${event.duration_minutes}분` : ""}
+                  🕐 {timeRange(event)}
                 </div>
                 {event.description && (
                   <div style={{ fontSize: isDesktop ? 13 : 12, marginTop: 6, color: "var(--color-text-muted)" }}>

@@ -17,7 +17,14 @@ ADD_EVENT_SCHEMA: dict[str, Any] = {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
             "additionalProperties": False,
-            "required": ["title", "start", "duration_minutes"],
+            # CR-70: 종료 시각으로 등록한다. 사람은 "9시~18시"로 말하고 "540분"으로
+            # 말하지 않는다. **둘 중 하나면 된다** — `end`를 필수로 했더니 기존
+            # `duration_minutes` 호출이 전부 스키마 검증에서 막혔다.
+            "required": ["title", "start"],
+            "anyOf": [
+                {"required": ["end"]},
+                {"required": ["duration_minutes"]},
+            ],
             "properties": {
                 "title": {
                     "type": "string",
@@ -32,11 +39,21 @@ ADD_EVENT_SCHEMA: dict[str, Any] = {
                     "maxLength": 40,
                     "description": "ISO 8601 시작 시각. 예: 2026-04-20T15:00:00+09:00.",
                 },
+                "end": {
+                    "type": "string",
+                    "format": "date-time",
+                    "minLength": 10,
+                    "maxLength": 40,
+                    "description": (
+                        "ISO 8601 종료 시각. 예: 2026-04-20T18:00:00+09:00. "
+                        "시작보다 뒤여야 합니다. 사용자가 길이만 말했으면 시작에 더해 계산하세요."
+                    ),
+                },
                 "duration_minutes": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 1440,
-                    "description": "일정 길이(분). 1~1440.",
+                    "description": "길이(분). `end`를 주면 그쪽이 우선한다. 1~1440.",
                 },
                 "description": {
                     "type": "string",

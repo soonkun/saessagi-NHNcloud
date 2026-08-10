@@ -500,7 +500,10 @@ function dispatch(msg: WsIncomingMessage): void {
           .map((m) => ({
             id: `hist-${Date.now()}-${seq++}`,
             role: m.role,
-            text: m.content,
+            // 저장된 본문에는 `[study]`·`[neutral]` 감정 태그가 섞여 있다 (E-106).
+            // 스트리밍 때는 여기서 떼는데 **복원 때는 안 뗐다** — 사용자 화면에
+            // "[study] 자료를 찾아볼게요![neutral] 갈색거저리는…"이 그대로 떴다.
+            text: stripEmotionTags(m.content).text,
             timestamp: m.timestamp ? Date.parse(m.timestamp) || Date.now() : Date.now(),
           }))
       );

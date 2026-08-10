@@ -17,6 +17,7 @@ import { useIsCompact, useIsNarrow } from "../hooks/useMediaQuery";
 import { ChatContent } from "./ChatPanel";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
+import { AdminGate } from "./AdminGate";
 import { DocumentsView } from "./DocumentsView";
 import { FloatingAvatar } from "./FloatingAvatar";
 import { HistoryList } from "./HistoryList";
@@ -390,7 +391,11 @@ export function DesktopView(): React.ReactElement {
           />
         </div>
         {chatTab === "calendar" && <CalendarView />}
-        {chatTab === "documents" && <DocumentsView />}
+        {chatTab === "documents" && (
+          <AdminGate label="문서 관리">
+            <DocumentsView />
+          </AdminGate>
+        )}
         {chatTab === "graph" && (
           <Suspense
             fallback={

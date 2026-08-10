@@ -145,6 +145,18 @@ class WebConfig(BaseModel):
         ),
     )
     session_ttl_hours: int = Field(default=12, ge=1, le=720)
+    # CR-69: 관리 기능(문서 관리·지식그래프 관리) 2차 잠금.
+    #
+    # 로그인은 "이 앱을 쓸 수 있는가"를 가르고, 이 값은 "문서를 지우거나 그래프를
+    # 다시 만들 수 있는가"를 가른다. 실수로 눌러 코퍼스를 날리는 것을 막는 것이 목적이다.
+    # **프론트에 심지 않는다** — 번들에 넣으면 누구나 읽는다. 서버가 검증한다.
+    admin_password: str = Field(
+        default="Rda123",
+        description=(
+            "문서 관리·지식그래프 관리 진입 비밀번호. "
+            "환경변수 SAESSAGI_ADMIN_PASSWORD가 있으면 그쪽이 우선한다."
+        ),
+    )
 
 
 class PathsConfig(BaseModel):

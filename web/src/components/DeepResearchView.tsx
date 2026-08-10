@@ -10,12 +10,14 @@
 // 무엇보다 **첨부 의미가 정반대다**: 채팅 첨부는 RAG 벡터 스토어에 영구 등록되지만
 // 딥 리서치 첨부는 텍스트만 뽑고 등록하지 않는다. 섞으면 리서치용 임시 RFP가
 // 사내 문서 저장소에 영구 등록된다.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   Copy,
   FileDown,
   FileSearch,
@@ -24,7 +26,6 @@ import {
   Network,
   Paperclip,
   Plus,
-  Printer,
   RotateCcw,
   Save,
   Send,
@@ -38,6 +39,9 @@ import {
   createResearchProject,
   clearResearchTurns,
   deleteResearchProject,
+  deleteInstructionVersion,
+  deleteResearchRun,
+  downloadReportPdf,
   fetchInstructions,
   fetchResearchProjects,
   fetchResearchTurns,
@@ -52,7 +56,6 @@ import { readSseStream } from "../services/sse";
 import { useStore } from "../store";
 import {
   cleanReportMarkdown,
-  printHtmlDocument,
   researchTitle,
   safeFileStem,
 } from "../reportDoc";
@@ -115,6 +118,7 @@ function ResultBtn({
 function ReportCard({
   report,
   sources,
+  steps,
   projectName,
   prompt,
   fileName,
@@ -123,6 +127,7 @@ function ReportCard({
 }: {
   report: string;
   sources: ResearchTurn["sources"];
+  steps: string[];
   projectName: string;
   prompt: string;
   fileName: string;
@@ -130,16 +135,33 @@ function ReportCard({
   onNote: (title: string, content: string, docIds: string[]) => void;
 }): React.ReactElement {
   const printRef = useRef<HTMLDivElement>(null);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const clean = cleanReportMarkdown(report);
   const docIds = Array.from(new Set(sources.map((s) => s.doc_id).filter(Boolean)));
 
-  function handlePrint(): void {
-    const node = printRef.current;
-    if (!node) return;
-    const clone = node.cloneNode(true) as HTMLElement;
-    clone.querySelectorAll(".dr-print-hide").forEach((el) => el.remove());
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfErr, setPdfErr] = useState("");
+
+  // CR-67: 인쇄 대화상자가 아니라 **PDF 파일 내려받기**. 화면이 아니라 보고서 본문을
+  // 서버가 PDF로 만든다 — iOS Safari는 숨은 iframe 대신 화면 전체를 인쇄했다.
+  async function handlePdf(): Promise<void> {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    setPdfErr("");
     const title = researchTitle(projectName, report, prompt, fileName);
-    printHtmlDocument(title, new Date().toLocaleString("ko-KR"), clone.innerHTML);
+    try {
+      await downloadReportPdf(
+        title,
+        clean,
+        `Deep Research Report · ${new Date().toLocaleDateString("ko-KR")}`,
+        safeFileStem(title),
+        projectName  // 제목 위 분류줄 — 어느 방에서 나온 보고서인지
+      );
+    } catch (e) {
+      setPdfErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPdfBusy(false);
+    }
   }
 
   function handleDownload(): void {
@@ -181,9 +203,9 @@ function ReportCard({
           <BookOpen size={12} />
           업무노트로 저장
         </ResultBtn>
-        <ResultBtn onClick={handlePrint} title="PDF로 저장 (인쇄 대화상자)">
-          <Printer size={12} />
-          PDF
+        <ResultBtn onClick={() => void handlePdf()} title="PDF 파일로 내려받기">
+          <FileDown size={12} />
+          {pdfBusy ? "PDF 만드는 중…" : "PDF"}
         </ResultBtn>
         <ResultBtn onClick={handleDownload} title="마크다운 파일로 저장">
           <FileDown size={12} />
@@ -195,6 +217,12 @@ function ReportCard({
         </ResultBtn>
       </div>
 
+      {pdfErr && (
+        <div className="dr-print-hide" style={{ color: "#e57373", fontSize: "var(--fs-11)", marginBottom: 8 }}>
+          {pdfErr}
+        </div>
+      )}
+
       <div className="md-body">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
@@ -205,6 +233,50 @@ function ReportCard({
           {clean}
         </ReactMarkdown>
       </div>
+
+      {/* CR-65: 그때의 진행 과정. 기본은 접혀 있고 꺽쇠로 편다 — 보고서가 주인공이다.
+          인쇄·PDF에는 넣지 않는다(dr-print-hide). */}
+      {steps.length > 0 && (
+        <div className="dr-print-hide" style={{ marginTop: 10 }}>
+          <button
+            onClick={() => setStepsOpen((v) => !v)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              cursor: "pointer",
+              color: "var(--color-text-muted)",
+              fontSize: "var(--fs-11)",
+              fontFamily: "inherit",
+            }}
+          >
+            {stepsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            진행 과정 {steps.length}단계
+          </button>
+          {stepsOpen && (
+            <div
+              style={{
+                marginTop: 6,
+                maxHeight: 220,
+                overflowY: "auto",
+                border: "1px solid var(--color-border)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                fontSize: "var(--fs-11)",
+                color: "var(--color-text-muted)",
+                lineHeight: 1.7,
+              }}
+            >
+              {steps.map((s, i) => (
+                <div key={i}>{s}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {sources.length > 0 && (
         <div
@@ -248,6 +320,9 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
   const [file, setFile] = useState<File | null>(null);
   const [running, setRunning] = useState(false);
   const [steps, setSteps] = useState<string[]>([]);
+  // 도는 동안은 펴 두고, 끝나면 접는다 — 보고서가 화면을 차지해야 한다.
+  const [stepsOpen, setStepsOpen] = useState(true);
+  const stepsBoxRef = useRef<HTMLDivElement | null>(null);
   const [queuePos, setQueuePos] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [lastEventAt, setLastEventAt] = useState(0);
@@ -255,6 +330,9 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
 
   const fileRef = useRef<HTMLInputElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  // CR-66: 방 안의 대화를 **실행 단위(질문+보고서)**로 묶어 목록으로 보여준다.
+  // 예전에는 전부 한 줄로 이어 붙여서, 지난 리서치를 골라 보거나 하나만 지울 수 없었다.
+  const [openRun, setOpenRun] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const list = await fetchResearchProjects();
@@ -278,11 +356,86 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
   }, [turns.length, steps.length]);
 
+  // 진행 과정 상자는 **자기 안에서** 최신 줄로 따라간다. 상자에 스크롤을 두면
+  // 전체를 되짚어 볼 수 있고, 도는 동안에는 마지막 줄이 보여야 한다.
+  useEffect(() => {
+    if (!stepsOpen || !running) return;
+    const el = stepsBoxRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [steps.length, stepsOpen, running]);
+
+  // 리서치가 끝나면 접는다 — 보고서가 주인공이고, 과정은 꺽쇠로 다시 편다.
+  const prevRunning = useRef(running);
+  useEffect(() => {
+    if (prevRunning.current && !running) setStepsOpen(false);
+    if (!prevRunning.current && running) setStepsOpen(true);
+    prevRunning.current = running;
+  }, [running]);
+
+  // 턴 목록을 **실행 단위**로 묶는다 — 사용자가 보는 단위는 "질문 하나 + 그 보고서"다.
+  const runs = useMemo(() => {
+    const out: {
+      id: string;
+      title: string;
+      when: string;
+      file: string;
+      ask: ResearchTurn | null;
+      report: ResearchTurn | null;
+    }[] = [];
+    for (let i = 0; i < turns.length; i++) {
+      const t = turns[i];
+      if (t.role !== "user") {
+        // 짝 없는 보고서(옛 기록·중간 실패)도 한 건으로 세운다 — 안 보이면 지울 수도 없다.
+        if (!out.length || out[out.length - 1].report) {
+          out.push({
+            id: t.turn_id,
+            title: researchTitle(current?.name ?? "", t.content, "", ""),
+            when: new Date(t.created_at).toLocaleString("ko-KR"),
+            file: "",
+            ask: null,
+            report: t,
+          });
+        }
+        continue;
+      }
+      const next = turns[i + 1]?.role === "assistant" ? turns[i + 1] : null;
+      out.push({
+        id: t.turn_id,
+        title: (t.content || "").trim() || t.attachments[0] || "(첨부만)",
+        when: new Date(t.created_at).toLocaleString("ko-KR"),
+        file: t.attachments[0] ?? "",
+        ask: t,
+        report: next,
+      });
+      if (next) i += 1;
+    }
+    return out.reverse(); // 최신이 위
+  }, [turns, current?.name]);
+
+  const activeRun = useMemo(
+    () => runs.find((r) => r.id === openRun) ?? null,
+    [runs, openRun]
+  );
+
+  async function handleDeleteRun(r: { id: string; title: string }): Promise<void> {
+    if (!current) return;
+    if (!window.confirm(`이 리서치 기록을 삭제할까요?\n\n${r.title}\n\n되돌릴 수 없습니다.`))
+      return;
+    try {
+      await deleteResearchRun(current.project_id, r.id);
+      if (openRun === r.id) setOpenRun(null);
+      setTurns(await fetchResearchTurns(current.project_id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   async function openRoom(p: ResearchProject): Promise<void> {
     setCurrent(p);
     setScreen("room");
     setError("");
     setSteps([]);
+    setOpenRun(null);
     setTurns(await fetchResearchTurns(p.project_id));
   }
 
@@ -322,6 +475,7 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
     setRunning(true);
     setError("");
     setSteps([]);
+    setOpenRun(null);
     setQueuePos(0);
     setElapsed(0);
     setLastEventAt(Date.now());
@@ -374,11 +528,11 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
           ]);
         } else if (evt.stage === "queued") {
           setQueuePos(evt.position ?? 0);
-          if (evt.message) setSteps((s) => [...s.slice(-30), evt.message!]);
+          if (evt.message) setSteps((s) => [...s.slice(-300), evt.message!]);
         } else if (evt.stage === "synthesis_tick") {
           setElapsed(evt.elapsed_seconds ?? 0);
         } else if (evt.message) {
-          setSteps((s) => [...s.slice(-30), evt.message!]);
+          setSteps((s) => [...s.slice(-300), evt.message!]);
         }
       });
       if (!finished) setError(DISCONNECTED_MSG);
@@ -597,7 +751,7 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
       )}
 
       <div ref={threadRef} style={{ flex: 1, overflowY: "auto", padding: 14, minHeight: 0 }}>
-        {turns.length === 0 && !running && (
+        {runs.length === 0 && !running && (
           <div
             style={{
               color: "var(--color-text-muted)",
@@ -611,65 +765,179 @@ export function DeepResearchView({ desktop }: { desktop?: boolean }): React.Reac
           </div>
         )}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {turns.map((t, idx) =>
-            t.role === "user" ? (
-              <div key={t.turn_id} style={{ display: "flex", justifyContent: "flex-end" }}>
-                <div
-                  style={{
-                    maxWidth: "78%",
-                    background: "var(--color-accent)",
-                    color: "#fff",
-                    borderRadius: 12,
-                    padding: "8px 12px",
-                    fontSize: "var(--fs-13)",
-                    whiteSpace: "pre-wrap",
-                  }}
-                >
-                  {t.content || "(첨부만)"}
-                  {t.attachments.map((a) => (
-                    <div key={a} style={{ fontSize: "var(--fs-11)", opacity: 0.85, marginTop: 4 }}>
-                      <Paperclip size={10} /> {a}
-                    </div>
-                  ))}
+        {/* 상세: 고른 리서치 한 건만 보여준다 */}
+        {activeRun && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button onClick={() => setOpenRun(null)} style={{ ...btn(), alignSelf: "flex-start" }}>
+              <ArrowLeft size={12} />
+              목록으로
+            </button>
+            <div
+              style={{
+                alignSelf: "flex-end",
+                maxWidth: "78%",
+                background: "var(--color-accent)",
+                color: "#fff",
+                borderRadius: 12,
+                padding: "8px 12px",
+                fontSize: "var(--fs-13)",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {activeRun.ask?.content || "(첨부만)"}
+              {activeRun.ask?.attachments.map((a) => (
+                <div key={a} style={{ fontSize: "var(--fs-11)", opacity: 0.85, marginTop: 4 }}>
+                  <Paperclip size={10} /> {a}
                 </div>
-              </div>
-            ) : (
-              // 노트 제목은 보고서 → 첨부파일명 → 프롬프트 순으로 뽑는다. 그래서 바로 앞
-              // 사용자 턴을 함께 넘겨야 제목이 전부 날짜로 떨어지지 않는다 (CR-59 교훈).
+              ))}
+            </div>
+            {activeRun.report && (
               <ReportCard
-                key={t.turn_id}
-                report={t.content}
-                sources={t.sources}
+                report={activeRun.report.content}
+                sources={activeRun.report.sources}
+                steps={activeRun.report.steps ?? []}
                 projectName={current.name}
-                prompt={turns[idx - 1]?.role === "user" ? turns[idx - 1].content : ""}
-                fileName={turns[idx - 1]?.attachments?.[0] ?? ""}
+                prompt={activeRun.ask?.content ?? ""}
+                fileName={activeRun.ask?.attachments?.[0] ?? ""}
                 onPin={requestGraphPins}
                 onNote={(title, content, ids) => void handleNote(title, content, ids)}
               />
-            )
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
-        {running && (
+        {/* 목록: 지난 리서치를 한 건씩 슬롯으로 */}
+        {!activeRun && runs.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)" }}>
+              지난 리서치 {runs.length}건 — 눌러서 보고서를 봅니다.
+            </div>
+            {runs.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  border: "1px solid var(--color-border)",
+                  borderRadius: 10,
+                  padding: "10px 12px",
+                  background: "var(--color-bg)",
+                }}
+              >
+                <button
+                  onClick={() => setOpenRun(r.id)}
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    textAlign: "left",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: 0,
+                    fontFamily: "inherit",
+                    color: "var(--color-text)",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "var(--fs-13)",
+                      fontWeight: 600,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {r.title}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: "var(--fs-11)",
+                      color: "var(--color-text-muted)",
+                      marginTop: 2,
+                    }}
+                  >
+                    {r.when}
+                    {r.report ? "" : " · 보고서 없음"}
+                    {r.file ? ` · 📎 ${r.file}` : ""}
+                  </div>
+                </button>
+                <button
+                  onClick={() => void handleDeleteRun(r)}
+                  title="이 리서치 기록 삭제"
+                  style={{
+                    ...btn(),
+                    padding: "4px 8px",
+                    color: "#c0392b",
+                    borderColor: "#c0392b55",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* 진행 과정 (사용자 요청 2026-08-09).
+            예전에는 `running &&`이라 **끝나면 통째로 사라졌고**, `slice(-6)`으로 최근
+            6줄만 보여 준 데다 스크롤도 없어 지나간 내용을 볼 방법이 없었다.
+            이제 (1) 도는 동안 전체를 스크롤로 보고 (2) 끝나면 접힌 채 남아 꺽쇠로 편다. */}
+        {steps.length > 0 && (
           <div
             style={{
               marginTop: 12,
               border: "1px solid var(--color-border)",
               borderRadius: 10,
-              padding: "10px 12px",
               fontSize: "var(--fs-11)",
               color: "var(--color-text-muted)",
+              overflow: "hidden",
             }}
           >
-            {queuePos > 0 && <div>대기 {queuePos}번째 — 차례가 되면 자동 시작합니다.</div>}
-            {steps.slice(-6).map((s, i) => (
-              <div key={i}>{s}</div>
-            ))}
-            {elapsed > 0 && <div>보고서 작성 중… {elapsed}초 경과</div>}
-            {stalled && (
-              <div style={{ color: "#e0a75f", marginTop: 4 }}>
-                {STALL_SEC}초 넘게 응답이 없습니다. 서버가 바쁘거나 멈췄을 수 있습니다.
+            <button
+              onClick={() => setStepsOpen((v) => !v)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                width: "100%",
+                background: "transparent",
+                border: "none",
+                padding: "8px 12px",
+                cursor: "pointer",
+                color: "var(--color-text-muted)",
+                fontSize: "var(--fs-11)",
+                fontFamily: "inherit",
+                textAlign: "left",
+              }}
+            >
+              {stepsOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+              <span>
+                진행 과정 {steps.length}단계
+                {running ? " · 진행 중…" : " · 완료"}
+              </span>
+            </button>
+            {stepsOpen && (
+              <div
+                ref={stepsBoxRef}
+                style={{
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  padding: "0 12px 10px",
+                  lineHeight: 1.7,
+                }}
+              >
+                {queuePos > 0 && <div>대기 {queuePos}번째 — 차례가 되면 자동 시작합니다.</div>}
+                {steps.map((s, i) => (
+                  <div key={i}>{s}</div>
+                ))}
+                {running && elapsed > 0 && <div>보고서 작성 중… {elapsed}초 경과</div>}
+                {stalled && (
+                  <div style={{ color: "#e0a75f", marginTop: 4 }}>
+                    {STALL_SEC}초 넘게 응답이 없습니다. 서버가 바쁘거나 멈췄을 수 있습니다.
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -857,12 +1125,24 @@ function InstructionsScreen({
   }
 
   async function handleRestore(versionNo: number): Promise<void> {
-    if (!window.confirm(`v${versionNo} 내용으로 되돌립니다.\n지금 내용은 이력에 남습니다.`)) return;
+    if (!window.confirm(`v${versionNo}을 사용합니다.\n편집 중인 내용은 사라집니다.`)) return;
     try {
       const r = await restoreInstructions(project.project_id, versionNo);
       setText(r.content);
-      setSaved(`v${versionNo} → v${r.version_no}으로 복원됨`);
+      setSaved(`v${versionNo} 사용 중`);
       await load();
+      setTimeout(() => setSaved(""), 4000);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function handleDeleteVersion(versionNo: number): Promise<void> {
+    if (!window.confirm(`v${versionNo}을 이력에서 지웁니다.\n되돌릴 수 없습니다.`)) return;
+    try {
+      await deleteInstructionVersion(project.project_id, versionNo);
+      await load();
+      setSaved(`v${versionNo} 삭제됨`);
       setTimeout(() => setSaved(""), 4000);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -1009,7 +1289,7 @@ function InstructionsScreen({
           }}
         >
           <div style={{ fontSize: "var(--fs-11)", color: "var(--color-text-muted)", marginBottom: 6 }}>
-            되돌려도 지금 내용은 이력에 남습니다 — 다시 앞으로 갈 수 있습니다.
+            버전을 고르면 그 버전을 씁니다 — 이력은 그대로 남고 번호도 늘지 않습니다.
           </div>
           {versions.map((v) => (
             <div
@@ -1038,10 +1318,46 @@ function InstructionsScreen({
                 {v.preview}
               </span>
               <span style={{ color: "var(--color-text-muted)" }}>{v.chars}자</span>
-              {v.version_no !== project.version_no && (
-                <button onClick={() => void handleRestore(v.version_no)} style={{ ...btn(), padding: "2px 8px" }}>
-                  <RotateCcw size={10} />
-                  복원
+              {v.version_no === project.version_no && (
+                <span
+                  style={{
+                    fontSize: "var(--fs-11)",
+                    color: "var(--color-accent)",
+                    fontWeight: 600,
+                    flexShrink: 0,
+                  }}
+                >
+                  사용 중
+                </span>
+              )}
+              {/* CR-71: 현재 버전에도 버튼을 둔다. 편집 중인 내용을 버리고 저장된
+                  상태로 되돌리는 유일한 경로다 — 예전에는 이 버튼을 숨겨서
+                  **v1만 있는 방에서는 되돌릴 방법이 아예 없었다.** */}
+              <button
+                onClick={() => void handleRestore(v.version_no)}
+                title={
+                  v.version_no === project.version_no
+                    ? "편집 중인 내용을 버리고 이 버전으로 되돌리기"
+                    : "이 버전을 사용"
+                }
+                style={{ ...btn(), padding: "2px 8px", flexShrink: 0 }}
+              >
+                <RotateCcw size={10} />
+                {v.version_no === project.version_no ? "되돌리기" : "이 버전 사용"}
+              </button>
+              {versions.length > 1 && (
+                <button
+                  onClick={() => void handleDeleteVersion(v.version_no)}
+                  title="이 버전 삭제"
+                  style={{
+                    ...btn(),
+                    padding: "2px 6px",
+                    color: "#c0392b",
+                    borderColor: "#c0392b55",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Trash2 size={10} />
                 </button>
               )}
             </div>

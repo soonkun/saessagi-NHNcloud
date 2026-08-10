@@ -46,11 +46,11 @@ const NOTE_LINK_SCHEME = "saessagi-note:";
  */
 export function markersToLinks(text: string, docIds: string[], noteIds: string[] = []): string {
   return (text || "")
-    .replace(/\[\[doc:([^[\]]+)\]\]/g, (_m, id: string) => {
+    .replace(/\[\[doc:(.+?)\]\]/g, (_m, id: string) => {
       const i = docIds.indexOf(String(id).trim());
       return i < 0 ? "" : ` [근거](${DOC_LINK_SCHEME}${i}) `;
     })
-    .replace(/\[\[note:([^[\]]+)\]\]/g, (_m, slug: string) => {
+    .replace(/\[\[note:(.+?)\]\]/g, (_m, slug: string) => {
       const i = noteIds.indexOf(String(slug).trim());
       return i < 0 ? "" : ` [노트](${NOTE_LINK_SCHEME}${i}) `;
     });
@@ -64,7 +64,8 @@ export function markersToLinks(text: string, docIds: string[], noteIds: string[]
  * 섹션(번호 항목·제목)이 새로 시작하는 자리에서 그때까지 모인 마커를 한 줄로 낸다.
  */
 export function groupMarkersByBlock(text: string): string {
-  const MARKER = /\[\[(?:doc|note):[^[\]]+\]\]/g;
+  // 파일명에 대괄호가 들어갈 수 있다 — `[^[\]]`로 두면 매치가 끊긴다 (E-106).
+  const MARKER = /\[\[(?:doc|note):.+?\]\]/g;
   // **상위 하이라키만** 경계로 본다 (사용자 요청). 예전에는 빈 줄·불릿·①까지 경계로
   // 삼아 칩이 다시 문장 단위로 흩어졌다. 지금은 제목(`#`)과 번호 항목(`1.`)만 본다.
   const isTopSection = (ln: string): boolean => /^\s*(?:#{1,6}\s|\d+[.)]\s)/.test(ln);
@@ -98,7 +99,7 @@ export function groupMarkersByBlock(text: string): string {
 /** 본문에 살아 있는 doc 마커의 id 목록 (제목 조회·프리페치용). */
 export function docIdsInText(text: string): string[] {
   const out: string[] = [];
-  for (const m of (text || "").matchAll(/\[\[doc:([^[\]]+)\]\]/g)) {
+  for (const m of (text || "").matchAll(/\[\[doc:(.+?)\]\]/g)) {
     const id = m[1].trim();
     if (id && !out.includes(id)) out.push(id);
   }
@@ -151,7 +152,8 @@ function CiteChip({ docId }: { docId: string }): React.ReactElement {
 function stripNoteMarkers(text: string): string {
   return text
     // [[note:slug]] / [[doc:id]] (정상 이중괄호, 닫힘 0~2개 깨진 것 포함)
-    .replace(/\[\[(?:note|doc):[^[\]]*\]{0,2}/g, "")
+    .replace(/\[\[(?:note|doc):.+?\]\]/g, "")
+    .replace(/\[\[(?:note|doc):[^\n]*/g, "")
     // 접두사를 빼먹은 마커 `[[TRKO….pdf_abc]]` (E-103). 백엔드가 살릴 수 있으면
     // 살리지만, 못 살린 것이 화면에 날것으로 뜨는 것을 여기서 막는다.
     .replace(/\[\[[^[\]]*\.(?:pdf|hwpx?|docx?|pptx?|xlsx?|txt|md)[^[\]]*\]{0,2}/gi, "")
@@ -168,6 +170,7 @@ function stripNoteMarkers(text: string): string {
 import { startVoice, stopVoice } from "../services/voice";
 import { CalendarView } from "./CalendarView";
 import { DeepResearchView } from "./DeepResearchView";
+import { AdminGate } from "./AdminGate";
 import { DocumentsView } from "./DocumentsView";
 import { MeetingView } from "./MeetingView";
 import { NotesView } from "./NotesView";
@@ -1423,7 +1426,11 @@ export function ChatPanel({ charPosition, charSize }: ChatPanelProps): React.Rea
       <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
         {chatTab === "chat" && <ChatContent />}
         {chatTab === "calendar" && <CalendarView />}
-        {chatTab === "documents" && <DocumentsView />}
+        {chatTab === "documents" && (
+          <AdminGate label="문서 관리">
+            <DocumentsView />
+          </AdminGate>
+        )}
         {chatTab === "graph" && (
           <Suspense
             fallback={

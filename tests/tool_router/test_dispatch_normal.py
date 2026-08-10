@@ -156,3 +156,52 @@ async def test_n8_take_screenshot_continuous_default_interval(
     # start_continuous가 interval_seconds=5.0으로 호출되었는지 검증
     assert len(fake_ss.start_continuous_calls) == 1
     assert fake_ss.start_continuous_calls[0]["interval_seconds"] == pytest.approx(5.0)
+
+
+# ── CR-70 시작/종료 시각 ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_add_event_accepts_end_time(router: ToolRouter, mock_calendar: MagicMock) -> None:
+    """종료 시각으로 등록되고 길이로 환산된다 — 모델이 "9시~18시"를 그대로 넘긴다."""
+    r = await router.dispatch(
+        "add_event",
+        {
+            "title": "종일 워크숍",
+            "start": "2026-08-12T09:00:00+09:00",
+            "end": "2026-08-12T18:00:00+09:00",
+        },
+    )
+    assert r.ok is True, r.error
+    # 목이 고정 이벤트를 돌려주므로 **핸들러가 계산해 넘긴 값**을 본다.
+    args = mock_calendar.add_event.call_args.args
+    assert args[2] == 540, f"종료 시각을 분으로 환산하지 못했다: {args}"
+    assert r.payload["end"].startswith("2026-08-12T18:00")
+
+
+@pytest.mark.asyncio
+async def test_add_event_still_accepts_duration(
+    router: ToolRouter, mock_calendar: MagicMock
+) -> None:
+    """길이(분) 호출도 계속 받는다 — `end` 필수로 바꿨더니 전부 막혔다."""
+    r = await router.dispatch(
+        "add_event",
+        {"title": "회의", "start": "2026-08-12T14:00:00+09:00", "duration_minutes": 30},
+    )
+    assert r.ok is True, r.error
+    assert mock_calendar.add_event.call_args.args[2] == 30
+
+
+@pytest.mark.asyncio
+async def test_add_event_rejects_end_before_start(
+    router: ToolRouter, mock_calendar: MagicMock
+) -> None:
+    r = await router.dispatch(
+        "add_event",
+        {
+            "title": "거꾸로",
+            "start": "2026-08-12T18:00:00+09:00",
+            "end": "2026-08-12T09:00:00+09:00",
+        },
+    )
+    assert r.ok is False and "뒤여야" in (r.error or "")

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from "react";
 import ReactMarkdown from "react-markdown";
-import { cleanReportMarkdown, printHtmlDocument, safeFileStem } from "../reportDoc";
+import { cleanReportMarkdown, safeFileStem } from "../reportDoc";
 import remarkGfm from "remark-gfm";
 import {
   BookOpen,
@@ -33,6 +33,7 @@ import {
   fetchKnowledgeGraph,
   openDocument,
   aiEditNote,
+  downloadReportPdf,
 } from "../services/api";
 import { useStore } from "../store";
 import { invalidateNotesCache } from "../services/websocket";
@@ -73,6 +74,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
   }, [externalSelectedSlug, selectedSlug, setExternalSelectedSlug]);
   // 펫 모드는 간단 확인 위주 → 기본 '미리보기', 데스크톱은 바로 편집
   const [subTab, setSubTab] = useState<SubTab>(desktop ? "edit" : "preview");
+  const [pdfBusy, setPdfBusy] = useState(false);  // CR-67 PDF 내려받기 진행 표시
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -349,25 +351,24 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
    * 미리보기에 이미 렌더된 HTML을 복제해 넣는다 — 편집 탭에서 눌렀다면 미리보기 DOM이
    * 없으므로 먼저 미리보기로 전환하고, 그려진 뒤에 인쇄한다.
    */
-  function handlePrintNote(): void {
-    if (!current) return;
+  async function handlePrintNote(): Promise<void> {
+    // CR-67: 인쇄 대화상자가 아니라 **PDF 파일 내려받기**.
+    // 예전에는 미리보기 DOM을 복제해 숨은 iframe에 넣고 `window.print()`를 불렀는데,
+    // iOS Safari가 iframe이 아니라 화면 전체를 인쇄해 앱 UI가 찍혔다(딥 리서치와 동일 결함).
+    // 이제 본문 마크다운을 서버로 보내 PDF를 받는다 — 미리보기 탭에 있을 필요도 없다.
+    if (!current || pdfBusy) return;
     const note = current;
-    const run = (): void => {
-      const src = previewRef.current;
-      if (!src) return;
-      const clone = src.cloneNode(true) as HTMLElement;
-      // 미리보기 머리말(제목·태그·관련 자료)은 빼낸다 — 인쇄 문서가 자체 머리말을 만든다.
-      clone.querySelectorAll(".note-print-hide").forEach((el) => el.remove());
+    setPdfBusy(true);
+    try {
       const meta =
         (note.tags.length ? `${note.tags.join(" · ")} · ` : "") +
         `작성 ${fmtDateTime(note.created)} · 마지막 수정 ${fmtDateTime(note.updated)}`;
-      printHtmlDocument(safeFileStem(note.title || note.slug), meta, clone.innerHTML);
-    };
-    if (subTab === "preview" && previewRef.current) {
-      run();
-    } else {
-      setSubTab("preview");
-      window.setTimeout(run, 250); // 미리보기가 그려진 뒤에 복제해야 한다
+      const title = note.title || note.slug;
+      await downloadReportPdf(title, editContent || "", meta, safeFileStem(title));
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -634,7 +635,7 @@ export function NotesView({ desktop = false }: { desktop?: boolean }): React.Rea
                 <span style={{ fontSize: "var(--fs-11)", color: "var(--color-accent)" }}>저장됨 ✓</span>
               )}
               <button
-                onClick={handlePrintNote}
+                onClick={() => void handlePrintNote()}
                 title="인쇄 창에서 '대상'을 'PDF로 저장'으로 고르면 PDF 파일이 됩니다"
                 style={{
                   display: "flex",

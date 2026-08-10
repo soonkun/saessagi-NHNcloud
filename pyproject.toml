@@ -30,6 +30,12 @@ dependencies = [
     "torchaudio>=2.0.0",    # MeloTTS + silero-vad 오디오 처리
     "soundfile>=0.12,<1",   # WAV I/O 보조 (libsndfile 기반)
     "python-multipart>=0.0.9",  # FastAPI UploadFile multipart 지원
+    # CR-67 보고서 PDF 내려받기. 브라우저 인쇄로 만들던 것을 서버 생성으로 바꾼다 —
+    # iOS Safari가 숨은 iframe 대신 **화면 전체**를 인쇄해 보고서가 아니라 앱 화면이
+    # 1페이지로 찍혔다. 둘 다 순수 파이썬이라 오프라인 배포에 부담이 없고, 한글은
+    # 시스템에 이미 있는 나눔고딕 TTF를 임베딩해 해결한다.
+    "fpdf2>=2.8,<3",            # PDF 생성 (TTF 임베딩 → 한글)
+    "markdown>=3.5,<4",         # 보고서 마크다운 → HTML (fpdf2 write_html 입력)
     "httpx>=0.27,<1",           # M_05 probe_ollama + upstream AsyncLLM 의존
     "openai>=1.30,<2",          # upstream AsyncLLM 의존
     # M_05b ToolRouter
