@@ -5,12 +5,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any
 
 from typing import cast
 
-from .prompts import INTENT_JSON_SCHEMA, SYSTEM_PROMPT
-from .types import ALL_INTENT_LABELS, CompleteJsonFn, IntentLabel, IntentResult
+from .prompts import FILTER_GUIDE, INTENT_JSON_SCHEMA, SYSTEM_PROMPT
+from .types import (
+    ALL_INTENT_LABELS,
+    DOCUMENT_TYPES,
+    ENTITY_TYPES,
+    CompleteJsonFn,
+    IntentLabel,
+    IntentResult,
+    RetrievalFilter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +112,10 @@ class IntentClassifier:
         active_system_prompt = (
             self._system_prompt_override if self._system_prompt_override else SYSTEM_PROMPT
         )
+        # CR-72: 검색 제약 지침은 **커스텀 지침에도 항상 붙인다.** 사용자가 지침 화면에서
+        # 이미 저장해 둔 프롬프트에는 이 문구가 없어, 안 붙이면 필터가 영영 안 나온다.
+        if "retrieval_filter" not in active_system_prompt:
+            active_system_prompt = active_system_prompt + "\n" + FILTER_GUIDE
 
         try:
             async with asyncio.timeout(self._timeout_seconds + 1.0):
@@ -181,6 +194,9 @@ class IntentClassifier:
         else:
             needs_search = intent in ("doc_query", "work_query")
 
+        # ── retrieval_filter 파싱 (CR-72) ────────────────────────────────────
+        retrieval_filter = _parse_filter(raw.get("retrieval_filter"))
+
         # ── source 결정 ──────────────────────────────────────────────────────
         # 저신뢰 판정: doc_query/work_query는 별도(소스 폴백, autonomous=False)
         # → 여기서는 source="llm"으로 두고, decide()에서 처리
@@ -199,6 +215,7 @@ class IntentClassifier:
                 reason=reason,
                 source="fallback_lowconf",
                 needs_search=needs_search,
+                retrieval_filter=retrieval_filter,
             )
 
         return IntentResult(
@@ -207,4 +224,67 @@ class IntentClassifier:
             reason=reason,
             source="llm",
             needs_search=needs_search,
+            retrieval_filter=retrieval_filter,
         )
+
+
+def _parse_filter(raw: Any) -> RetrievalFilter | None:
+    """모델이 낸 `retrieval_filter`를 검증해 담는다 (CR-72).
+
+    **이상한 값은 통과시키지 않는다.** 분류기는 경량 모델(`intent_gate.ollama_model`)이라
+    필드를 빠뜨리거나 엉뚱한 값을 낼 수 있다. 못 믿을 값은 버리고 `None`(제약 없음)으로
+    떨어뜨린다 — 기본이 안전한 쪽이어야 한다. 제약을 잘못 걸면 멀쩡한 자료가 사라진다.
+
+    `recent_years`는 여기서 **오늘 연도 기준으로 환산**한다. 모델에게 날짜 산술을
+    시키면 틀린다.
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    def _int(key: str) -> int | None:
+        v = raw.get(key)
+        if isinstance(v, bool) or not isinstance(v, int):
+            return None
+        return v
+
+    this_year = datetime.now().year
+    year_from = _int("year_from")
+    year_to = _int("year_to")
+
+    recent = _int("recent_years")
+    if recent is not None and 1 <= recent <= 50 and year_from is None:
+        # "최근 5년" = 올해 포함 5개 연도 → 2026이면 2022~
+        year_from = this_year - recent + 1
+
+    # 오타·헛값(9999)만 버린다.
+    #
+    # **미래 연도를 버리면 안 된다.** 처음에 `this_year + 1`로 막았더니 "2030년 이후
+    # 자료" 질문에서 제약이 통째로 사라져 전체 검색이 돌았다 — 사용자는 걸러진 줄 알고
+    # 답을 읽는다. 없는 범위면 0건이 나오고 "그 범위에 자료가 없다"고 답해야 한다.
+    # 그게 이 기능의 핵심이다.
+    def _sane(y: int | None) -> int | None:
+        return y if y is not None and 1900 <= y <= 2100 else None
+
+    year_from, year_to = _sane(year_from), _sane(year_to)
+    if year_from and year_to and year_from > year_to:
+        logger.warning("IntentGate: 연도 범위가 뒤집혀 무시한다 (%s~%s)", year_from, year_to)
+        year_from = year_to = None
+
+    doc_type = raw.get("document_type")
+    if doc_type not in DOCUMENT_TYPES:
+        doc_type = None
+
+    types_raw = raw.get("entity_types")
+    entity_types: tuple[str, ...] = ()
+    if isinstance(types_raw, list):
+        entity_types = tuple(
+            dict.fromkeys(t for t in types_raw if isinstance(t, str) and t in ENTITY_TYPES)
+        )
+
+    filt = RetrievalFilter(
+        year_from=year_from,
+        year_to=year_to,
+        document_type=doc_type,
+        entity_types=entity_types,
+    )
+    return None if filt.is_empty else filt

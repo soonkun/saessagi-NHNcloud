@@ -217,9 +217,63 @@ INTENT_JSON_SCHEMA: dict[str, object] = {
         "reason": {"type": "string", "maxLength": 200},
         # CR-52: 검색 필요 여부를 모델이 직접 정한다 (라벨에서 코드가 도출하지 않는다)
         "needs_search": {"type": "boolean"},
+        # CR-72: 질문에 붙은 검색 제약. 없으면 전부 null/빈 배열.
+        # `recent_years`는 **모델이 연도를 계산하지 않게** 상대값으로 받는다 —
+        # 날짜 산술은 코드가 오늘 연도에서 한다.
+        "retrieval_filter": {
+            "type": "object",
+            "properties": {
+                "recent_years": {"type": ["integer", "null"], "minimum": 1, "maximum": 50},
+                "year_from": {"type": ["integer", "null"]},
+                "year_to": {"type": ["integer", "null"]},
+                "document_type": {
+                    "type": ["string", "null"],
+                    "enum": ["RFP", "FINAL_REPORT", None],
+                },
+                "entity_types": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "RESEARCH_TARGET",
+                            "TECHNOLOGY",
+                            "METHOD",
+                            "OBJECTIVE",
+                            "RESEARCH_PROBLEM",
+                            "OUTPUT",
+                            "DATASET",
+                        ],
+                    },
+                },
+            },
+        },
     },
     "required": ["intent", "confidence", "reason", "needs_search"],
 }
+
+
+# ── 검색 제약 지침 (CR-72) ────────────────────────────────────────────────────
+#
+# **코드가 항상 덧붙인다.** 사용자가 지침 화면에서 커스텀 프롬프트를 저장해 두면
+# 여기 문구가 없어 필터가 영영 안 나오기 때문이다. 스키마·few-shot을 코드가 강제
+# 결합하는 것과 같은 이유다(classifier.py 주석 참조).
+FILTER_GUIDE: str = """
+## retrieval_filter — 질문에 **검색 범위 조건**이 붙었는가
+
+조건이 있으면 채우고, 없으면 전부 null·빈 배열로 두세요. **없는 조건을 지어내지 마세요.**
+
+- `recent_years`: "최근 5년", "최근 3년간" → 5, 3. **연도로 바꾸지 말고 숫자 그대로.**
+- `year_from` / `year_to`: "2020년 이후" → from 2020 / "2022년까지" → to 2022 /
+  "2018~2022년" → from 2018, to 2022
+- `document_type`: "완결보고서만" → FINAL_REPORT / "RFP만", "과제제안요구서" → RFP
+- `entity_types`: "기술 위주로" → ["TECHNOLOGY"] / "연구목표 기준" → ["OBJECTIVE"]
+
+**조건이 없는 경우가 훨씬 많습니다.** 주제만 말한 것은 조건이 아닙니다.
+- "기후변화 대응기술 정리해줘" → 전부 비움 (주제일 뿐)
+- "벼 병해충 방제 연구 알려줘" → 전부 비움
+- "최근 5년간 기후변화 연구" → recent_years=5
+- "2020년 이후 완결보고서에서 스마트팜" → year_from=2020, document_type=FINAL_REPORT
+"""
 
 
 # ── SYSTEM_PROMPT ─────────────────────────────────────────────────────────────

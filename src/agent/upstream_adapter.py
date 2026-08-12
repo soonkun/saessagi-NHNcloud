@@ -540,17 +540,22 @@ def _make_adapter_class() -> type:
 
                 # 첨부 있어도 검색은 트리거 키워드 있을 때만
                 retrieval = None
+                _filt_routing = self._last_routing
                 if should_search:
                     # CR-63: 예전엔 여기 `5`가 박혀 있었다. 청크 50~60개짜리 보고서가
                     # 들어오면서 한 문서가 5자리를 독차지해 근거 문서가 2건까지 줄었다.
                     top_k, max_per_doc = self._resolve_retrieval_params()
                     # M_19: GraphRAG 활성 시 하이브리드(벡터+그래프 RRF), 아니면 기존 벡터 경로
                     if self._graph_rag is not None and self._graph_rag.available:
+                        # CR-72: 질문에 붙은 검색 제약("최근 5년", "완결보고서만")을 넘긴다.
+                        # 연도·문서종류는 벡터가 못 지키므로 그래프 전용으로 간다.
                         search = self._graph_rag.hybrid_retrieve(
                             user_text,
                             top_k,
                             source=rag_source,
                             max_chunks_per_doc=max_per_doc,
+                            graph_only=bool(getattr(_filt_routing, "graph_only", False)),
+                            filt=getattr(_filt_routing, "retrieval_filter", None),
                         )
                     else:
                         # 벡터 단독 경로에도 같은 상한을 건다 — 그래프가 꺼져 있을 때만
@@ -603,11 +608,42 @@ def _make_adapter_class() -> type:
                         seen.add(key)
                         merged.append(h)
 
+                _filt = getattr(_filt_routing, "retrieval_filter", None)
                 if not merged:
+                    # CR-72: **제약을 걸었는데 0건이면 그렇게 말해야 한다.**
+                    # 그냥 돌려보내면 모델이 자기 지식으로 답하는데(CLAUDE.md 절대 규칙
+                    # 위반), 제약 검색에서는 그게 **틀린 답을 걸러진 답으로 위장**하는
+                    # 것이라 특히 나쁘다. 조용히 전체 검색으로 넘어가지도 않는다.
+                    if _filt is not None and not _filt.is_empty:
+                        logger.info(
+                            "RAG 제약 검색 0건 — 없다고 답하도록 지시 (제약=%s, query=%r)",
+                            _filt.describe(),
+                            user_text[:50],
+                        )
+                        input_data.texts.insert(
+                            0,
+                            TextData(
+                                source=TextSource.INPUT,
+                                content=(
+                                    f"[검색 결과 없음] 사용자가 요청한 범위"
+                                    f"({_filt.describe()})에 해당하는 사내 자료가 "
+                                    "**한 건도 없습니다.** 그 범위에 자료가 없다고 "
+                                    "분명히 알리세요. 당신의 일반 지식으로 답을 지어내지 "
+                                    "말고, 범위를 넓혀 다시 물어보도록 권하세요."
+                                ),
+                            ),
+                        )
+                        return input_data
                     logger.debug("RAG 스킵: 첨부·검색 결과 모두 없음 (query=%r)", user_text[:50])
                     return input_data
 
                 context_text = _format_rag_context(merged)
+                if _filt is not None and not _filt.is_empty:
+                    # 어느 범위에서 찾은 결과인지 모델에도 알린다 — 범위를 넘는 일반화를 막는다.
+                    context_text = (
+                        f"[검색 범위: {_filt.describe()}] 아래 자료는 이 범위 안에서만 "
+                        "찾은 것입니다. 범위 밖 내용을 덧붙이지 마세요.\n\n" + context_text
+                    )
 
                 # 실제 주입한 문서의 권위 마커를 기록 → chat()이 display_text에 부착.
                 # LLM이 마커를 빠뜨리거나 깨뜨려도 다운로드 칩이 정확히 렌더된다.
@@ -826,7 +862,11 @@ def _make_adapter_class() -> type:
                 )
             )
             if will_search:
-                yield _status_event("관련 문서를 찾아보고 있어요…", _PHASE_EMOTION_SEARCH)
+                # CR-72: 제약이 걸렸으면 무엇으로 좁혔는지 보여 준다. 필터가 걸린 사실을
+                # 모르면 결과가 적은 이유를 알 수 없다.
+                _f = getattr(self._last_routing, "retrieval_filter", None)
+                _scope = f" ({_f.describe()})" if _f is not None and not _f.is_empty else ""
+                yield _status_event(f"관련 문서를 찾아보고 있어요{_scope}…", _PHASE_EMOTION_SEARCH)
 
             # Proactive RAG 적용 (M_16 변경 3~5는 _augment_with_rag 내부에서 처리)
             input_data = await self._augment_with_rag(input_data)

@@ -6,9 +6,9 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
-from .types import IntentResult, RagSource
+from .types import IntentResult, RagSource, RetrievalFilter
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,23 @@ class RoutingDecision:
     answer_guide: str | None = field(
         default=None
     )  # M_17: 해당 의도의 답변/작성 지침 본문 (빈/None=미주입)
+    # CR-72: 질문에 붙은 검색 제약. `_augment_with_rag`가 그래프 검색에 넘긴다.
+    retrieval_filter: "RetrievalFilter | None" = None
+    # 제약을 벡터가 못 지키면 그래프 경로만 쓴다. 하이브리드로 두면 범위 밖 문서가
+    # 섞여 들어와 "걸러진 결과"로 위장된다.
+    graph_only: bool = False
+
+
+def _with_filter(decision: RoutingDecision, result: IntentResult) -> RoutingDecision:
+    """분류기가 뽑은 제약을 라우팅 결정에 얹는다 (CR-72).
+
+    라우팅 분기가 여섯 군데라 각각에 인자를 늘리는 대신 마지막에 한 번 얹는다 —
+    한 곳만 빠뜨려도 그 경로에서 제약이 조용히 사라진다.
+    """
+    filt = result.retrieval_filter
+    if filt is None or filt.is_empty:
+        return decision
+    return replace(decision, retrieval_filter=filt, graph_only=filt.needs_graph_only)
 
 
 def decide(result: IntentResult, *, legacy_rag_triggered: bool = False) -> RoutingDecision:
@@ -168,6 +185,29 @@ def decide(result: IntentResult, *, legacy_rag_triggered: bool = False) -> Routi
 
 
 def decide_with_confidence(
+    result: IntentResult,
+    *,
+    confidence_threshold: float = 0.55,
+    legacy_rag_triggered: bool = False,
+    prompt_overrides: Mapping[str, str] | None = None,
+) -> RoutingDecision:
+    """공개 진입점 — 라우팅을 정하고 **마지막에** 검색 제약을 얹는다 (CR-72).
+
+    분기가 여섯 군데라 각 `return`에 필드를 더하면 한 곳만 빠뜨려도 그 경로에서
+    제약이 조용히 사라진다. 여기서 한 번만 얹는다.
+    """
+    return _with_filter(
+        _decide_inner(
+            result,
+            confidence_threshold=confidence_threshold,
+            legacy_rag_triggered=legacy_rag_triggered,
+            prompt_overrides=prompt_overrides,
+        ),
+        result,
+    )
+
+
+def _decide_inner(
     result: IntentResult,
     *,
     confidence_threshold: float = 0.55,

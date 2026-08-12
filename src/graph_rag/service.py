@@ -576,7 +576,7 @@ class GraphRagService:
     # ── 검색 ─────────────────────────────────────────────────────────────────
 
     async def graph_retrieve(
-        self, query: str, top_k: int = 5
+        self, query: str, top_k: int = 5, filt: Any = None
     ) -> tuple[list[SearchHit], EvidenceSubgraph | None]:
         """그래프 탐색 → 문서 → 대표 청크.
 
@@ -585,9 +585,13 @@ class GraphRagService:
         스코프라 문서를 가로지르는 신호가 원리적으로 없다(CR-34).
         """
         if self._kg is not None:
-            hits, evidence = await self._kg_retrieve(query, top_k)
+            hits, evidence = await self._kg_retrieve(query, top_k, filt=filt)
             if hits:
                 return hits, evidence
+            # **제약이 걸렸으면 여기서 끝낸다 (CR-72).** 아래 키워드 경로(M_19)는 연도·
+            # 문서종류를 모르므로, 폴백하면 범위 밖 문서가 "걸러진 결과"로 돌아간다.
+            if filt is not None and not filt.is_empty:
+                return [], evidence
             # 빈 결과면 키워드 경로로 한 번 더 시도한다 (구축 이행기 안전장치).
 
         terms = _TERM_RE.findall(query or "")
@@ -666,7 +670,7 @@ class GraphRagService:
         return hits, evidence
 
     async def _kg_retrieve(
-        self, query: str, top_k: int
+        self, query: str, top_k: int, filt: Any = None
     ) -> tuple[list[SearchHit], EvidenceSubgraph | None]:
         """M_23 정규 엔티티 그래프 경로 (CR-61).
 
@@ -687,7 +691,7 @@ class GraphRagService:
 
         try:
             rows, matches = await self._kg.retrieve(
-                query, self._vstore, top_k=top_k, query_vec=query_vec
+                query, self._vstore, top_k=top_k, query_vec=query_vec, filt=filt
             )
         except Exception as exc:
             self._warn_fallback(f"M_23 그래프 질의 실패: {exc}")
@@ -734,6 +738,8 @@ class GraphRagService:
         top_k: int = 5,
         source: str = "both",
         max_chunks_per_doc: int = 0,
+        graph_only: bool = False,
+        filt: Any = None,
     ) -> RetrievalResult:
         """벡터 RAG + 그래프 검색 RRF 융합 (스펙 §3.4).
 
@@ -742,7 +748,27 @@ class GraphRagService:
 
         `max_chunks_per_doc > 0`이면 융합 **후 · 절단 전에** 문서당 상한을 건다 (CR-63).
         순서가 중요하다 — 절단 뒤에 걸면 결과 수만 줄고 다양성은 늘지 않는다.
+
+        `graph_only`면 **벡터를 아예 부르지 않는다** (CR-72). 연도·문서종류 제약은
+        벡터 스토어가 지킬 수 없어(스키마에 필드가 없다) 섞으면 범위 밖 문서가
+        "걸러진 결과"로 위장된다. 결과가 0건이면 0건으로 돌려준다 — 조용히 전체
+        검색으로 넘어가지 않는다.
         """
+        if graph_only:
+            graph_hits, evidence = await self.graph_retrieve(query, top_k=top_k, filt=filt)
+            if evidence is not None:
+                self._evidence.append(evidence)
+                del self._evidence[: -self._evidence_buffer]
+            hits = cap_per_document(graph_hits, max_chunks_per_doc)[:top_k]
+            logger.info(
+                "GraphRAG 그래프 전용: 제약=%s → %d청크 / 문서 %d건 (query=%r)",
+                (filt.describe() if filt is not None and not filt.is_empty else "없음"),
+                len(hits),
+                len({h.doc_id for h in hits}),
+                (query or "")[:50],
+            )
+            return RetrievalResult(hits=hits, found=bool(hits), no_match_reason=None)
+
         loop = asyncio.get_running_loop()
         vector_result: RetrievalResult = await loop.run_in_executor(
             None, lambda: self._rag.retrieve(query, top_k, source=source)

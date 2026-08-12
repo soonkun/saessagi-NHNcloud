@@ -87,8 +87,22 @@ class KgRetriever:
 
     # ── 조회 ──────────────────────────────────────────────────────────────────
 
-    def find_entities(self, terms: list[str], limit: int = 60) -> list[EntityMatch]:
-        """질의어와 이름·별칭이 겹치는 정규 엔티티와 그 문서들을 찾는다."""
+    def find_entities(
+        self,
+        terms: list[str],
+        limit: int = 60,
+        *,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        document_type: str | None = None,
+        entity_types: tuple[str, ...] = (),
+    ) -> list[EntityMatch]:
+        """질의어와 이름·별칭이 겹치는 정규 엔티티와 그 문서들을 찾는다.
+
+        **검색 제약을 여기서 건다 (CR-72).** 연도·문서종류는 벡터 스토어에 필드가 없어
+        하이브리드로는 지킬 수 없다. 이 쿼리는 이미 `(d:Document)`를 물고 있으므로
+        조건을 얹기만 하면 된다.
+        """
         if not terms:
             return []
         normalized = [normalize_name(t) for t in terms]
@@ -98,12 +112,17 @@ class KgRetriever:
         rows = self._graph._run(  # noqa: SLF001 — 같은 패키지 내부 조회
             "UNWIND $terms AS term "
             "MATCH (c:CanonicalEntity) "
-            "WHERE c.normalized_name = term OR c.normalized_name CONTAINS term "
-            "   OR any(a IN c.aliases WHERE toLower(a) CONTAINS term) "
+            "WHERE (c.normalized_name = term OR c.normalized_name CONTAINS term "
+            "   OR any(a IN c.aliases WHERE toLower(a) CONTAINS term)) "
+            "  AND ($entity_types IS NULL OR c.entity_type IN $entity_types) "
             "WITH DISTINCT c LIMIT $limit "
             "MATCH (m:Mention)-[:REFERS_TO]->(c) "
             "MATCH (ch:Chunk)-[:HAS_MENTION]->(m) "
             "MATCH (d:Document)-[:HAS_CHUNK]->(ch) "
+            # CR-72 검색 제약. 파라미터가 NULL이면 조건이 통과하므로 분기 없이 한 쿼리로 쓴다.
+            "WHERE ($year_from IS NULL OR d.year >= $year_from) "
+            "  AND ($year_to IS NULL OR d.year <= $year_to) "
+            "  AND ($doc_type IS NULL OR d.document_type = $doc_type) "
             "RETURN c.canonical_id AS canonical_id, c.canonical_name AS canonical_name, "
             "       c.entity_type AS entity_type, "
             "       coalesce(c.document_frequency, 1) AS df, "
@@ -111,6 +130,10 @@ class KgRetriever:
             "       collect(DISTINCT d.doc_id) AS doc_ids",
             terms=normalized,
             limit=limit,
+            year_from=year_from,
+            year_to=year_to,
+            doc_type=document_type,
+            entity_types=list(entity_types) or None,
         )
         return [
             EntityMatch(
@@ -179,6 +202,7 @@ class KgRetriever:
         vstore: Any,
         top_k: int = 5,
         query_vec: Any = None,
+        filt: Any = None,
     ) -> tuple[list[dict[str, Any]], list[EntityMatch]]:
         """질의 → 엔티티 매칭 → 문서 랭킹 → 대표 청크 행.
 
@@ -191,11 +215,26 @@ class KgRetriever:
 
         loop = asyncio.get_running_loop()
         try:
-            matches = await loop.run_in_executor(None, lambda: self.find_entities(terms))
+            matches = await loop.run_in_executor(
+                None,
+                lambda: self.find_entities(
+                    terms,
+                    year_from=getattr(filt, "year_from", None),
+                    year_to=getattr(filt, "year_to", None),
+                    document_type=getattr(filt, "document_type", None),
+                    entity_types=tuple(getattr(filt, "entity_types", ()) or ()),
+                ),
+            )
         except KgGraphStoreError as exc:
             logger.warning("KG 그래프 질의 실패 — 벡터 결과만 사용: %s", exc)
             return [], []
         if not matches:
+            if filt is not None and not filt.is_empty:
+                logger.info(
+                    "KG 그래프 검색: 제약(%s) 안에 걸리는 엔티티가 없다 (query=%r)",
+                    filt.describe(),
+                    (query or "")[:50],
+                )
             return [], []
 
         ranked = self.rank_documents(matches)[: top_k * 2]
@@ -235,12 +274,14 @@ class KgRetriever:
                 break
 
         logger.info(
-            "KG 그래프 검색: 용어=%d, 엔티티=%d, 문서=%d, hits=%d, 청크선택=%s (query=%r)",
+            "KG 그래프 검색: 용어=%d, 엔티티=%d, 문서=%d, hits=%d, 청크선택=%s, 제약=%s (query=%r)",
             len(terms),
             len(matches),
             len(ranked),
             len(rows),
             "앞청크(폴백)" if fallback_used else "문서내검색",
+            # E-98 이후: 무엇이 실제로 걸렸는지 로그에서 읽을 수 있어야 한다.
+            (filt.describe() if filt is not None and not filt.is_empty else "없음"),
             (query or "")[:50],
         )
         return rows, matches
